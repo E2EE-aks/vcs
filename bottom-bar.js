@@ -8,8 +8,8 @@
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var app = $('#app'), nav = $('#nav'); if (!app || !nav) return;
   var FIXED = [['dashboard', 'Dashboard'], ['profile', 'Profile'], ['chat', 'Chat']];
-  var PROF = ['profile', 'settings', 'vcs', 'version'];                       // pages that belong to Profile
-  var EXC = ['dashboard', 'chat', 'profile', 'settings', 'vcs', 'version'];   // not listed in All Options
+  var PROF = ['profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];                       // pages that belong to Profile
+  var EXC = ['dashboard', 'chat', 'profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];   // not listed in All Options
   var SV = function(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>'; };
   var ICON = {
     dashboard: SV('<rect x="3.5" y="3.5" width="7" height="8" rx="2"/><rect x="13.5" y="3.5" width="7" height="5" rx="2"/><rect x="13.5" y="11.5" width="7" height="9" rx="2"/><rect x="3.5" y="14.5" width="7" height="6" rx="2"/>'),
@@ -26,7 +26,7 @@
   function usable(b){ return b && !b.classList.contains('hidden') && !b.classList.contains('th-off'); }
 
   /* ---------- customisation (saved on this phone) ---------- */
-  var KEY = 'ks_bb_v1', DEF = { scale: 100, fs: 12, ic: 26, r: 30, bg: '', tx: '', on: '', labels: 1, icons: {} };
+  var KEY = 'ks_bb_v1', DEF = { scale: 100, fs: 12, ic: 26, r: 30, bg: '', tx: '', on: '', labels: 1, pos: 'bottom', anim: 'pop', icons: {} };
   function loadCfg(){
     var c = {}; try { c = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) {}
     var o = {}; Object.keys(DEF).forEach(function(k){ o[k] = c[k] !== undefined ? c[k] : DEF[k]; });
@@ -39,13 +39,22 @@
   var sheet = document.createElement('div'); sheet.id = 'btmSheet'; sheet.className = 'hidden';
   document.body.appendChild(bar); document.body.appendChild(sheet);
 
-  function gap(){ document.body.style.setProperty('--bb-gap', ((bar.offsetHeight || 64) + 36) + 'px'); }
+  function vert(){ return cfg.pos === 'left' || cfg.pos === 'right'; }
+  function gap(){ document.body.style.setProperty('--bb-gap', (vert() ? (bar.offsetWidth || 78) + 22 : (bar.offsetHeight || 64) + 36) + 'px'); }
+  function moveInd(instant){
+    var ind = bar.querySelector('.bb-ind'), on = bar.querySelector('button.on'); if (!ind) return;
+    if (!on || !bar.offsetWidth){ ind.style.opacity = 0; return; }
+    if (instant) ind.style.transition = 'none';
+    ind.style.opacity = 1; ind.style.left = on.offsetLeft + 'px'; ind.style.top = on.offsetTop + 'px'; ind.style.width = on.offsetWidth + 'px'; ind.style.height = on.offsetHeight + 'px';
+    if (instant){ void ind.offsetWidth; ind.style.transition = ''; }
+  }
   function applyCfg(){
     var s = bar.style;
     s.setProperty('--bb-s', cfg.scale / 100); s.setProperty('--bb-fs', cfg.fs + 'px'); s.setProperty('--bb-ic', cfg.ic + 'px'); s.setProperty('--bb-r', cfg.r + 'px');
     ['bg', 'tx', 'on'].forEach(function(k){ if (cfg[k]) s.setProperty('--bb-' + k, cfg[k]); else s.removeProperty('--bb-' + k); });
     bar.classList.toggle('nolab', !cfg.labels);
-    requestAnimationFrame(gap);
+    bar.dataset.pos = cfg.pos; bar.dataset.anim = cfg.anim; document.body.dataset.bbpos = cfg.pos;
+    requestAnimationFrame(function(){ gap(); moveInd(true); });
   }
 
   function avatarIcon(){
@@ -67,9 +76,11 @@
       if (f[0] === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
       h += '<button type="button" data-go="' + f[0] + '"><span class="bi">' + iconFor(f[0]) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
+    h = '<i class="bb-ind"></i>' + h;
     h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + iconFor('all') + '</span><small>All Options</small></button>';
-    if (h !== lastHtml){ bar.innerHTML = h; lastHtml = h; }
-    mark(); remember();
+    var fresh = h !== lastHtml;
+    if (fresh){ bar.innerHTML = h; lastHtml = h; }
+    mark(); remember(); moveInd(fresh);
   }
   function mark(){
     var cur = ''; try { cur = S.view || ''; } catch (e) {}
@@ -97,9 +108,10 @@
   var openedAt = 0;
   function drawSheet(){
     var h = '<div class="bs-card"><div class="bs-h"><b>All Options</b><button type="button" data-x="1" aria-label="Close">✕</button></div><div class="bs-g">';
+    var n = 0;
     [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
       if (!usable(b) || EXC.indexOf(b.dataset.v) > -1) return; var i = info(b);
-      h += '<button type="button" data-go="' + esc(i.id) + '"><span>' + esc(i.ic) + '</span><small>' + esc(i.lb) + '</small></button>';
+      h += '<button type="button" style="--i:' + (n++) + '" data-go="' + esc(i.id) + '"><span>' + esc(i.ic) + '</span><small>' + esc(i.lb) + '</small></button>';
     });
     sheet.innerHTML = h + '</div></div>';
   }
@@ -157,7 +169,7 @@
       b.classList.contains('chat-conv') || !!$('.chat.in-conv') || kb;
     bar.classList.toggle('hidden', off);
     b.classList.toggle('has-btm', !off);
-    if (!off) gap();
+    if (!off){ gap(); requestAnimationFrame(function(){ moveInd(true); }); }
     if (app.classList.contains('hidden')) openSheet(false);
   }
   if (window.visualViewport){
@@ -183,6 +195,8 @@
     return '<div class="card" id="bbCard"><h3>🧭 Bottom bar</h3>' +
       '<p class="muted" style="margin-bottom:12px">Changes show on the bar at once and are saved on this phone. The bar is used on phones and tablets.</p>' +
       rng('scale', 'Bar size', 80, 140, '%') + rng('ic', 'Icon size', 18, 40, 'px') + rng('fs', 'Font size', 9, 17, 'px') + rng('r', 'Roundness', 0, 36, 'px') +
+      '<div class="bb-row bb-colr"><label>Position</label><select class="select bb-sel" data-bbs="pos">' + [['bottom', 'Bottom'], ['top', 'Top'], ['left', 'Left side'], ['right', 'Right side']].map(function(o){ return '<option value="' + o[0] + '"' + (c.pos === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+      '<div class="bb-row bb-colr"><label>Animation</label><select class="select bb-sel" data-bbs="anim">' + [['pop', 'Pop'], ['bounce', 'Bounce'], ['wiggle', 'Wiggle'], ['none', 'Off']].map(function(o){ return '<option value="' + o[0] + '"' + (c.anim === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
       '<label class="tog" style="margin:6px 0 10px"><input type="checkbox" data-bb="labels" ' + (c.labels ? 'checked' : '') + '> Show names under icons</label>' +
       col('bg', 'Bar colour', cssHex('--card', '#ffffff')) + col('tx', 'Text &amp; icon colour', cssHex('--ink', '#1e293b')) + col('on', 'Selected colour', cssHex('--brand', '#4f46e5')) +
       '<div class="bb-sub">Icons <span class="muted">— type one emoji, leave blank for the default</span></div>' +
@@ -190,8 +204,14 @@
       '<div style="margin-top:12px"><button type="button" class="btn ghost" data-bbfull="1">↺ Reset bottom bar</button></div></div>';
   };
   function refreshView(){ if (typeof render === 'function') { try { render(); } catch (e) {} } }
+  function onSel(e){
+    var t = e.target, sk = t && t.getAttribute && t.getAttribute('data-bbs');
+    if (sk){ cfg[sk] = t.value; saveCfg(); applyCfg(); }
+  }
+  document.addEventListener('change', onSel);
   document.addEventListener('input', function(e){
     var t = e.target; if (!t || !t.closest) return;
+    onSel(e);
     var k = t.getAttribute && t.getAttribute('data-bb');
     if (k){
       cfg[k] = t.type === 'checkbox' ? (t.checked ? 1 : 0) : (t.type === 'range' ? +t.value : t.value);
@@ -207,5 +227,6 @@
     if (e.target.closest && e.target.closest('[data-bbfull]')){ cfg = JSON.parse(JSON.stringify(DEF)); saveCfg(); applyCfg(); lastHtml = ''; draw(); refreshView(); }
   });
 
+  window.addEventListener('resize', function(){ requestAnimationFrame(function(){ gap(); moveInd(true); }); });
   applyCfg(); draw(); vis();
 })();

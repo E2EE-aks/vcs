@@ -1749,7 +1749,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
     const fromL = sx < 28, fromR = sx > W - 28, inward = fromL ? dx : fromR ? -dx : 0;
     if (inward < 70) return;
     if (window.ksBack && ksBack()) return;                                   // went back one step
-    if (W <= 860 && ((fromL && !R) || (fromR && R))) setMenu(true);          // nothing to go back to: open the menu
   }, { passive:true });
 })();
 
@@ -3670,7 +3669,7 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
   }).join('');
   const rest = Object.keys(found).filter(k => !used.has(k));
   if (rest.length) hub += sec('More', rest, 9);
-  const TGC = { photo:'#a855f7', security:'#22c55e', sess:'#f59e0b', bio:'#14b8a6', theme:'#ec4899', login:'#3b82f6', smart:'#8b5cf6', general:'#64748b', emps:'#0ea5e9', users:'#ef4444', groups:'#10b981', vcsproc:'#6366f1', export:'#f97316', drive:'#2563eb', activity:'#eab308', hist:'#06b6d4', trash:'#dc2626', dchat:'#84cc16', bbar:'#0ea5e9', vcs:'#f43f5e', version:'#7c3aed' };
+  const TGC = { photo:'#a855f7', security:'#22c55e', sess:'#f59e0b', bio:'#14b8a6', theme:'#ec4899', login:'#3b82f6', smart:'#8b5cf6', general:'#64748b', emps:'#0ea5e9', users:'#ef4444', groups:'#10b981', vcsproc:'#6366f1', export:'#f97316', drive:'#2563eb', activity:'#eab308', hist:'#06b6d4', trash:'#dc2626', dchat:'#84cc16', bbar:'#0ea5e9', vcs:'#f43f5e', version:'#7c3aed', logins:'#14b8a6', deploy:'#f97316', updates:'#22c55e' };
   const tgItem = k => { const d = def[k], h = setHint(k), c = TGC[k] || '#3b82f6';
     return `<button type="button" class="tg-item" data-q="${esc((d[1] + ' ' + d[2]).toLowerCase())}" onclick="setOpen('${k}')"><span class="tg-ic" style="--c:${c}">${d[0]}</span><span class="tg-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}${h ? ' · ' + esc(h) : ''}</small></span></button>`; };
   const tgHub = () => {
@@ -3683,7 +3682,7 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
       const ic = (b.querySelector('.ico') || {}).textContent || '•', t = TITLES[v] || [v, ''];
       return `<button type="button" class="tg-item" data-q="${esc((t[0] + ' ' + t[1]).toLowerCase())}" onclick="go('${v}')"><span class="tg-ic" style="--c:${TGC[v] || '#3b82f6'}">${ic}</span><span class="tg-tx"><b>${esc(t[0])}</b><small>${esc(t[1])}</small></span></button>`; };
     const cards = groups.map(([g, keys]) => { const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
-      const extra = /Version Control/.test(g) ? navItem('vcs') + navItem('version') : '';
+      const extra = /Version Control/.test(g) ? navItem('vcs') + navItem('version') + navItem('logins') + navItem('deploy') + navItem('updates') : '';
       return (ks.length || extra) ? `<section class="tg-grp"><div class="tg-gl">${esc(g)}</div><div class="tg-card">${extra}${ks.map(tgItem).join('')}</div></section>` : ''; }).join('');
     const left = Object.keys(found).filter(k => !used.has(k));
     return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards +

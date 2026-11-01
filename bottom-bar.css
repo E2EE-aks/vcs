@@ -51,3 +51,56 @@
   #btmSheet .ac-ok{font-size:12.5px;font-weight:700;color:var(--brand)}
   #btmSheet .ac-x{flex:none;border:0;background:var(--soft,#f1f5f9);color:var(--muted);width:30px;height:30px;border-radius:50%;cursor:pointer}
 }
+
+/* ===== sidebar removed on phones/tablets; bar position; animations ===== */
+@media (max-width:860px){
+  .menu-toggle,.scrim,aside{display:none!important}
+  body.menu-open{overflow:auto}
+  html:not(.zz) body main{padding-left:14px}
+  #btmBar button{position:relative;z-index:1}
+  #btmBar button.on{background:none}
+  #btmBar .bb-ind{position:absolute;z-index:0;left:0;top:0;width:0;height:0;opacity:0;border-radius:calc(var(--bb-r,30px) - 6px);pointer-events:none;
+    background:color-mix(in srgb,var(--bb-on,var(--brand)) 16%,transparent);
+    transition:left .42s cubic-bezier(.34,1.5,.5,1),top .42s cubic-bezier(.34,1.5,.5,1),width .42s cubic-bezier(.34,1.5,.5,1),height .42s cubic-bezier(.34,1.5,.5,1),opacity .2s}
+
+  /* position */
+  #btmBar[data-pos="top"]:not(.hidden){bottom:auto;top:calc(8px + env(safe-area-inset-top))}
+  body.has-btm[data-bbpos="top"] main{padding-bottom:calc(40px + env(safe-area-inset-bottom));padding-top:calc(var(--bb-gap,100px) + env(safe-area-inset-top))}
+  body.has-btm[data-bbpos="top"] .fab,html.ks-compact body.has-btm[data-bbpos="top"] .fab{bottom:calc(22px + env(safe-area-inset-bottom))}
+  #btmBar[data-pos="left"]:not(.hidden),#btmBar[data-pos="right"]:not(.hidden){top:0;bottom:0;margin:auto 0;height:fit-content;flex-direction:column;width:calc(66px + (var(--bb-fs,12px) - 12px)*5);gap:6px}
+  #btmBar[data-pos="left"]:not(.hidden){left:8px;right:auto}
+  #btmBar[data-pos="right"]:not(.hidden){right:8px;left:auto}
+  #btmBar[data-pos="left"] button,#btmBar[data-pos="right"] button{flex:none}
+  body.has-btm[data-bbpos="left"] main{padding-bottom:calc(40px + env(safe-area-inset-bottom));padding-left:var(--bb-gap,90px)}
+  body.has-btm[data-bbpos="right"] main{padding-bottom:calc(40px + env(safe-area-inset-bottom));padding-right:var(--bb-gap,90px)}
+  body.has-btm[data-bbpos="left"] .fab,html.ks-compact body.has-btm[data-bbpos="left"] .fab{bottom:calc(22px + env(safe-area-inset-bottom))}
+  body.has-btm[data-bbpos="right"] .fab,html.ks-compact body.has-btm[data-bbpos="right"] .fab{bottom:calc(22px + env(safe-area-inset-bottom));right:calc(var(--bb-gap,90px) + 6px)}
+
+  /* animations */
+  #btmBar:not(.hidden){animation:bbIn .5s cubic-bezier(.22,1.2,.36,1) both}
+  #btmBar[data-pos="top"]:not(.hidden){animation-name:bbInTop}
+  #btmBar[data-pos="left"]:not(.hidden){animation-name:bbInLeft}
+  #btmBar[data-pos="right"]:not(.hidden){animation-name:bbInRight}
+  #btmBar[data-anim="pop"] button.on .bi{animation:bbPop .5s cubic-bezier(.34,1.56,.64,1)}
+  #btmBar[data-anim="bounce"] button.on .bi{animation:bbBounce .6s ease}
+  #btmBar[data-anim="wiggle"] button.on .bi{animation:bbWig .6s ease}
+  #btmBar[data-anim="none"] *,#btmBar[data-anim="none"]{animation:none!important;transition:none!important}
+  #btmBar button:active .bi{transform:scale(.8);transition:transform .12s}
+  #btmBar .bi{transition:transform .25s cubic-bezier(.34,1.56,.64,1)}
+  #btmBar button.on small{animation:bbLab .35s ease both}
+  #btmBar .bi em{animation:bbPulse 1.8s ease-in-out infinite}
+  #btmSheet .bs-g button{animation:bbTile .38s cubic-bezier(.34,1.4,.5,1) both;animation-delay:calc(var(--i,0)*35ms)}
+  #btmSheet .ac-r{animation:bbTile .35s ease both}
+  body[data-motion="off"] #btmBar,body[data-motion="off"] #btmBar *,body[data-motion="off"] #btmSheet *{animation:none!important;transition:none!important}
+}
+@keyframes bbIn{from{opacity:0;transform:translateY(40px) scale(.94)}to{opacity:1;transform:none}}
+@keyframes bbInTop{from{opacity:0;transform:translateY(-40px) scale(.94)}to{opacity:1;transform:none}}
+@keyframes bbInLeft{from{opacity:0;transform:translateX(-40px)}to{opacity:1;transform:none}}
+@keyframes bbInRight{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:none}}
+@keyframes bbPop{0%{transform:scale(.7)}55%{transform:scale(1.32) rotate(-6deg)}100%{transform:scale(1)}}
+@keyframes bbBounce{0%,100%{transform:translateY(0)}30%{transform:translateY(-10px)}55%{transform:translateY(0)}75%{transform:translateY(-4px)}}
+@keyframes bbWig{0%,100%{transform:rotate(0)}20%{transform:rotate(-16deg)}40%{transform:rotate(14deg)}60%{transform:rotate(-8deg)}80%{transform:rotate(5deg)}}
+@keyframes bbLab{from{opacity:.4;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes bbPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+@keyframes bbTile{from{opacity:0;transform:translateY(14px) scale(.9)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#btmBar,#btmBar *,#btmSheet *{animation:none!important;transition:none!important}}
