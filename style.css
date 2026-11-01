@@ -1371,3 +1371,13 @@ html[data-mode="dark"] table.stk tbody tr:nth-child(even),html[data-mode="dark"]
 .dc-h{font-size:calc(12px*var(--fs));color:var(--muted)}
 .dc-h b{color:var(--ink)}
 .dc-h span{float:right}
+
+/* chat header: compact, nothing cut off (call buttons now live in the ⋮ menu) */
+.ch-head{gap:8px}
+.ch-head .ch-info{flex:1;min-width:0}
+.ch-head .ch-name .nm{font-size:calc(15px*var(--fs));line-height:1.15}
+.ch-head .ch-stat{font-size:calc(11.5px*var(--fs));line-height:1.25;white-space:normal;overflow:visible}
+.ch-head .ch-tm{font-size:calc(11px*var(--fs));line-height:1.25;white-space:normal;overflow:visible;text-overflow:clip;word-break:break-word}
+.chat[data-cth="tg"] .ch-who{padding:5px 12px 5px 5px;gap:8px}
+.chat[data-cth="tg"] .ch-calls{padding:2px}
+.chat[data-cth="tg"] .ch-calls .ch-cbtn{width:40px;height:40px}

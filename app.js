@@ -4562,7 +4562,7 @@ function chatRenderPane(){
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-who"><div class="ch-av pf-hit" id="chHAv" onclick="chatProfile()" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
       <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div><div class="ch-tm" id="chHTime"></div></div></div>
-      <div class="ch-calls">${u.isGroup ? '' : `<button class="ch-cbtn" type="button" onclick="vcDial('audio')" aria-label="Voice call"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button><button class="ch-cbtn" type="button" onclick="vcDial('video')" aria-label="Video call"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></button>`}<button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
+      <div class="ch-calls"><button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
@@ -4851,6 +4851,7 @@ function chatMoreMenu(ev){
     + item('🎨', 'Chat theme', 'theme', chThemeGet() ? esc((CH_THEMES.find(x => x[0] === chThemeGet()) || [0, ''])[1]) : 'Default')
     + item('💬', 'Message pop-up', 'pop', 'Size, layout, colour, transparency')
     + item('🤩', 'Message ticks', 'ticks', (() => { const k = chTicks(); return k.sent + ' ' + k.dlv + ' ' + k.read; })())
+    + (u.isGroup ? '' : item('📞', 'Voice call', 'audio') + item('🎥', 'Video call', 'video'))
     + item('🎲', 'Play Ludo', 'ludo')
     + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : '');
   head.appendChild(m);
