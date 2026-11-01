@@ -30,13 +30,9 @@ html.ks-compact .nav button{padding:8px 11px}
 html.ks-compact .nav .ico{font-size:calc(15px*var(--fs))}
 html.ks-compact .toast{padding:8px 14px;font-size:calc(12.5px*var(--fs))}
 @media (max-width:860px){
-  html.ks-compact main{padding:10px 10px calc(76px + env(safe-area-inset-bottom)) 22px}
+  html.ks-compact main{padding:10px 10px calc(20px + env(safe-area-inset-bottom)) 22px}
   html.ks-compact .nav button{padding:11px 13px}
-  html.ks-compact #btabs{height:54px;left:8px;right:8px;bottom:calc(7px + env(safe-area-inset-bottom));padding:4px;border-radius:17px}
-  html.ks-compact #btabs button{font-size:10px;border-radius:13px}
-  html.ks-compact #btabs .bt-i{font-size:18px}
-  html.ks-compact .fab{width:46px;height:46px;font-size:24px;bottom:calc(72px + env(safe-area-inset-bottom))}
-  html.ks-compact #qaBtn{width:42px;height:42px;font-size:19px;bottom:calc(72px + env(safe-area-inset-bottom))}
+  html.ks-compact .fab{width:46px;height:46px;font-size:24px;bottom:calc(18px + env(safe-area-inset-bottom))}
 }
 @media (max-width:640px){
   html.ks-compact .kpis{gap:6px;margin-bottom:8px}

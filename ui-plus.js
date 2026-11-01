@@ -73,7 +73,7 @@
   /* ---------- 2. ripple on every button + loading spinner while the server works ---------- */
   var lastBtn = null;
   document.addEventListener('pointerdown', function(e){
-    var b = e.target.closest && e.target.closest('.btn, .set-tile, .nav button, #btabs button, .fab');
+    var b = e.target.closest && e.target.closest('.btn, .set-tile, .nav button, .fab');
     if (!b) return;
     lastBtn = b.classList.contains('btn') ? b : lastBtn;
     if (still()) return;
@@ -90,39 +90,6 @@
     if (on && lastBtn && lastBtn.isConnected && !lastBtn.classList.contains('ghost')){ lastBtn.classList.add('is-loading'); lastBtn._ld = true; }
     else if (!on) $$('.is-loading').forEach(function(x){ x.classList.remove('is-loading'); });
   }).observe(bar, { attributes: true, attributeFilter: ['class'] });
-
-  /* ---------- 3. phone bottom tab bar ---------- */
-  var app = $('#app'), nav = $('#nav'), tabs = null;
-  var TAB_ORDER = ['dashboard', 'attendance', 'chat', 'expenses'];
-  function buildTabs(){
-    if (!app || !nav) return;
-    if (!tabs){ tabs = document.createElement('nav'); tabs.id = 'btabs'; tabs.setAttribute('aria-label', 'Quick menu'); app.appendChild(tabs);
-      tabs.addEventListener('click', function(e){
-        var b = e.target.closest('button'); if (!b) return;
-        if (b.dataset.more){ if (typeof setMenu === 'function') setMenu(true); return; }
-        if (typeof go === 'function') go(b.dataset.v);
-      }); }
-    var html = '', n = 0;
-    TAB_ORDER.forEach(function(v){
-      var s = nav.querySelector('[data-v="' + v + '"]');
-      if (!s || s.classList.contains('hidden') || s.classList.contains('th-off') || n > 3) return;
-      var ic = s.querySelector('.ico'), lab = (ic && ic.nextSibling && ic.nextSibling.nodeValue || '').trim() || v;
-      html += '<button type="button" data-v="' + v + '"><span class="bt-i">' + (ic ? ic.textContent : '•') + '</span><span class="bt-l">' + lab.replace(/</g, '&lt;') + '</span>' +
-        (v === 'chat' ? '<span class="bt-b hidden" id="btBadge">0</span>' : '') + '</button>'; n++;
-    });
-    html += '<button type="button" data-more="1"><span class="bt-i">☰</span><span class="bt-l">More</span></button>';
-    if (tabs.dataset.sig !== html){ tabs.innerHTML = html; tabs.dataset.sig = html; }
-    var cur = (typeof S !== 'undefined' && S.view) || '';
-    $$('button[data-v]', tabs).forEach(function(b){ b.classList.toggle('on', b.dataset.v === cur); });
-    var cb = $('#chatBadge'), tb = $('#btBadge');
-    if (cb && tb){ tb.textContent = cb.textContent; tb.classList.toggle('hidden', cb.classList.contains('hidden')); }
-  }
-  if (nav){
-    var t1 = 0, again = function(){ cancelAnimationFrame(t1); t1 = requestAnimationFrame(buildTabs); };
-    new MutationObserver(again).observe(nav, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'], characterData: true });
-    new MutationObserver(again).observe(app, { attributes: true, attributeFilter: ['class'] });
-    buildTabs();
-  }
 
   /* ---------- 4. floating "+" button (uses the page's own main Add button) ---------- */
   var fab = document.createElement('button'); fab.type = 'button'; fab.className = 'fab hidden'; fab.setAttribute('aria-label', 'Add'); fab.textContent = '＋';
