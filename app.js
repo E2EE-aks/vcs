@@ -490,7 +490,7 @@ async function loadActivity(){
   // Admins see everyone's activity; regular users only ever see their own (the server already scopes it by token,
   // uid here just lets an admin re-filter the same list client-side without asking the server again).
   try { S.acts = (await api('activityLog', { limit:300 })).logs; } catch(e){ S.acts = S.acts || []; }
-  if (S.view === 'settings') drawActivityList();
+  if (S.view === 'settings' || S.view === 'profile') drawActivityList();
 }
 
 /* ---------- device + location (sent with every sign-in) ---------- */
@@ -1518,7 +1518,7 @@ function locCard(){
   if (!m && S.me && S.me.id && !S._locLoading){
     S._locLoading = 1;
     api('getMyLocation').then(r => { S.myLoc = { uid:S.me.id, tz:r.tz || '', loc:r.loc || '' }; }).catch(() => { S.myLoc = { uid:S.me.id, tz:'', loc:'' }; })
-      .finally(() => { S._locLoading = 0; if (S.view === 'settings') render(); });
+      .finally(() => { S._locLoading = 0; if (S.view === 'settings' || S.view === 'profile') render(); });
   }
   const tz = m ? m.tz : '';
   return `<div class="loc-box"><div class="loc-h">📍 My location</div>
@@ -3592,10 +3592,10 @@ function vSettings(){
   setKeyed(grid).forEach(([k, c]) => { if (PROFILE_KEYS.includes(k) || SET_GONE.includes(k)) c.remove(); });
   return settingsHub(grid);
 }
-function vProfile(){
+function vProfile(){            // bottom-bar Profile: every Profile + Settings option, Telegram-style layout
   const grid = vSettingsGrid();
-  setKeyed(grid).forEach(([k, c]) => { if (!PROFILE_KEYS.includes(k)) c.remove(); });
-  return settingsHub(grid, PROFILE_GROUPS);
+  setKeyed(grid).forEach(([k, c]) => { if (SET_GONE.includes(k)) c.remove(); });
+  return settingsHub(grid, SET_GROUPS, true);
 }
 function statusCardHtml(){            // the "Attendance status codes" card (admin only), shown on the Attendance page
   if (!isAdmin()) return '';
@@ -3644,7 +3644,7 @@ function setHint(k){
 }
 function setOpen(k){ S.setSec = k; render(); window.scrollTo(0, 0); }
 function setBack(){ S.setSec = null; render(); window.scrollTo(0, 0); }
-function settingsHub(grid, groups = SET_GROUPS){
+function settingsHub(grid, groups = SET_GROUPS, tg = false){
   const found = {}, def = {};
   [...grid.children].forEach((c, i) => {
     const t = ((c.querySelector('h3') || {}).textContent || '').trim();
@@ -3667,9 +3667,24 @@ function settingsHub(grid, groups = SET_GROUPS){
   }).join('');
   const rest = Object.keys(found).filter(k => !used.has(k));
   if (rest.length) hub += sec('More', rest, 9);
+  const TGC = { photo:'#a855f7', security:'#22c55e', sess:'#f59e0b', bio:'#14b8a6', theme:'#ec4899', login:'#3b82f6', smart:'#8b5cf6', general:'#64748b', emps:'#0ea5e9', users:'#ef4444', groups:'#10b981', vcsproc:'#6366f1', export:'#f97316', drive:'#2563eb', activity:'#eab308', hist:'#06b6d4', trash:'#dc2626', dchat:'#84cc16' };
+  const tgItem = k => { const d = def[k], h = setHint(k), c = TGC[k] || '#3b82f6';
+    return `<button type="button" class="tg-item" data-q="${esc((d[1] + ' ' + d[2]).toLowerCase())}" onclick="setOpen('${k}')"><span class="tg-ic" style="--c:${c}">${d[0]}</span><span class="tg-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}${h ? ' · ' + esc(h) : ''}</small></span></button>`; };
+  const tgHub = () => {
+    const me = S.me || {}, nm = me.name || me.username || cfg().name || cfg().username || 'User', img = me.id && avSrc(me.id);
+    const role = me.role === 'admin' ? (me.primary ? 'Main admin' : 'Admin') : 'User';
+    const cam = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h1.6l1.2-1.8h6.4L16.4 6H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.4"/></svg>';
+    const head = `<div class="tg-top"><button type="button" class="tg-av" ${found.photo ? 'onclick="setOpen(\'photo\')"' : ''} aria-label="Profile photo"><span class="tg-pic" style="${img ? `background-image:url('${esc(img)}')` : ''}">${img ? '' : esc(nm.trim().charAt(0).toUpperCase())}</span><span class="tg-cam">${cam}</span></button>
+      <div class="tg-name">${esc(nm)}</div><div class="tg-sub">${esc(role)}${me.username ? ' • @' + esc(me.username) : ''}</div></div>`;
+    const cards = groups.map(([g, keys]) => { const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
+      return ks.length ? `<section class="tg-grp"><div class="tg-gl">${esc(g)}</div><div class="tg-card">${ks.map(tgItem).join('')}</div></section>` : ''; }).join('');
+    const left = Object.keys(found).filter(k => !used.has(k));
+    return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards +
+      (left.length ? `<section class="tg-grp"><div class="tg-gl">More</div><div class="tg-card">${left.map(tgItem).join('')}</div></section>` : '') + '<div class="empty-state hidden" id="setNone">No setting matches your search</div>';
+  };
   const search = `<div class="set-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>`;
   const bar = open ? `<div class="set-bar"><button type="button" class="btn ghost sm" onclick="setBack()">← ${S.view === 'profile' ? 'Profile' : 'Settings'}</button><span class="set-bic">${def[open][0]}</span><div class="set-bt"><b>${esc(def[open][1])}</b>${def[open][2] ? `<small>${esc(def[open][2])}</small>` : ''}</div></div>` : '';
-  return `<div class="set-root">${open ? bar : `<div class="set-hub">${search}${hub}<div class="empty-state hidden" id="setNone">No setting matches your search</div></div>`}<div class="set-detail">${grid.innerHTML}</div></div>`;
+  return `<div class="set-root">${open ? bar : `<div class="set-hub ${tg ? 'tg-hub' : ''}">${tg ? tgHub() : search + hub + '<div class="empty-state hidden" id="setNone">No setting matches your search</div>'}</div>`}<div class="set-detail">${grid.innerHTML}</div></div>`;
 }
 function setGrpSaved(){ try{ return JSON.parse(localStorage.getItem('ks_set_open') || '[]'); }catch(e){ return []; } }
 function setGrp(gi, btn){                                  // tap a heading: open / close the settings inside it
@@ -3684,6 +3699,11 @@ function setFilter(q){
     g.querySelectorAll('.set-tile').forEach(t => { const ok = !q || t.dataset.q.includes(q); t.classList.toggle('hidden', !ok); if (ok) n++; });
     g.classList.toggle('hidden', !n); if (n) any = true;
     g.classList.toggle('open', q ? n > 0 : saved.includes(+g.dataset.g));      // while searching, open every heading that has a match
+  });
+  document.querySelectorAll('.set-hub .tg-grp').forEach(g => {
+    let n = 0;
+    g.querySelectorAll('.tg-item').forEach(t => { const ok = !q || t.dataset.q.includes(q); t.classList.toggle('hidden', !ok); if (ok) n++; });
+    g.classList.toggle('hidden', !n); if (n) any = true;
   });
   const none = document.getElementById('setNone'); if (none) none.classList.toggle('hidden', any);
 }
@@ -6459,7 +6479,7 @@ function liveCliEnd(rid, ok, info){
 }
 
 /* ----- stream from the server ----- */
-const liveWanted = () => !!(S.token && S.d && S.view === 'settings' && S.setSec === 'vcsproc' && S.me && S.me.primary);
+const liveWanted = () => !!(S.token && S.d && (S.view === 'settings' || S.view === 'profile') && S.setSec === 'vcsproc' && S.me && S.me.primary);
 function liveSync(){
   if (!liveWanted()) return liveStop();
   liveMount();

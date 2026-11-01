@@ -4,7 +4,7 @@
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var app = $('#app'), nav = $('#nav'); if (!app || !nav) return;
-  var FIXED = [['dashboard', 'Dashboard'], ['chat', 'Chat']];
+  var FIXED = [['dashboard', 'Dashboard'], ['profile', 'Profile'], ['chat', 'Chat']];
   var SV = function(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>'; };
   var ICON = {
     dashboard: SV('<rect x="3.5" y="3.5" width="7" height="8" rx="2"/><rect x="13.5" y="3.5" width="7" height="5" rx="2"/><rect x="13.5" y="11.5" width="7" height="9" rx="2"/><rect x="3.5" y="14.5" width="7" height="6" rx="2"/>'),
@@ -25,16 +25,23 @@
   var sheet = document.createElement('div'); sheet.id = 'btmSheet'; sheet.className = 'hidden';
   document.body.appendChild(bar); document.body.appendChild(sheet);
 
+  function avatarIcon(){
+    var me = {}, src = '', nm = 'U';
+    try { me = S.me || {}; nm = (me.name || me.username || 'U').trim().charAt(0).toUpperCase() || 'U'; if (me.id && typeof avSrc === 'function') src = avSrc(me.id) || ''; } catch (e) {}
+    return '<span class="bav"' + (src ? ' style="background-image:url(&quot;' + esc(src) + '&quot;)"' : '') + '>' + (src ? '' : esc(nm)) + '</span>';
+  }
+  var lastHtml = '';
   function draw(){
     var h = '';
     FIXED.forEach(function(f){
       var b = navBtn(f[0]); if (!usable(b)) return;
       var i = info(b), badge = '';
       if (f[0] === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
-      h += '<button type="button" data-go="' + f[0] + '"><span class="bi">' + ICON[f[0]] + badge + '</span><small>' + esc(i.lb) + '</small></button>';
+      h += '<button type="button" data-go="' + f[0] + '"><span class="bi">' + (f[0] === 'profile' ? avatarIcon() : ICON[f[0]]) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
     h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + ICON.all + '</span><small>All Options</small></button>';
-    bar.innerHTML = h; mark();
+    if (h !== lastHtml){ bar.innerHTML = h; lastHtml = h; }
+    mark();
   }
   function mark(){
     var cur = ''; try { cur = S.view || ''; } catch (e) {}
@@ -80,6 +87,6 @@
   var cb = $('#chatBadge'); if (cb) new MutationObserver(draw).observe(cb, { attributes: true, childList: true, characterData: true, subtree: true });
   new MutationObserver(vis).observe(app, { attributes: true, attributeFilter: ['class'] });
   new MutationObserver(vis).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-  var v = $('#view'); if (v) new MutationObserver(vis).observe(v, { childList: true, subtree: true });
+  var v = $('#view'); if (v) new MutationObserver(function(){ vis(); draw(); }).observe(v, { childList: true });
   draw(); vis();
 })();

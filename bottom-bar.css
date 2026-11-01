@@ -32,3 +32,7 @@
   #btmSheet .bs-g button:active{background:var(--brand-soft)}
   body.btm-sheet{overflow:hidden}
 }
+@media (max-width:860px){
+  #btmBar .bav{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#a78bfa,#6366f1) center/cover no-repeat;color:#fff;font:800 14px/1 system-ui,sans-serif}
+  #btmBar button.on .bav{box-shadow:0 0 0 2px var(--brand)}
+}
