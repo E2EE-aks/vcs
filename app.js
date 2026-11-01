@@ -3558,7 +3558,7 @@ function vSettingsGrid(){
 /* which settings card belongs where */
 const PROFILE_KEYS = ['photo', 'security', 'sess', 'bio', 'general', 'theme', 'smart'];   // now on the Profile page
 const PROFILE_GROUPS = [['My profile', ['photo', 'security', 'sess', 'bio']], ['Customize', ['theme', 'smart', 'general']]];
-const SET_GONE = ['status'];                                                              // Attendance status codes now live on the Attendance page
+const SET_GONE = ['status', 'cats'];                                                              // Attendance status codes now live on the Attendance page
 function setKeyed(grid){
   const found = {};
   return [...grid.children].map((c, i) => {
@@ -3611,9 +3611,7 @@ const SET_DEF = {
 const SET_GROUPS = [
   ['Account & security', ['photo','security','sess','bio']],
   ['Customize', ['theme','login','smart','general']],
-  ['People & access', ['emps','users','groups']],
-  ['Attendance & expenses', ['status','cats']],
-  ['Data & system', ['vcsproc','export','drive','activity','hist','trash','dchat']]
+  ['Version Control System -OS', ['emps','users','groups','vcsproc','export','drive','activity','hist','trash','dchat']]
 ];
 function setHint(k){
   try {
@@ -3641,7 +3639,7 @@ function settingsHub(grid, groups = SET_GROUPS){
   const tile = k => { const d = def[k], h = setHint(k);
     return `<button type="button" class="set-tile" data-q="${esc((d[1] + ' ' + d[2]).toLowerCase())}" onclick="setOpen('${k}')"><span class="set-ic">${d[0]}</span><span class="set-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}</small>${h ? `<em>${esc(h)}</em>` : ''}</span><span class="set-go">›</span></button>`; };
   const used = new Set();
-  const gopen = setGrpSaved(), GI = { 'Account & security':'🔐', 'Customize':'🎨', 'People & access':'👥', 'Attendance & expenses':'🗓', 'Data & system':'🗄', 'My profile':'👤', 'More':'⋯' };
+  const gopen = setGrpSaved(), GI = { 'Account & security':'🔐', 'Customize':'🎨', 'People & access':'👥', 'Attendance & expenses':'🗓', 'Version Control System -OS':'🗄', 'My profile':'👤', 'More':'⋯' };
   const sec = (g, ks, gi) => `<section class="set-grp ${gopen.includes(gi) ? 'open' : ''}" data-g="${gi}"><button type="button" class="set-gt" aria-expanded="${gopen.includes(gi)}" onclick="setGrp(${gi}, this)"><span class="set-gi">${GI[g] || '•'}</span><span class="set-gn">${esc(g)}</span><i>${ks.length}</i><span class="set-chev">›</span></button><div class="set-tiles">${ks.map(tile).join('')}</div></section>`;
   let hub = groups.map(([g, keys], gi) => {
     const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
