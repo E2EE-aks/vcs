@@ -7,10 +7,15 @@
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var LS = 'ks_opt_v1';
-  var DEF = { compact:1, swipe:1, fx:1, pa:1, pon:1, poff:1, psnd:1, pvib:1 };
+  var DEF = { compact:1, swipe:1, fx:1, pa:1, pon:1, poff:1, psnd:1, pvib:1, msnd:1, mvib:1, csnd:1, cvib:1 };
   function opts(){ var o = {}; try { o = JSON.parse(localStorage.getItem(LS) || '{}') || {}; } catch (e) {} return Object.assign({}, DEF, o); }
   function setOpt(k, v){ var o = opts(); o[k] = v ? 1 : 0; try { localStorage.setItem(LS, JSON.stringify(o)); } catch (e) {} applyOpts(); }
-  function applyOpts(){ document.documentElement.classList.toggle('ks-compact', !!opts().compact); }
+  function applyOpts(){ document.documentElement.classList.toggle('ks-compact', !!opts().compact); syncSw(); }
+  /* message / call sound + vibration: the app reads window.ksOpt(); the service worker (app closed) reads a copy kept in the Cache API */
+  window.ksOpt = function(k){ return !!opts()[k]; };
+  function syncSw(){
+    try { var o = opts(); if (window.caches) caches.open('ks-prefs').then(function(c){ return c.put('prefs', new Response(JSON.stringify({ msnd:o.msnd, mvib:o.mvib, csnd:o.csnd, cvib:o.cvib }))); }).catch(function(){}); } catch (e) {}
+  }
   applyOpts();
   var still = function(){ return (document.body && document.body.dataset.motion === 'off') || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); };
   var esc = function(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); };
@@ -299,6 +304,12 @@
       row('compact', '📱', 'Compact view', 'Smaller spacing and sizes so more fits on the screen') +
       row('swipe', '👈', 'Swipe back', 'Swipe in from the left or right edge to go back (also the Back button)') +
       row('fx', '💞', 'Call reactions', 'During a call send ❤️ 😊 😢 😘 😂 🎉 and both phones play an animation. Double-tap the video for a ❤️') +
+      '<div class="sec-title" style="margin-top:14px">💬 Message alerts</div>' +
+      row('msnd', '🔊', 'Message tone', 'Play a notification sound when a new message arrives', 1) +
+      row('mvib', '📳', 'Message vibration', 'Vibrate when a new message arrives', 1) +
+      '<div class="sec-title" style="margin-top:14px">📞 Call alerts</div>' +
+      row('csnd', '🔊', 'Call ringtone', 'Ring when someone calls you (and while you are calling)', 1) +
+      row('cvib', '📳', 'Call vibration', 'Vibrate while a call is ringing', 1) +
       (adm ? '<div class="sec-title" style="margin-top:14px">🔔 Online / offline pop-ups</div>' +
         row('pa', '🔔', 'Show pop-ups', 'A card appears anywhere in the app when a user comes online or goes offline') +
         row('pon', '🟢', 'When someone comes online', 'Show a pop-up', 1) +

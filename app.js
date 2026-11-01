@@ -5776,6 +5776,7 @@ Promise.resolve().then(boot);   // start only after the whole file has loaded: b
    ALERTS: message = notification + one tone + 2 vibrations ; call = ringing + continuous vibration
    ===================================================================== */
 const ksVib = p => { try { navigator.vibrate && navigator.vibrate(p); } catch {} };
+const ksOn = k => { try { return !window.ksOpt || window.ksOpt(k); } catch { return true; } };   // Settings > Smart options: message / call sound + vibration
 async function ksNotify(title, body, tag, extra){
   try {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
@@ -5785,9 +5786,10 @@ async function ksNotify(title, body, tag, extra){
   } catch {}
 }
 function chatAlert(){
-  vcBeep(988, .18); setTimeout(() => vcBeep(1319, .28), 190);   // one short notification tone
-  ksVib([250, 150, 250]);                                        // two vibrations
-  if (document.hidden) ksNotify('💬 New message', 'You have a new message', 'ks-msg', { vibrate:[250, 150, 250] });
+  const snd = ksOn('msnd'), vib = ksOn('mvib');
+  if (snd){ vcBeep(988, .18); setTimeout(() => vcBeep(1319, .28), 190); }   // one short notification tone
+  if (vib) ksVib([250, 150, 250]);                                           // two vibrations
+  if (document.hidden && (snd || vib)) ksNotify('💬 New message', 'You have a new message', 'ks-msg', { silent: !snd && !vib, vibrate: vib ? [250, 150, 250] : [] });
 }
 /* ask once (on the first tap) so notifications can show; also lets the browser play sounds */
 (function(){
@@ -5815,8 +5817,11 @@ function vcBeep(freq, dur){
 function vcRingStart(incoming){
   vcRingStop();
   const once = () => {
-    if (incoming){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); setTimeout(() => vcBeep(880, .3), 800); setTimeout(() => vcBeep(660, .3), 1180); ksVib([1900]); }   // rings and buzzes non-stop
-    else vcBeep(440, .7);
+    if (incoming){
+      if (ksOn('csnd')){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); setTimeout(() => vcBeep(880, .3), 800); setTimeout(() => vcBeep(660, .3), 1180); }   // rings non-stop
+      if (ksOn('cvib')) ksVib([1900]);                                                                                                                              // and buzzes non-stop
+    }
+    else if (ksOn('csnd')) vcBeep(440, .7);
   };
   once(); VC.ring = setInterval(once, incoming ? 2000 : 3200);
 }
@@ -6199,7 +6204,7 @@ async function vcDial(kind){
 function vcShowIncoming(inc){
   VC.incoming = inc; VC.kind = inc.kind; VC.peer = { id:inc.from, name:inc.fromName };
   vcOpen(inc.fromName, inc.from, 'Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call…'); vcBar('incoming'); vcRingStart(true);
-  if (document.hidden) ksNotify('📞 Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call', (inc.fromName || 'Someone') + ' is calling you', 'ks-call', { requireInteraction:true, vibrate:[1000, 300, 1000, 300, 1000, 300, 1000] });
+  if (document.hidden) ksNotify('📞 Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call', (inc.fromName || 'Someone') + ' is calling you', 'ks-call', { requireInteraction:true, silent: !ksOn('csnd') && !ksOn('cvib'), vibrate: ksOn('cvib') ? [1000, 300, 1000, 300, 1000, 300, 1000] : [] });
 }
 async function vcAccept(){
   const inc = VC.incoming; if (!inc || VC.busy) return;

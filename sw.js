@@ -1,13 +1,13 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v15';
+const CACHE = 'ks-shell-v16';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE && k !== 'ks-prefs').map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 /* app files: network first (so a new deploy shows up at once), saved copy when there is no network */
@@ -54,16 +54,18 @@ self.addEventListener('push', e => {
   // call: long buzz-pause pattern (~30 s, like a ringing phone). message: two short buzzes.
   const ring = []; for (let i = 0; i < 20; i++) ring.push(900, 600);
   e.waitUntil((async () => {
+    let pf = {}; try { const r = await (await caches.open('ks-prefs')).match('prefs'); if (r) pf = await r.json(); } catch (x) {}   // Settings > Smart options (saved by the app)
+    const snd = call ? pf.csnd !== 0 : msg ? pf.msnd !== 0 : true, vib = call ? pf.cvib !== 0 : msg ? pf.mvib !== 0 : true;
     await self.registration.showNotification(d.title || 'KS', {
       body: d.body || '',
       tag: d.tag || 'ks',
       renotify: true,
-      silent: false,                                         // use the phone's notification sound
+      silent: !snd && !vib,                                  // use the phone's notification sound (silent only when sound AND vibration are both off)
       icon: 'icon-192.png',
       badge: 'badge-72.png',
       timestamp: d.ts || Date.now(),
       requireInteraction: call,                              // an incoming call stays on screen until you tap it
-      vibrate: call ? ring : msg ? [250, 120, 250] : [200, 100, 200],
+      vibrate: !vib ? [] : call ? ring : msg ? [250, 120, 250] : [200, 100, 200],
       data: { url: d.url || './', kind: d.kind || '', callId: d.callId || '' }
     });
     const cl = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
