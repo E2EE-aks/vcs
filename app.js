@@ -1254,7 +1254,7 @@ async function updDelete(id){
 
 /* ---------- navigation ---------- */
 const TITLES = {
-  dashboard:['Dashboard','Your attendance and salary at a glance'],
+  dashboard:['Dashboard','Today: attendance, expenses and work'],
   attendance:['Attendance','Mark and review attendance day by day'],
   expenses:['Expenses','Track income and spending'],
   work:['Work','Daily work record — whole year'],
@@ -1810,8 +1810,7 @@ function render(){
   updateEmpSel(); updateAsSel();
   let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
-  if (S.view === 'dashboard') html = bdayAlertHtml() + html;
-  if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
+    if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
@@ -1885,49 +1884,42 @@ function markToday(code){ if (!can('att')) return deny();
    VIEW: DASHBOARD
    ===================================================================== */
 function vDashboard(){
-  const s = cfg(), y = yearStats(), sm = smap(), now = new Date();
+  /* Dashboard = only: today's Present/Absent, today's expenses, today's work, recent logins (admin) */
+  const s = cfg(), sm = smap(), now = new Date(), P = perms(), today = todayISO();
   const inYear = now.getFullYear() === +s.year, m = now.getMonth()+1, d = now.getDate();
   const cur = inYear ? ((S.d.attendance[m]||{})[d] || '') : '';
-  const pct = (y.P + y.A) ? (y.P / (y.P + y.A) * 100).toFixed(1) + '%' : '—';
-  const mark = inYear ? `<div class="card today">
-      <div><div class="small">Today${(S.d.employees||[]).length > 1 ? ' · ' + esc(emp().name) : ''}</div><div class="big">${WD[now.getDay()]}, ${d} ${MONTHS[m-1]} ${s.year}</div>
+  const pa = S.d.statuses.filter(x => x.code === 'P' || x.code === 'A');
+  const attHtml = inYear ? `<div class="card today">
+      <div><div class="small">Today's attendance${(S.d.employees||[]).length > 1 ? ' · ' + esc(emp().name) : ''}</div><div class="big">${WD[now.getDay()]}, ${d} ${MONTHS[m-1]} ${s.year}</div>
         <div class="small">${cur ? 'Marked as ' + esc((sm[cur]||{}).label || cur) : 'Not marked yet — tap below'}</div></div>
-      <div class="mark-row">${S.d.statuses.map(x => `<button class="mark ${cur===x.code?'on':''}" onclick="markToday('${esc(x.code)}')">${esc(x.code)} · ${esc(x.label.replace(/\s*\(.*\)/,''))}</button>`).join('')}
+      <div class="mark-row">${pa.map(x => `<button class="mark ${cur===x.code?'on':''}" onclick="markToday('${esc(x.code)}')">${esc(x.code)} · ${esc(x.label.replace(/\s*\(.*\)/,''))}</button>`).join('')}
         ${cur ? `<button class="mark" onclick="markToday('')">Clear</button>` : ''}</div></div>`
-    : `<div class="card" style="margin-bottom:16px">Settings year is ${esc(s.year)}, so the “today” quick-mark is hidden. Use the Attendance tab to mark days.</div>`;
+    : `<div class="card" style="margin-bottom:16px">Settings year is ${esc(s.year)}, so today's attendance is hidden. Use the Attendance tab.</div>`;
 
-  const rows = MONTHS.map((nm, i) => { const x = monthStats(i+1);
-    return `<tr class="${inYear && i+1===m ? 'cur' : ''}"><td><b><span class="mfull">${nm}</span><span class="msh">${nm.slice(0,3)}</span></b></td><td class="n">${x.P}</td><td class="n">${x.A}</td><td class="n">${x.W}</td><td class="n hide-m">${x.paid}</td><td class="n">${fm(x.earned)}</td></tr>`; }).join('');
+  /* today's expenses */
+  const ex = (S.d.expenses || []).filter(x => x.date === today);
+  let tin = 0, tout = 0; ex.forEach(x => { if (catType(x.category) === 'Income') tin += x.amount; else tout += x.amount; });
+  const exRows = ex.map(x => { const t = catType(x.category);
+    return `<div class="tdrow"><div class="tdl"><span class="pill ${t==='Income'?'inc':'exp'}">${esc(x.category)}</span><span class="muted tdn">${esc(x.note || '')}</span></div>
+      <b class="${t==='Income'?'amt-inc':'amt-exp'}">${t==='Income'?'+':'−'}${esc(fm(x.amount))}</b>
+      ${can('exp') ? `<button class="btn ghost sm" onclick="entryForm('${esc(x.id)}')">Edit</button>` : ''}</div>`; }).join('');
+  const expHtml = `<div class="dsec"><span>💸 Today's expenses</span>${can('exp') ? `<button class="btn sm" onclick="entryForm()">＋ Add entry</button>` : ''}</div>
+    <div class="card" style="margin-bottom:6px">
+      <div class="chips" style="margin-bottom:8px"><span class="chip">Spent ${esc(fm(tout))}</span><span class="chip">Income ${esc(fm(tin))}</span><span class="chip">${ex.length} entries</span></div>
+      ${exRows || '<div class="empty-state">No expense recorded today</div>'}
+      <div style="margin-top:10px"><button class="btn ghost sm" onclick="go('expenses')">Open Expenses →</button></div></div>`;
 
-  const maxE = Math.max(1, ...MONTHS.map((_, i) => monthStats(i+1).earned));
-  const bars = MONTHS.map((_, i) => { const e = monthStats(i+1).earned;
-    return `<div class="b" title="${MONTHS[i]}: ${esc(fm(e))}"><div class="col ${e?'':'zero'}" style="height:${Math.max(2, e/maxE*100)}%"></div><div class="m">${MON[i]}</div></div>`; }).join('');
+  /* today's work */
+  const wk = (S.d.work || []).filter(x => x.date === today);
+  const wRows = wk.map(x => `<div class="tdrow"><div class="tdl"><b>${esc(x.name || '—')}</b><span class="muted tdn">${esc([x.product, x.number].filter(Boolean).join(' · '))}</span></div>
+      ${can('work') ? `<button class="btn ghost sm" onclick="go('work');workEdit('${esc(x.id)}')">Edit</button>` : ''}</div>`).join('');
+  const workHtml = `<div class="dsec"><span>🛠️ Today's work</span>${can('work') ? `<button class="btn sm" onclick="go('work');wToday()">＋ Add entry</button>` : ''}</div>
+    <div class="card" style="margin-bottom:6px">
+      <div class="chips" style="margin-bottom:8px"><span class="chip">${wk.length} entries today</span></div>
+      ${wRows || '<div class="empty-state">No work recorded today</div>'}
+      <div style="margin-top:10px"><button class="btn ghost sm" onclick="go('work')">Open Work →</button></div></div>`;
 
-  let acc = 0; const total = y.marked || 1;
-  const segs = S.d.statuses.filter(x => y.counts[x.code]).map(x => { const a = acc, b = acc + y.counts[x.code]/total*100; acc = b; return `${x.color} ${a}% ${b}%`; });
-  const donut = y.marked ? `conic-gradient(${segs.join(',')})` : '#e5e9f2';
-  const legend = S.d.statuses.map(x => `<div><span class="dot" style="background:${esc(x.color)}"></span>${esc(x.code)} – ${esc(x.label)}<b style="margin-left:auto">${y.counts[x.code]||0}</b></div>`).join('');
-
-  const attHtml = `${mark}
-  <div class="dsec" style="margin-top:6px"><span>🗓️ Attendance</span><button class="btn soft sm" onclick="go('attendance')">Open</button></div>
-  <div class="grid kpis">
-    <div class="card kpi p"><div class="lbl">Total Present</div><div class="val">${y.P}</div><div class="hint">days</div></div>
-    <div class="card kpi a"><div class="lbl">Total Absent</div><div class="val">${y.A}</div><div class="hint">days</div></div>
-    <div class="card kpi w"><div class="lbl">Total Week Off</div><div class="val">${y.W}</div><div class="hint">paid</div></div>
-    <div class="card kpi s"><div class="lbl">Salary Earned So Far</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(y.earned))}</div><div class="hint">of ${esc(fm((+emp().salary||0)*12))} per year</div></div>
-    <div class="card kpi m"><div class="lbl">Present %</div><div class="val">${pct}</div><div class="hint">Present vs Absent</div></div>
-    <div class="card kpi s"><div class="lbl">Days Marked</div><div class="val">${y.marked}</div><div class="hint">${y.paid} paid days</div></div>
-  </div>
-  <div class="grid two">
-    <div class="card"><h3>Monthly breakdown <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">${esc(s.year)}</span></h3>
-      <div class="tbl-wrap"><table class="mon"><thead><tr><th>Month</th><th class="n">Present</th><th class="n">Absent</th><th class="n">Week Off</th><th class="n hide-m">Paid Days</th><th class="n">Salary Earned</th></tr></thead>
-      <tbody>${rows}<tr class="tot"><td>TOTAL</td><td class="n">${y.P}</td><td class="n">${y.A}</td><td class="n">${y.W}</td><td class="n hide-m">${y.paid}</td><td class="n">${fm(y.earned)}</td></tr></tbody></table></div></div>
-    <div class="grid" style="align-content:start">
-      <div class="card"><h3>Status summary</h3><div class="donut-box"><div class="donut" style="background:${donut}" data-c="${y.marked}"></div><div class="legend" style="min-width:170px">${legend}</div></div></div>
-      <div class="card"><h3>Salary earned by month</h3><div class="bars">${bars}</div></div>
-    </div>
-  </div>`;
-  const P = perms(), body = (P.att === 'none' ? '' : attHtml) + dashExtra();
+  const body = (P.att === 'none' ? '' : attHtml) + (P.exp === 'none' ? '' : expHtml) + (P.work === 'none' ? '' : workHtml);
   return dashHello() + (body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`);
 }
 function dashHello(){

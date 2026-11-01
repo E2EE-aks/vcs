@@ -5,6 +5,13 @@
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var app = $('#app'), nav = $('#nav'); if (!app || !nav) return;
   var FIXED = [['dashboard', 'Dashboard'], ['chat', 'Chat'], ['vcs', 'VCS']];
+  var SV = function(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>'; };
+  var ICON = {
+    dashboard: SV('<rect x="3.5" y="3.5" width="7" height="8" rx="2"/><rect x="13.5" y="3.5" width="7" height="5" rx="2"/><rect x="13.5" y="11.5" width="7" height="9" rx="2"/><rect x="3.5" y="14.5" width="7" height="6" rx="2"/>'),
+    chat: SV('<path d="M20.5 11.5a7.5 7.5 0 0 1-10.9 6.7L4 19.5l1.4-4.3A7.5 7.5 0 1 1 20.5 11.5z"/><path d="M9 10.5h6M9 13.5h4"/>'),
+    vcs: SV('<rect x="5" y="4" width="14" height="17" rx="2.5"/><path d="M9 4V3h6v1M8.5 10h7M8.5 14h7M8.5 17.5h4"/>'),
+    all: SV('<circle cx="6" cy="6" r="1.6"/><circle cx="12" cy="6" r="1.6"/><circle cx="18" cy="6" r="1.6"/><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/><circle cx="6" cy="18" r="1.6"/><circle cx="12" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>')
+  };
   function esc(t){ return String(t).replace(/[&<>"]/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function navBtn(v){ return nav.querySelector('button[data-v="' + v + '"]'); }
   function info(b){
@@ -24,9 +31,9 @@
       var b = navBtn(f[0]); if (!usable(b)) return;
       var i = info(b), badge = '';
       if (f[0] === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
-      h += '<button type="button" data-go="' + f[0] + '"><span class="bi">' + esc(i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
+      h += '<button type="button" data-go="' + f[0] + '"><span class="bi">' + ICON[f[0]] + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
-    h += '<button type="button" data-all="1" id="btmAll"><span class="bi">☰</span><small>All Options</small></button>';
+    h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + ICON.all + '</span><small>All Options</small></button>';
     bar.innerHTML = h; mark();
   }
   function mark(){

@@ -1,20 +1,23 @@
 /* KS · Bottom bar (phones) */
 #btmBar,#btmSheet{display:none}
 @media (max-width:860px){
-  #btmBar:not(.hidden){display:flex;position:fixed;left:0;right:0;bottom:0;z-index:125;background:var(--card);border-top:1px solid var(--line);
-    box-shadow:0 -6px 22px rgba(15,23,42,.10);padding:6px 6px calc(6px + env(safe-area-inset-bottom));justify-content:space-around;gap:4px}
-  #btmBar button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:none;color:var(--muted);
-    padding:6px 2px;border-radius:12px;cursor:pointer;font:inherit;-webkit-tap-highlight-color:transparent;transition:background .15s,color .15s}
-  #btmBar .bi{position:relative;font-size:22px;line-height:1.1}
-  #btmBar small{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  /* floating rounded bar (Telegram style) */
+  #btmBar:not(.hidden){display:flex;position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:125;
+    background:color-mix(in srgb,var(--card) 88%,transparent);-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
+    border:1px solid var(--line);border-radius:30px;box-shadow:0 10px 30px rgba(15,23,42,.22);padding:6px;gap:4px;animation:rise .3s var(--ease,ease) both}
+  #btmBar button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;background:none;color:var(--ink);
+    padding:8px 2px 7px;border-radius:24px;cursor:pointer;font:inherit;-webkit-tap-highlight-color:transparent;transition:background .2s,color .2s,transform .12s}
+  #btmBar .bi{position:relative;display:grid;place-items:center;width:28px;height:28px}
+  #btmBar .bi svg{width:26px;height:26px}
+  #btmBar small{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;letter-spacing:.1px}
   #btmBar button.on{color:var(--brand);background:var(--brand-soft)}
-  #btmBar button:active{transform:scale(.94)}
-  #btmBar .bi em{position:absolute;top:-4px;right:-10px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:#ef4444;color:#fff;
-    font:700 10px/16px system-ui,sans-serif;text-align:center;font-style:normal}
+  #btmBar button:active{transform:scale(.95)}
+  #btmBar .bi em{position:absolute;top:-5px;right:-9px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#ef4444;color:#fff;
+    font:700 10px/17px system-ui,sans-serif;text-align:center;font-style:normal;border:2px solid var(--card);box-sizing:content-box}
 
-  body.has-btm main{padding-bottom:calc(84px + env(safe-area-inset-bottom))}
-  body.has-btm .fab{bottom:calc(84px + env(safe-area-inset-bottom))}
-  html.ks-compact body.has-btm .fab{bottom:calc(80px + env(safe-area-inset-bottom))}
+  body.has-btm main{padding-bottom:calc(100px + env(safe-area-inset-bottom))}
+  body.has-btm .fab{bottom:calc(100px + env(safe-area-inset-bottom))}
+  html.ks-compact body.has-btm .fab{bottom:calc(96px + env(safe-area-inset-bottom))}
 
   #btmSheet:not(.hidden){display:flex;position:fixed;inset:0;z-index:160;background:rgba(15,23,42,.5);align-items:flex-end;animation:fade .15s}
   #btmSheet .bs-card{width:100%;max-height:75vh;overflow-y:auto;background:var(--card);border-radius:20px 20px 0 0;
