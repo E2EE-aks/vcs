@@ -99,6 +99,7 @@ function forceLogout(msg){
   showLogin(false, msg);
 }
 async function logout(){
+  try { if (window.ksAcctDrop) ksAcctDrop(); } catch {}
   try { await api('logout'); } catch {}
   forceLogout();
 }
@@ -3567,6 +3568,7 @@ function vSettingsGrid(){
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   grid.insertAdjacentHTML('beforeend', window.ksOptCard ? ksOptCard() : '');
+  grid.insertAdjacentHTML('beforeend', window.bbCard ? bbCard() : '');
   if (isAdmin() && window.lcCard) grid.insertAdjacentHTML('beforeend', lcCard());
   if (isAdmin()) grid.insertAdjacentHTML('beforeend', sessCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
@@ -3576,7 +3578,7 @@ function vSettingsGrid(){
   return grid;
 }
 /* which settings card belongs where */
-const PROFILE_KEYS = ['photo', 'security', 'sess', 'bio', 'general', 'theme', 'smart'];   // now on the Profile page
+const PROFILE_KEYS = ['photo', 'security', 'sess', 'bio', 'general', 'theme', 'smart', 'bbar'];   // now on the Profile page
 const PROFILE_GROUPS = [['My profile', ['photo', 'security', 'sess', 'bio']], ['Customize', ['theme', 'smart', 'general']]];
 const SET_GONE = ['status', 'cats'];                                                              // Attendance status codes now live on the Attendance page
 function setKeyed(grid){
@@ -3605,8 +3607,9 @@ function statusCardHtml(){            // the "Attendance status codes" card (adm
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['dchat','Daily Chats'],['smart','Smart options'],['login','Login page']];
+const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['dchat','Daily Chats'],['smart','Smart options'],['login','Login page'],['bbar','Bottom bar']];
 const SET_DEF = {
+  bbar:['🧭','Bottom bar','Size, font, colours and icons of the bottom bar'],
   smart:['✨','Smart options','Compact view, swipe back, call reactions, online alerts'],
   login:['🔑','Login page','Pictures, texts, fonts and colours of the sign-in screen'],
   photo:['🖼','Profile photo','Your picture shown in Chat'],
@@ -3630,7 +3633,7 @@ const SET_DEF = {
 };
 const SET_GROUPS = [
   ['Account & security', ['photo','security','sess','bio']],
-  ['Customize', ['theme','login','smart','general']],
+  ['Customize', ['theme','bbar','login','smart','general']],
   ['Version Control System -OS', ['emps','users','groups','vcsproc','export','drive','activity','hist','trash','dchat']]
 ];
 function setHint(k){
@@ -3667,7 +3670,7 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
   }).join('');
   const rest = Object.keys(found).filter(k => !used.has(k));
   if (rest.length) hub += sec('More', rest, 9);
-  const TGC = { photo:'#a855f7', security:'#22c55e', sess:'#f59e0b', bio:'#14b8a6', theme:'#ec4899', login:'#3b82f6', smart:'#8b5cf6', general:'#64748b', emps:'#0ea5e9', users:'#ef4444', groups:'#10b981', vcsproc:'#6366f1', export:'#f97316', drive:'#2563eb', activity:'#eab308', hist:'#06b6d4', trash:'#dc2626', dchat:'#84cc16' };
+  const TGC = { photo:'#a855f7', security:'#22c55e', sess:'#f59e0b', bio:'#14b8a6', theme:'#ec4899', login:'#3b82f6', smart:'#8b5cf6', general:'#64748b', emps:'#0ea5e9', users:'#ef4444', groups:'#10b981', vcsproc:'#6366f1', export:'#f97316', drive:'#2563eb', activity:'#eab308', hist:'#06b6d4', trash:'#dc2626', dchat:'#84cc16', bbar:'#0ea5e9', vcs:'#f43f5e', version:'#7c3aed' };
   const tgItem = k => { const d = def[k], h = setHint(k), c = TGC[k] || '#3b82f6';
     return `<button type="button" class="tg-item" data-q="${esc((d[1] + ' ' + d[2]).toLowerCase())}" onclick="setOpen('${k}')"><span class="tg-ic" style="--c:${c}">${d[0]}</span><span class="tg-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}${h ? ' · ' + esc(h) : ''}</small></span></button>`; };
   const tgHub = () => {
@@ -3676,8 +3679,12 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
     const cam = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h1.6l1.2-1.8h6.4L16.4 6H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.4"/></svg>';
     const head = `<div class="tg-top"><button type="button" class="tg-av" ${found.photo ? 'onclick="setOpen(\'photo\')"' : ''} aria-label="Profile photo"><span class="tg-pic" style="${img ? `background-image:url('${esc(img)}')` : ''}">${img ? '' : esc(nm.trim().charAt(0).toUpperCase())}</span><span class="tg-cam">${cam}</span></button>
       <div class="tg-name">${esc(nm)}</div><div class="tg-sub">${esc(role)}${me.username ? ' • @' + esc(me.username) : ''}</div></div>`;
+    const navItem = v => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (!b || b.classList.contains('hidden') || b.classList.contains('th-off')) return '';
+      const ic = (b.querySelector('.ico') || {}).textContent || '•', t = TITLES[v] || [v, ''];
+      return `<button type="button" class="tg-item" data-q="${esc((t[0] + ' ' + t[1]).toLowerCase())}" onclick="go('${v}')"><span class="tg-ic" style="--c:${TGC[v] || '#3b82f6'}">${ic}</span><span class="tg-tx"><b>${esc(t[0])}</b><small>${esc(t[1])}</small></span></button>`; };
     const cards = groups.map(([g, keys]) => { const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
-      return ks.length ? `<section class="tg-grp"><div class="tg-gl">${esc(g)}</div><div class="tg-card">${ks.map(tgItem).join('')}</div></section>` : ''; }).join('');
+      const extra = /Version Control/.test(g) ? navItem('vcs') + navItem('version') : '';
+      return (ks.length || extra) ? `<section class="tg-grp"><div class="tg-gl">${esc(g)}</div><div class="tg-card">${extra}${ks.map(tgItem).join('')}</div></section>` : ''; }).join('');
     const left = Object.keys(found).filter(k => !used.has(k));
     return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards +
       (left.length ? `<section class="tg-grp"><div class="tg-gl">More</div><div class="tg-card">${left.map(tgItem).join('')}</div></section>` : '') + '<div class="empty-state hidden" id="setNone">No setting matches your search</div>';

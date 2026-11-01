@@ -1,23 +1,29 @@
-/* KS · Bottom bar (phones) */
+/* KS · Bottom bar (phones) — sizes/colours come from CSS variables set by Profile › Bottom bar */
 #btmBar,#btmSheet{display:none}
 @media (max-width:860px){
-  /* floating rounded bar (Telegram style) */
   #btmBar:not(.hidden){display:flex;position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:125;
-    background:color-mix(in srgb,var(--card) 88%,transparent);-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
-    border:1px solid var(--line);border-radius:30px;box-shadow:0 10px 30px rgba(15,23,42,.22);padding:6px;gap:4px;animation:rise .3s var(--ease,ease) both}
-  #btmBar button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;background:none;color:var(--ink);
-    padding:8px 2px 7px;border-radius:24px;cursor:pointer;font:inherit;-webkit-tap-highlight-color:transparent;transition:background .2s,color .2s,transform .12s}
-  #btmBar .bi{position:relative;display:grid;place-items:center;width:28px;height:28px}
-  #btmBar .bi svg{width:26px;height:26px}
-  #btmBar small{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;letter-spacing:.1px}
-  #btmBar button.on{color:var(--brand);background:var(--brand-soft)}
+    background:var(--bb-bg,color-mix(in srgb,var(--card) 88%,transparent));-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
+    border:1px solid var(--line);border-radius:var(--bb-r,30px);box-shadow:0 10px 30px rgba(15,23,42,.22);padding:6px;gap:4px;animation:rise .3s var(--ease,ease) both;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  #btmBar button{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;background:none;color:var(--bb-tx,var(--ink));
+    padding:calc(8px*var(--bb-s,1)) 2px calc(7px*var(--bb-s,1));border-radius:calc(var(--bb-r,30px) - 6px);cursor:pointer;font:inherit;-webkit-tap-highlight-color:transparent;
+    transition:background .2s,color .2s,transform .12s;-webkit-touch-callout:none}
+  #btmBar .bi{position:relative;display:grid;place-items:center;width:calc(var(--bb-ic,26px) + 2px);height:calc(var(--bb-ic,26px) + 2px)}
+  #btmBar .bi svg{width:var(--bb-ic,26px);height:var(--bb-ic,26px)}
+  #btmBar .bemo{font-size:var(--bb-ic,26px);line-height:1}
+  #btmBar small{font-size:var(--bb-fs,12px);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;letter-spacing:.1px}
+  #btmBar.nolab small{display:none}
+  #btmBar button.on{color:var(--bb-on,var(--brand));background:color-mix(in srgb,var(--bb-on,var(--brand)) 16%,transparent)}
   #btmBar button:active{transform:scale(.95)}
   #btmBar .bi em{position:absolute;top:-5px;right:-9px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#ef4444;color:#fff;
     font:700 10px/17px system-ui,sans-serif;text-align:center;font-style:normal;border:2px solid var(--card);box-sizing:content-box}
+  #btmBar .bav{width:var(--bb-ic,26px);height:var(--bb-ic,26px);border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#a78bfa,#6366f1) center/cover no-repeat;color:#fff;
+    font:800 calc(var(--bb-ic,26px)*.5)/1 system-ui,sans-serif}
+  #btmBar button.on .bav{box-shadow:0 0 0 2px var(--bb-on,var(--brand))}
 
-  body.has-btm main{padding-bottom:calc(100px + env(safe-area-inset-bottom))}
-  body.has-btm .fab{bottom:calc(100px + env(safe-area-inset-bottom))}
-  html.ks-compact body.has-btm .fab{bottom:calc(96px + env(safe-area-inset-bottom))}
+  body.has-btm main{padding-bottom:calc(var(--bb-gap,100px) + env(safe-area-inset-bottom))}
+  body.has-btm .fab{bottom:calc(var(--bb-gap,100px) + env(safe-area-inset-bottom))}
+  html.ks-compact body.has-btm .fab{bottom:calc(var(--bb-gap,100px) + env(safe-area-inset-bottom))}
 
   #btmSheet:not(.hidden){display:flex;position:fixed;inset:0;z-index:160;background:rgba(15,23,42,.5);align-items:flex-end;animation:fade .15s}
   #btmSheet .bs-card{width:100%;max-height:75vh;overflow-y:auto;background:var(--card);border-radius:20px 20px 0 0;
@@ -31,8 +37,17 @@
   #btmSheet .bs-g button small{font-size:12px;font-weight:600;line-height:1.2}
   #btmSheet .bs-g button:active{background:var(--brand-soft)}
   body.btm-sheet{overflow:hidden}
-}
-@media (max-width:860px){
-  #btmBar .bav{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#a78bfa,#6366f1) center/cover no-repeat;color:#fff;font:800 14px/1 system-ui,sans-serif}
-  #btmBar button.on .bav{box-shadow:0 0 0 2px var(--brand)}
+
+  /* switch user */
+  #btmSheet .ac-l{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
+  #btmSheet .ac-r{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);border-radius:16px;background:var(--card);color:var(--ink)}
+  #btmSheet .ac-r[data-sw]{cursor:pointer}
+  #btmSheet .ac-r[data-sw]:active{background:var(--brand-soft)}
+  #btmSheet .ac-r.cur{border-color:var(--brand);background:var(--brand-soft)}
+  #btmSheet .ac-av{flex:none;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#a78bfa,#6366f1) center/cover no-repeat;color:#fff;font:800 19px/1 system-ui,sans-serif}
+  #btmSheet .ac-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  #btmSheet .ac-t b{font-size:15.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #btmSheet .ac-t small{color:var(--muted);font-size:12.5px}
+  #btmSheet .ac-ok{font-size:12.5px;font-weight:700;color:var(--brand)}
+  #btmSheet .ac-x{flex:none;border:0;background:var(--soft,#f1f5f9);color:var(--muted);width:30px;height:30px;border-radius:50%;cursor:pointer}
 }
