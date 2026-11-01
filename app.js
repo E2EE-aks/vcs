@@ -429,7 +429,7 @@ function applyAccess(){
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
   const chatOnly = ['att','exp','work','pw','link','lic','vcs','rack','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', p.rack === 'none'); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', !(S.me && S.me.primary));
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', !(S.me && S.me.primary));
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
@@ -2293,6 +2293,7 @@ function vWork(){
         <label class="check" style="margin:0"><input type="checkbox" ${f.only?'checked':''} onchange="S.wf.only=this.checked;render()"> Only days with entries</label>
         <button class="btn sm" onclick="wToday()">＋ Add entry for today</button>
         <button class="btn soft sm" onclick="workPicker()">🔢 Select numbers</button>
+        ${perms().rack !== 'none' ? `<button class="btn soft sm" onclick="go('rack')">📦 Rack Management</button>` : ''}
       </div>
       <div class="sec-title" style="margin-bottom:8px">Month</div>
       <div class="chips" style="margin-bottom:14px">${mchips}</div>
@@ -3504,6 +3505,7 @@ function vSettings(){
   if (!isAdmin()){ drop('General'); drop('Attendance status codes'); }
   if (!can('creds')) drop('Login & security');
   if (!can('exp')) drop('Expense categories');
+  drop('Data & export');                       // moved: Attendance / Expenses / Work pages have their own Excel + PDF buttons
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
   grid.insertAdjacentHTML('afterbegin', themeCard());
   grid.insertAdjacentHTML('afterbegin', photoCard());
@@ -3514,8 +3516,6 @@ function vSettings(){
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', histCard());
-  if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', trashCard());
-  if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', dchatCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return settingsHub(grid);
 }
@@ -4853,15 +4853,24 @@ function chatMoreMenu(ev){
     + item('🤩', 'Message ticks', 'ticks', (() => { const k = chTicks(); return k.sent + ' ' + k.dlv + ' ' + k.read; })())
     + (u.isGroup ? '' : item('📞', 'Voice call', 'audio') + item('🎥', 'Video call', 'video'))
     + item('🎲', 'Play Ludo', 'ludo')
+    + (S.me && S.me.primary ? item('🗑️', 'Trash', 'trash', 'Deleted chat messages, photos & videos') + item('📄', 'Daily Chats', 'dchat', 'Older than 24 hours, saved day by day as PDF') : '')
     + (u.isGroup ? item('ℹ️', 'Group info', 'grp') : '');
   head.appendChild(m);
   const close = () => { m.remove(); document.removeEventListener('click', close, true); };
   m.onclick = e => {
     const b = e.target.closest('[data-fn]'); if (!b) return;
     const f = b.dataset.fn; close();
-    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'pop') chatPopMenu(); else if (f === 'ticks') chatTickMenu(); else if (f === 'wp') chatWallpaperMenu(); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
+    if (f === 'tr') chatLangMenu(); else if (f === 'theme') chatThemeMenu(); else if (f === 'pop') chatPopMenu(); else if (f === 'ticks') chatTickMenu(); else if (f === 'wp') chatWallpaperMenu(); else if (f === 'trash' || f === 'dchat') chatAdminOpen(f); else if (f === 'ludo') ludoDial(); else if (f === 'audio') vcDial('audio'); else if (f === 'video') vcDial('video'); else if (f === 'grp') groupChatForm(u.id);
   };
   setTimeout(() => document.addEventListener('click', close, true), 0);
+}
+/* Trash / Daily Chats now open from the chat ⋮ menu (main admin only) */
+function chatAdminOpen(kind){
+  if (!(S.me && S.me.primary)) return;
+  const w = openModal(`${kind === 'trash' ? trashCard() : dchatCard()}<div class="foot"><button type="button" class="btn ghost" data-x>Close</button></div>`, 'wide');
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  const keep = S.setSec; S.setSec = kind;               // the two loaders only run while their section is "open"
+  try { kind === 'trash' ? bindTrash() : bindDchat(); } finally { S.setSec = keep; }
 }
 /* ---------- message ticks: emoji instead of ✓ / ✓✓ (each user can change them: chat ⋮ menu > Message ticks; saved on this phone) ---------- */
 const CH_TICK_DEF = { sent:'🤔', dlv:'👀', read:'🤩' };
