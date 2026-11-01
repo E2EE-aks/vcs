@@ -1389,3 +1389,9 @@ html[data-mode="dark"] table.stk tbody tr:nth-child(even),html[data-mode="dark"]
 .chat[data-cth="tg"] .ch-emo-btn,.chat[data-cth="tg"] .ch-pill .ch-att{color:rgba(255,255,255,.72)}
 .chat[data-cth="tg"] .ch-send{width:46px;height:46px;background:#8b5cf6;color:#fff;box-shadow:0 2px 10px rgba(139,92,246,.45)}
 .chat[data-cth="tg"] .ch-emo{background:#1c1923;border-color:rgba(255,255,255,.1)}
+
+.dc-msgs{margin-top:10px;max-height:420px;overflow:auto;border-top:1px solid var(--line);padding-top:8px}
+.dc-m{padding:6px 0;border-bottom:1px dashed var(--line)}
+.dc-h{font-size:calc(12px*var(--fs));color:var(--muted)}
+.dc-h b{color:var(--ink)}
+.dc-h span{float:right}

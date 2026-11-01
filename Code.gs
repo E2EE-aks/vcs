@@ -48,6 +48,7 @@ const SHEET_KEYS = {
   CHAT: ['chat'],
   CGRP: ['group conversations'],
   TRASH: ['trash bin'],
+  ARCH: ['daily archive'],
   HIST: ['change history'],
   ACT: ['activity log', 'activity'],
   LPH: ['login security photos', 'security photos', 'login photos'],
@@ -56,7 +57,7 @@ const SHEET_KEYS = {
   RACK: ['rack mapping'],
   RACKCFG: ['rack config']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ACT: 'Activity Log', HIST: 'Change History', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ARCH: 'Daily Archive', ACT: 'Activity Log', HIST: 'Change History', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -167,7 +168,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -361,6 +362,8 @@ function route_(req) {
       case 'historyList':       return historyList_();
       case 'historyRestore':    out = historyRestore_(req); break;
       case 'trashList':         return trashList_();
+      case 'archiveList':       return archiveList_();
+      case 'archiveDay':        return archiveDay_(req);
       case 'trashMediaTicket':  return trashMediaTicket_(req);
       case 'chatTranslate':     return chatTranslate_(req);
       case 'chatSend':          return chatSend_(req);
@@ -1290,6 +1293,10 @@ function createSheet_(k) {
   } else if (k === 'TRASH') {
     sh.getRange(1, 1, 1, 12).setValues([['Trash ID', 'Deleted at (ms)', 'Deleted by (user ID)', 'Deleted by (name)', 'From (user ID)', 'From (name)', 'To (user ID / group)', 'To (name)', 'Message', 'Sent at (ms)', 'Sent at', 'Original message ID']]);
     sh.getRange('A:L').setNumberFormat('@'); sh.getRange('B:B').setNumberFormat('0'); sh.getRange('J:J').setNumberFormat('0');
+    sh.setFrozenRows(1);
+  } else if (k === 'ARCH') {
+    sh.getRange(1, 1, 1, 4).setValues([['Day (yyyy-MM-dd)', 'Messages (JSON: [time ms, from, to, text])', 'Count', 'Saved at (ms)']]);
+    sh.getRange('A:D').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'CGRP') {
     sh.getRange(1, 1, 1, 5).setValues([['ID', 'Group name', 'Member user IDs (comma separated)', 'Created by (user ID)', 'Created']]);
@@ -3138,6 +3145,7 @@ function chatSend_(req) {
   rng.setValues([[id, t, CTX.uid, peer.id, text, nowStr_()]]);
   if (rep) { var rc = sh.getRange(row, 7); rc.setNumberFormat('@'); rc.setValue(JSON.stringify(rep)); }
   if (sh.getLastRow() > 20000) sh.deleteRows(2, 2000);              // keep the sheet from growing forever
+  chatArchiveMaybe_();                                               // 24-hour rule: older chats move to the Daily Archive
   return { ok: true, message: chatMsgOut_({ id: id, t: t, from: CTX.uid, to: peer.id, text: text, reply: rep, edited: 0 }) };
 }
 
@@ -3276,6 +3284,80 @@ function trashMediaTicket_(req) {
     }
   });
   return { ok: true, tickets: out };
+}
+
+
+// ---------- DAILY CHAT ARCHIVE (chats older than 24 hours -> saved day by day -> removed from the Chat sheet) ----------
+// Sheet "Daily Archive": Day | Messages (JSON [[time ms, from name, to name, text], ...]) | Count | Saved at (ms).
+// The main admin opens them in Settings > Daily Chats and downloads each day as a PDF (the PDF is drawn on the phone, so Hindi and emoji print correctly).
+var ARCH_HOURS = 24, ARCH_CHUNK = 40000, ARCH_BATCH = 3000, ARCH_EVERY = 10 * 60000;
+function chatArchiveMaybe_() {
+  try {
+    var p = PropertiesService.getScriptProperties();
+    if (Date.now() - (Number(p.getProperty('ARCH_AT')) || 0) < ARCH_EVERY) return;
+    if (chatArchiveRun_() < ARCH_BATCH) p.setProperty('ARCH_AT', String(Date.now()));     // still more to move -> try again on the next call
+  } catch (e) { /* never block chatting because of the archive */ }
+}
+function chatArchiveRun_() {
+  var sh = getSheet_('CHAT'), last = sh.getLastRow();
+  if (last < 2) return 0;
+  var cutoff = Date.now() - ARCH_HOURS * 3600000;
+  var times = sh.getRange(2, 2, last - 1, 1).getValues(), k = 0;
+  while (k < times.length && k < ARCH_BATCH && (Number(times[k][0]) || 0) < cutoff) k++;          // messages are stored oldest first
+  if (!k) return 0;
+  var vals = sh.getRange(2, 1, k, 6).getValues();
+  var nm = chatNameMap_(), gn = {}, tz = Session.getScriptTimeZone(), byDay = {}, order = [];
+  try { readChatGroups_().forEach(function (g) { gn[g.id] = g.name; }); } catch (e) {}
+  vals.forEach(function (r) {
+    var t = Number(r[1]) || 0, text = String(r[4]);
+    if (chatMediaParse_(text)) text = chatPreview_(text);
+    var day = Utilities.formatDate(new Date(t || Date.now()), tz, 'yyyy-MM-dd');
+    if (!byDay[day]) { byDay[day] = []; order.push(day); }
+    byDay[day].push([t, nm[String(r[2])] || String(r[2]), gn[String(r[3])] || nm[String(r[3])] || String(r[3]), text]);
+  });
+  var rows = [], now = Date.now();
+  order.forEach(function (day) {
+    var part = [], len = 2;
+    byDay[day].forEach(function (m) {
+      var l = JSON.stringify(m).length + 1;
+      if (part.length && len + l > ARCH_CHUNK) { rows.push([day, JSON.stringify(part), String(part.length), String(now)]); part = []; len = 2; }
+      part.push(m); len += l;
+    });
+    if (part.length) rows.push([day, JSON.stringify(part), String(part.length), String(now)]);
+  });
+  var ash = getSheet_('ARCH'), start = ash.getLastRow() + 1;
+  var rng = ash.getRange(start, 1, rows.length, 4);
+  rng.setNumberFormat('@');
+  rng.setValues(rows);                                                // saved in the archive FIRST, then removed from the chat
+  if (k >= last - 1) sh.getRange(2, 1, k, 10).clearContent(); else sh.deleteRows(2, k);   // Sheets cannot delete every non-frozen row
+  return k;
+}
+function archiveList_() {
+  if (!CTX.primary) fail_('Only the main admin can open Daily Chats.', 'PERM');
+  var moved = 0;
+  try { moved = chatArchiveRun_(); } catch (e) {}
+  var ash = getSheet_('ARCH'), last = ash.getLastRow(), days = {}, total = 0;
+  if (last >= 2) {
+    var d = ash.getRange(2, 1, last - 1, 1).getValues(), c = ash.getRange(2, 3, last - 1, 1).getValues();
+    for (var i = 0; i < d.length; i++) { var n = Number(c[i][0]) || 0, k = String(d[i][0]); if (!k) continue; days[k] = (days[k] || 0) + n; total += n; }
+  }
+  var list = Object.keys(days).sort().reverse().map(function (k) { return { day: k, count: days[k] }; });
+  return { ok: true, moved: moved, total: total, days: list };
+}
+function archiveDay_(req) {
+  if (!CTX.primary) fail_('Only the main admin can open Daily Chats.', 'PERM');
+  var day = String(req.day || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) fail_('Choose a day.');
+  var ash = getSheet_('ARCH'), last = ash.getLastRow(), items = [];
+  if (last >= 2) {
+    var d = ash.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < d.length; i++) {
+      if (String(d[i][0]) !== day) continue;
+      try { JSON.parse(String(ash.getRange(i + 2, 2).getValue())).forEach(function (m) { items.push({ t: Number(m[0]) || 0, f: String(m[1]), to: String(m[2]), x: String(m[3]) }); }); } catch (e) {}
+    }
+  }
+  items.sort(function (a, b) { return a.t - b.t; });
+  return { ok: true, day: day, items: items };
 }
 
 // ---------- CHAT GROUPS (group chat + Ludo for everybody in it) ----------

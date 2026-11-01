@@ -1780,7 +1780,7 @@ function render(){
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); if (window.lcBind) lcBind(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
+  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 
@@ -3515,12 +3515,13 @@ function vSettings(){
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', histCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', trashCard());
+  if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', dchatCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
   return settingsHub(grid);
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['smart','Smart options'],['login','Login page']];
+const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['dchat','Daily Chats'],['smart','Smart options'],['login','Login page']];
 const SET_DEF = {
   smart:['✨','Smart options','Compact view, swipe back, call reactions, online alerts'],
   login:['🔑','Login page','Pictures, texts, fonts and colours of the sign-in screen'],
@@ -3540,14 +3541,15 @@ const SET_DEF = {
   drive:['☁️','Google Drive','Where chat photos & videos are stored'],
   activity:['📋','Activity log','Who did what, and when'],
   hist:['🕘','Change history','Undo edits & deletes'],
-  trash:['🗑️','Trash','Deleted chat messages, photos & videos']
+  trash:['🗑️','Trash','Deleted chat messages, photos & videos'],
+  dchat:['📄','Daily Chats','Chats older than 24 hours, saved day by day as PDF']
 };
 const SET_GROUPS = [
   ['Account & security', ['photo','security','sess','bio']],
   ['Customize', ['theme','login','smart','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
-  ['Data & system', ['vcsproc','export','drive','activity','hist','trash']]
+  ['Data & system', ['vcsproc','export','drive','activity','hist','trash','dchat']]
 ];
 function setHint(k){
   try {
@@ -5433,6 +5435,117 @@ function trashView(i){
   w.innerHTML = `<div class="cv-bar"><button class="ch-sbtn" data-x type="button">✕</button><a class="ch-sbtn" href="${esc(u + '&dl=1&n=photo')}" download>⬇ Save</a></div><img src="${esc(u)}" alt="">`;
   w.onclick = e => { if (e.target === w || e.target.closest('[data-x]')) w.remove(); };
   document.body.appendChild(w);
+}
+
+/* ---------- Daily Chats: chats older than 24 hours, saved day by day, downloadable as PDF (main admin) ---------- */
+S.dchat = { days:null, total:0, busy:false, err:'', open:null, items:null, loadingDay:false };
+function dchatCard(){
+  return `<div class="card" id="dcCard"><h3>📄 Daily Chats <span><button class="btn ghost sm" type="button" onclick="dchatLoad()">↻ Refresh</button></span></h3>
+    <p class="muted" style="margin-bottom:12px">Every chat older than 24 hours is saved here automatically, one entry per day, and then removed from the Chat sheet so the sheet stays light. Open a day to read it, or download it as a PDF. Only you can see this.</p>
+    <div id="dcList"><div class="empty-state">Loading…</div></div></div>`;
+}
+function bindDchat(){
+  if (!(S.me && S.me.primary) || S.setSec !== 'dchat') return;
+  dchatLoad();
+}
+async function dchatLoad(){
+  const D = S.dchat; if (D.busy) return; D.busy = true;
+  try{ const r = await api('archiveList'); D.days = r.days || []; D.total = r.total || 0; D.err = ''; }
+  catch(e){ D.err = (e && e.message) || 'Could not load Daily Chats'; if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
+  finally{ D.busy = false; dchatDraw(); }
+}
+const dcDayName = d => { const t = new Date(d + 'T12:00:00'); return isNaN(t) ? d : t.toLocaleDateString('en-IN', { weekday:'long', day:'2-digit', month:'short', year:'numeric' }); };
+const dcTime = ms => ms ? new Date(ms).toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit', hour12:true }) : '';
+function dchatDraw(){
+  const el = document.querySelector('#dcList'); if (!el) return;
+  const D = S.dchat;
+  if (D.err){ el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">${esc(D.err)}</b></div>`; return; }
+  if (!D.days){ el.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
+  if (!D.days.length){ el.innerHTML = '<div class="empty-state">Nothing saved yet. Chats appear here once they are older than 24 hours.</div>'; return; }
+  el.innerHTML = D.days.map(x => {
+    const open = D.open === x.day;
+    let body = '';
+    if (open){
+      if (!D.items) body = '<div class="muted" style="padding:8px 0">Loading…</div>';
+      else body = `<div class="dc-msgs">${D.items.map(m => `<div class="dc-m"><div class="dc-h"><b>${esc(m.f)}</b> → ${esc(m.to)} <span>${esc(dcTime(m.t))}</span></div><div class="tr-tx">${esc(m.x)}</div></div>`).join('') || '<div class="muted">Empty.</div>'}</div>`;
+    }
+    return `<div class="tr-item"><div class="tr-top"><b>${esc(dcDayName(x.day))}</b><span style="color:var(--muted)">${x.count} message${x.count === 1 ? '' : 's'}</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn ghost sm" type="button" onclick="dchatToggle('${esc(x.day)}')">${open ? '▲ Close' : '👁 Read'}</button>
+        <button class="btn sm" type="button" onclick="dchatPdf('${esc(x.day)}')">⬇ PDF</button></div>${body}</div>`;
+  }).join('');
+}
+async function dchatFetchDay(day){
+  const r = await api('archiveDay', { day }); return r.items || [];
+}
+async function dchatToggle(day){
+  const D = S.dchat;
+  if (D.open === day){ D.open = null; D.items = null; dchatDraw(); return; }
+  D.open = day; D.items = null; dchatDraw();
+  try{ const it = await dchatFetchDay(day); if (D.open === day){ D.items = it; dchatDraw(); } }
+  catch(e){ D.open = null; dchatDraw(); toast((e && e.message) || 'Could not open that day', 'err'); }
+}
+async function dchatPdf(day){
+  try{
+    toast('Making the PDF…');
+    const items = (S.dchat.open === day && S.dchat.items) ? S.dchat.items : await dchatFetchDay(day);
+    if (!items.length){ toast('Nothing to save for that day', 'err'); return; }
+    const bytes = await dcBuildPdf(day, items);
+    const url = URL.createObjectURL(new Blob([bytes], { type:'application/pdf' }));
+    const a = document.createElement('a'); a.href = url; a.download = 'Chats-' + day + '.pdf';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }catch(e){ toast((e && e.message) || 'Could not make the PDF', 'err'); }
+}
+/* Draws the day's chat onto A4 canvases (so Hindi / emoji print properly) and packs the JPEG pages into a real PDF file. */
+async function dcBuildPdf(day, items){
+  const W = 1240, H = 1754, M = 80, FS = 28, LH = 40, FONT = '"Noto Sans Devanagari","Noto Color Emoji",system-ui,sans-serif';
+  const pages = []; let cv, g, y;
+  const newPage = () => {
+    cv = document.createElement('canvas'); cv.width = W; cv.height = H; g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.fillStyle = '#111'; g.textBaseline = 'alphabetic';
+    g.font = 'bold 34px ' + FONT; g.fillText('Chats · ' + dcDayName(day), M, M + 20);
+    g.strokeStyle = '#ccc'; g.lineWidth = 2; g.beginPath(); g.moveTo(M, M + 40); g.lineTo(W - M, M + 40); g.stroke();
+    y = M + 90; pages.push(cv);
+  };
+  const wrap = txt => {
+    g.font = FS + 'px ' + FONT; const out = [];
+    String(txt).split('\n').forEach(par => {
+      let line = '';
+      Array.from(par).forEach(ch => { const t = line + ch; if (g.measureText(t).width > W - 2 * M - 20 && line){ out.push(line); line = ch; } else line = t; });
+      out.push(line);
+    });
+    return out;
+  };
+  newPage();
+  for (const m of items){
+    const lines = wrap(m.x), need = 36 + lines.length * LH + 14;
+    if (y + need > H - M){ newPage(); }
+    g.font = 'bold 24px ' + FONT; g.fillStyle = '#4338ca'; g.fillText(m.f + '  →  ' + m.to + '   ' + dcTime(m.t), M, y); y += 36;
+    g.font = FS + 'px ' + FONT; g.fillStyle = '#111';
+    lines.forEach(l => { if (y > H - M){ newPage(); } g.fillText(l, M + 10, y); y += LH; });
+    y += 14;
+  }
+  pages.forEach((p, i) => { const q = p.getContext('2d'); q.font = '22px ' + FONT; q.fillStyle = '#888'; q.fillText('Page ' + (i + 1) + ' of ' + pages.length, W - M - 150, H - 40); });
+  const jpgs = pages.map(p => { const b = atob(p.toDataURL('image/jpeg', 0.82).split(',')[1]); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; });
+  const enc = new TextEncoder(), chunks = [], offs = []; let len = 0;
+  const put = d => { const u = typeof d === 'string' ? enc.encode(d) : d; chunks.push(u); len += u.length; };
+  const obj = (n, fn) => { offs[n] = len; put(n + ' 0 obj\n'); fn(); put('\nendobj\n'); };
+  const n = jpgs.length, PW = 595, PH = 842;
+  put('%PDF-1.4\n');
+  obj(1, () => put('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => put('<< /Type /Pages /Count ' + n + ' /Kids [' + jpgs.map((_, i) => (3 + i * 3) + ' 0 R').join(' ') + '] >>'));
+  jpgs.forEach((u, i) => {
+    const pg = 3 + i * 3, ct = pg + 1, im = pg + 2, draw = 'q ' + PW + ' 0 0 ' + PH + ' 0 0 cm /Im0 Do Q';
+    obj(pg, () => put('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + PW + ' ' + PH + '] /Resources << /XObject << /Im0 ' + im + ' 0 R >> >> /Contents ' + ct + ' 0 R >>'));
+    obj(ct, () => put('<< /Length ' + draw.length + ' >>\nstream\n' + draw + '\nendstream'));
+    obj(im, () => { put('<< /Type /XObject /Subtype /Image /Width ' + W + ' /Height ' + H + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + u.length + ' >>\nstream\n'); put(u); put('\nendstream'); });
+  });
+  const total = 3 + n * 3, xref = len;
+  put('xref\n0 ' + total + '\n0000000000 65535 f \n');
+  for (let i = 1; i < total; i++) put(String(offs[i]).padStart(10, '0') + ' 00000 n \n');
+  put('trailer\n<< /Size ' + total + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF');
+  const out = new Uint8Array(len); let p = 0; chunks.forEach(c => { out.set(c, p); p += c.length; });
+  return out;
 }
 function driveCard(){
   return `<div class=\"card\" id=\"drvCard\"><h3>☁️ Chat photos & videos → Google Drive</h3>

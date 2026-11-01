@@ -51,11 +51,14 @@ class Range {
   setValue(v) { return this._put(Array.from({ length: this.nr }, () => Array(this.nc).fill(v)), cellData); }
   setFormula(f) { return this._put(Array.from({ length: this.nr }, () => Array(this.nc).fill(f)), x => ({ userEnteredValue: { formulaValue: x } })); }
   clearContent() { return this._put(Array.from({ length: this.nr }, () => Array(this.nc).fill('')), cellData); }
+  _fit() { if (!this.whole) this.sh._grow(this.r + this.nr - 1, this.c + this.nc - 1); }   // a formatted range below the last row must exist first
   setNumberFormat(fmt) {
+    this._fit();
     if (fmt === '@') this.sh.wb.ops.push({ repeatCell: { range: this.grid(), cell: { userEnteredFormat: { numberFormat: { type: 'TEXT' } } }, fields: 'userEnteredFormat.numberFormat' } });
     return this;
   }
   setFontWeight(w) {
+    this._fit();
     this.sh.wb.ops.push({ repeatCell: { range: this.grid(), cell: { userEnteredFormat: { textFormat: { bold: w === 'bold' } } }, fields: 'userEnteredFormat.textFormat.bold' } });
     return this;
   }
@@ -180,7 +183,7 @@ function install(wb, env, rt) {
     }
   };
   // ---- change journal (powers Settings > Change history): what a request changed, row by row, so an admin can undo it ----
-  const JR_SKIP = /activity log|login log|login security|chat|group conversations|trash bin|change history|_app properties/i;
+  const JR_SKIP = /activity log|login log|login security|chat|daily archive|group conversations|trash bin|change history|_app properties/i;
   wb.jrSkip = n => JR_SKIP.test(n);
   const jrNorm = r => {
     const a = Array.from(r || [], x => x === null || x === undefined ? '' : (x && typeof x.getTime === 'function' ? new Date(x.getTime()).toISOString() : x));
