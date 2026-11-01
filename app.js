@@ -3150,6 +3150,33 @@ function licGroupPick(gid){
     }catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
+/* type a date as DD/MM/YYYY (no scrolling through years); the 📅 icon still opens the calendar. The real date input keeps its name/value. */
+function dateTypeable(root){
+  const p2 = n => String(n).padStart(2, '0');
+  root.querySelectorAll('input[type="date"]').forEach(di => {
+    if (di.parentNode.classList && di.parentNode.classList.contains('dtx')) return;
+    const wrap = document.createElement('div'); wrap.className = 'dtx';
+    const tx = document.createElement('input'); tx.type = 'text'; tx.className = 'input'; tx.inputMode = 'numeric'; tx.placeholder = 'DD/MM/YYYY'; tx.maxLength = 10; tx.autocomplete = 'off';
+    di.parentNode.insertBefore(wrap, di); wrap.appendChild(tx); wrap.appendChild(di);
+    di.classList.add('dtx-pick'); di.tabIndex = -1; di.title = 'Pick from calendar';
+    const sync = () => { const v = di.value; tx.value = /^\d{4}-\d{2}-\d{2}$/.test(v) ? v.slice(8) + '/' + v.slice(5, 7) + '/' + v.slice(0, 4) : ''; tx.setCustomValidity(''); };
+    sync();
+    tx.addEventListener('input', () => {
+      const d = tx.value.replace(/\D/g, '').slice(0, 8);
+      let o = d.slice(0, 2); if (d.length > 2) o += '/' + d.slice(2, 4); if (d.length > 4) o += '/' + d.slice(4);
+      tx.value = o;
+      if (!d.length){ di.value = ''; tx.setCustomValidity(''); }
+      else if (d.length < 8){ di.value = ''; tx.setCustomValidity('Enter the full date as DD/MM/YYYY'); }
+      else {
+        const dd = +d.slice(0, 2), mm = +d.slice(2, 4), yy = +d.slice(4), dt = new Date(yy, mm - 1, dd);
+        if (yy >= 1000 && dt.getFullYear() === yy && dt.getMonth() === mm - 1 && dt.getDate() === dd){ di.value = yy + '-' + p2(mm) + '-' + p2(dd); tx.setCustomValidity(''); }
+        else { di.value = ''; tx.setCustomValidity('This date does not exist'); }
+      }
+      di.dispatchEvent(new Event('input', { bubbles:true }));
+    });
+    di.addEventListener('change', sync);
+  });
+}
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
   const freqOpts = Object.keys(LIC_FREQ).map(k => `<option value="${k}" ${(x ? x.freq : '') === k ? 'selected' : ''}>${LIC_FREQ[k]}</option>`).join('');
@@ -3190,6 +3217,7 @@ function licForm(id){ if (!can('lic')) return deny();
     Object.keys(dr.vals).forEach(k => { if (fm.elements[k] && !fm.elements[k].length) fm.elements[k].value = dr.vals[k]; });
     fm.querySelectorAll('[data-ex]').forEach(i => { if (dr.ex[i.dataset.ex] !== undefined) i.value = dr.ex[i.dataset.ex]; });
   }
+  dateTypeable(w.querySelector('#licf'));
   const prev = () => {                       // live "next due" line under the form
     const f = Object.fromEntries(new FormData(w.querySelector('#licf'))), rn = licRenewInfo(f), el = w.querySelector('#licPrev'), yr = licYearly(f);
     el.innerHTML = (yr ? `<div style="margin-bottom:4px">💰 To pay in 1 year: <b>₹${yr.toLocaleString('en-IN')}</b> <span class="muted">(${LIC_PER_YEAR[f.freq]} × ₹${Number(f.amount).toLocaleString('en-IN')})</span></div>` : '') + (rn.due ? `Next due: <b>${licDateFmt(rn.due)}</b> · <span class="${rn.cls}" style="font-weight:700">${esc(rn.text)}</span>${LIC_FREQ_MONTHS[f.freq] ? ` <span class="muted">(repeats every ${LIC_FREQ_MONTHS[f.freq]} month${LIC_FREQ_MONTHS[f.freq] > 1 ? 's' : ''})</span>` : ''}` : '');

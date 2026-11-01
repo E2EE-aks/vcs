@@ -4,7 +4,7 @@
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var app = $('#app'), nav = $('#nav'); if (!app || !nav) return;
-  var FIXED = [['dashboard', 'Dashboard'], ['chat', 'Chat'], ['vcs', 'VCS']];
+  var FIXED = [['dashboard', 'Dashboard'], ['chat', 'Chat']];
   var SV = function(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>'; };
   var ICON = {
     dashboard: SV('<rect x="3.5" y="3.5" width="7" height="8" rx="2"/><rect x="13.5" y="3.5" width="7" height="5" rx="2"/><rect x="13.5" y="11.5" width="7" height="9" rx="2"/><rect x="3.5" y="14.5" width="7" height="6" rx="2"/>'),
