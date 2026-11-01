@@ -4537,7 +4537,7 @@ function chatRenderList(){
     return `<div class="ch-row ${S.chat.with === u.id ? 'sel' : ''}" onclick="chatOpen('${esc(u.id)}')">
       <div class="ch-av" style="background:${chColor(u.id)}">${chInit(u)}${u.isGroup ? '' : `<span class="dot ${st.cls}"></span>`}</div>
       <div class="ch-info">
-        <div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span>${u.isGroup ? '' : `<span class="dot ${st.cls}"></span>`}<span class="tm">${esc(chListTime(u.lastTime))}</span></div>
+        <div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="tm">${esc(chListTime(u.lastTime))}</span></div>
         <div class="ch-stat ${st.cls}">${esc(st.txt)}</div>${prev}
       </div>${u.unread ? `<span class="ch-unread">${u.unread > 99 ? '99+' : u.unread}</span>` : ''}</div>`;
   }).join('');
@@ -4561,7 +4561,7 @@ function chatRenderPane(){
   pane.innerHTML = `<div class="ch-head">
       <button class="ch-back" onclick="chatBack()" aria-label="Back">←</button>
       <div class="ch-who"><div class="ch-av pf-hit" id="chHAv" onclick="chatProfile()" style="background:${chColor(u.id)}">${chInit(u)}<span class="dot"></span></div>
-      <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span><span class="dot" id="chHDot"></span></div><div class="ch-stat" id="chHStat"></div><div class="ch-tm" id="chHTime"></div></div></div>
+      <div class="ch-info pf-hit" onclick="chatProfile()"><div class="ch-name"><span class="nm">${esc(u.name || u.username)}</span></div><div class="ch-stat" id="chHStat"></div><div class="ch-tm" id="chHTime"></div></div></div>
       <div class="ch-calls"><button class="ch-cbtn" id="chMore" onclick="chatMoreMenu(event)" aria-label="More options" aria-haspopup="true">⋮</button></div>
     </div>
     <div class="ch-sel" id="chSel" style="display:none"></div>
@@ -4583,8 +4583,8 @@ function chatHeader(){
   const tmEl = $('#chHTime'); if (tmEl){ const ln = chatLocLine(u); tmEl.textContent = ln; tmEl.style.display = ln ? '' : 'none'; }
   const typ = !u.isGroup && S.chat.typ && S.chat.typ[u.id] > Date.now();
   t.className = 'ch-stat ' + (typ ? 'on' : st.cls); t.textContent = typ ? 'typing…' : st.txt; t.style.fontStyle = typ ? 'italic' : '';
-  if (u.isGroup){ $('#chHDot').style.display = 'none'; $('#chHAv .dot').style.display = 'none'; return; }
-  $('#chHDot').className = 'dot ' + st.cls; $('#chHAv .dot').className = 'dot ' + st.cls;
+  if (u.isGroup){ $('#chHAv .dot').style.display = 'none'; return; }
+  $('#chHAv .dot').className = 'dot ' + st.cls;
 }
 function chatRenderMsgs(toBottom){
   const box = $('#chMsgs'); if (!box) return;
@@ -4603,7 +4603,7 @@ function chatRenderMsgs(toBottom){
   arr.forEach(m => {
     const dl = chDayLabel(m.t);
     if (dl !== day){ day = dl; html += `<div class="ch-day">${esc(dl)}</div>`; }
-    let dual = chDual(m, pu), tl = (m.edited ? 'edited · ' : '') + esc(dual ? dual.s : chClock(m.t)), tkh = '', meta = '';
+    let dual = null, tl = (m.edited ? 'edited · ' : '') + esc(dual ? dual.s : chClock(m.t)), tkh = '', meta = '';
     if (m.mine){
       if (m.state === 'pending'){ meta = 'Sending…'; dual = null; }
       else if (m.state === 'failed'){ meta = 'Not sent · tap to retry'; dual = null; }
@@ -5840,7 +5840,7 @@ const VC_IC = {
 function vcBar(mode){
   const b = (cls, ico, label, fn) => `<button class="vc-btn ${cls}" onclick="${fn}" aria-label="${label}" title="${label}"><span>${ico}</span><small>${label}</small></button>`;
   let h = '';
-  if (mode === 'incoming') h = b('red end', VC_IC.phone, 'Decline', 'vcDecline()') + b('green', VC_IC.phone, 'Accept', 'vcAccept()');
+  if (mode === 'incoming') h = `<div class="vc-sl" id="vcSl"><div class="vc-sh up"><i></i><i></i><i></i><small>Slide up to answer</small></div><div class="vc-knob" id="vcKnob" role="slider" aria-label="Slide up to answer, down to decline"><span>${VC_IC.phone}</span></div><div class="vc-sh dn"><small>Slide down to decline</small><i></i><i></i><i></i></div></div>`;
   else {
     if (VC.kind === 'video') h += b('dark', VC_IC.flip, VC.facing === 'environment' ? 'Front camera' : 'Back camera', 'vcFlip()');
     if (VC.kind === 'video') h += b('dark' + (VC.camOff ? ' on' : ''), VC.camOff ? VC_IC.camoff : VC_IC.cam, VC.camOff ? 'Camera on' : 'Camera off', 'vcCam()');
@@ -5849,6 +5849,32 @@ function vcBar(mode){
     h += b('red end', VC_IC.phone, 'End', 'vcHangup()');
   }
   const bar = document.getElementById('vcBar'); bar.className = 'vc-bar ' + (mode === 'incoming' ? 'inc' : 'call'); bar.innerHTML = h;
+  if (mode === 'incoming') vcSlideBind();
+}
+/* incoming call: drag the round button UP to answer, DOWN to decline (it slides away with an animation) */
+function vcSlideBind(){
+  const k = document.getElementById('vcKnob'), box = document.getElementById('vcSl'); if (!k || !box) return;
+  const MAX = 120, GO = 70; let y0 = 0, dy = 0, on = false, done = false;
+  const paint = () => {
+    k.style.transform = 'translateY(' + dy + 'px)';
+    const p = Math.min(1, Math.abs(dy) / GO);
+    k.style.background = dy < 0 ? 'rgb(' + Math.round(22 + (1 - p) * 60) + ',163,74)' : dy > 0 ? 'rgb(220,' + Math.round(38 + (1 - p) * 60) + ',38)' : '';
+    box.classList.toggle('pull-up', dy < -8); box.classList.toggle('pull-dn', dy > 8);
+  };
+  const finish = (dir, fn) => {
+    done = true; box.classList.add('vc-done'); k.style.transition = 'transform .28s cubic-bezier(.4,0,.2,1), opacity .28s';
+    dy = dir * 260; paint(); k.style.opacity = '0';
+    setTimeout(fn, 260);
+  };
+  k.addEventListener('pointerdown', e => { if (done) return; on = true; y0 = e.clientY - dy; k.style.transition = 'none'; try{ k.setPointerCapture(e.pointerId); }catch(_){} e.preventDefault(); });
+  k.addEventListener('pointermove', e => { if (!on || done) return; dy = Math.max(-MAX, Math.min(MAX, e.clientY - y0)); paint(); });
+  const up = () => {
+    if (!on || done) return; on = false;
+    if (dy <= -GO) return finish(-1, vcAccept);
+    if (dy >= GO) return finish(1, vcDecline);
+    dy = 0; k.style.transition = 'transform .3s cubic-bezier(.34,1.56,.64,1), background .3s'; paint();
+  };
+  k.addEventListener('pointerup', up); k.addEventListener('pointercancel', up);
 }
 function vcClose(){
   const el = document.getElementById('vcUI');

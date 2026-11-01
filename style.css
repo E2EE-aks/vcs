@@ -1381,3 +1381,25 @@ html[data-mode="dark"] table.stk tbody tr:nth-child(even),html[data-mode="dark"]
 .chat[data-cth="tg"] .ch-who{padding:5px 12px 5px 5px;gap:8px}
 .chat[data-cth="tg"] .ch-calls{padding:2px}
 .chat[data-cth="tg"] .ch-calls .ch-cbtn{width:40px;height:40px}
+
+/* incoming call: slide up to answer / down to decline */
+.vc-bar.inc{padding:0 16px calc(30px + env(safe-area-inset-bottom));gap:0}
+.vc-sl{display:flex;flex-direction:column;align-items:center;gap:10px;width:100%}
+.vc-sh{display:flex;flex-direction:column;align-items:center;gap:3px;color:#fff;font-size:calc(13px*var(--fs));opacity:.9;transition:opacity .2s}
+.vc-sh small{font-size:calc(13px*var(--fs));font-weight:600;letter-spacing:.2px}
+.vc-sh i{display:block;width:12px;height:12px;border-left:3px solid currentColor;border-top:3px solid currentColor;transform:rotate(45deg);opacity:.25}
+.vc-sh.dn i{transform:rotate(225deg)}
+.vc-sh.up{color:#4ade80}.vc-sh.dn{color:#f87171}
+.vc-sh.up i{animation:vcArrUp 1.2s infinite}.vc-sh.up i:nth-child(2){animation-delay:.15s}.vc-sh.up i:nth-child(3){animation-delay:.3s}
+.vc-sh.dn i{animation:vcArrUp 1.2s infinite reverse}.vc-sh.dn i:nth-child(2){animation-delay:.15s}.vc-sh.dn i:nth-child(3){animation-delay:.3s}
+@keyframes vcArrUp{0%,100%{opacity:.2}50%{opacity:1}}
+.vc-knob{width:78px;height:78px;border-radius:50%;background:#16a34a;display:grid;place-items:center;color:#fff;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none;box-shadow:0 0 0 0 rgba(34,197,94,.6);animation:vcKnobPulse 1.6s infinite,vcKnobHop 1.6s ease-in-out infinite;will-change:transform}
+.vc-knob span{display:grid;place-items:center;pointer-events:none}
+.vc-knob svg{width:34px;height:34px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+@keyframes vcKnobPulse{70%{box-shadow:0 0 0 22px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+@keyframes vcKnobHop{0%,100%{margin-top:0}50%{margin-top:-8px}}
+.vc-sl.pull-up .vc-sh.dn,.vc-sl.pull-dn .vc-sh.up{opacity:.15}
+.vc-sl.pull-up .vc-knob,.vc-sl.pull-dn .vc-knob,.vc-sl.vc-done .vc-knob{animation:none}
+.vc-sl.vc-done .vc-sh{opacity:0}
+.vc-bar.call{animation:vcBarIn .35s cubic-bezier(.2,.9,.3,1) both}
+@keyframes vcBarIn{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:none}}
