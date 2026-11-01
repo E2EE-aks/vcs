@@ -50,7 +50,7 @@
     var st = null; try { st = S; } catch (e) {}
     if (!st) return false;
     if (st.view === 'chat' && st.chat && st.chat.with && typeof chatBack === 'function'){ chatBack(); return true; }
-    if (st.view === 'settings' && st.setSec && typeof setBack === 'function'){ setBack(); return true; }
+    if ((st.view === 'settings' || st.view === 'profile') && st.setSec && typeof setBack === 'function'){ setBack(); return true; }
     while (stack.length){ var v = stack.pop(); if (v && v !== st.view){ goBack(v); return true; } }
     if (st.view !== 'dashboard'){ goBack('dashboard'); return true; }
     return false;

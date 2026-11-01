@@ -167,7 +167,7 @@ var WRITE_ACTIONS = {
   addVcs: 1, updateVcs: 1,
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
-  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, driveDisconnect: 1,
+  saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, setMyBirthday: 1, driveDisconnect: 1,
   setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
@@ -186,7 +186,7 @@ var NEED = {
   setTimetable: 'tt', addTtCat: 'tt', updateTtCat: 'tt', deleteTtCat: 'tt'
 };
 // Only admins may do these
-var ADMIN_ONLY = { saveLoginCfg: 1, setMySession: 1, saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1, driveStatus: 1, driveAuthUrl: 1, driveDisconnect: 1 };
+var ADMIN_ONLY = { birthdayList: 1, saveLoginCfg: 1, setMySession: 1, saveSettings: 1, saveStatuses: 1, addStatus: 1, deleteStatus: 1, loginLog: 1, loginPhotos: 1, listGroups: 1, saveGroup: 1, deleteGroup: 1, ttCalStatus: 1, driveStatus: 1, driveAuthUrl: 1, driveDisconnect: 1 };
 // Admins, and any user the admin ticked "Can add new users" for. Such a user only ever manages the users HE added.
 var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1 };
 
@@ -349,6 +349,8 @@ function route_(req) {
       case 'setMyPhoto':        out = setMyPhoto_(req); break;
       case 'getMyLocation':     return getMyLocation_();
       case 'setMyLocation':     out = setMyLocation_(req); break;
+      case 'setMyBirthday':     out = setMyBirthday_(req); break;
+      case 'birthdayList':      return birthdayList_();
       case 'getPhotoPrivacy':   return getPhotoPrivacy_();
       case 'setPhotoPrivacy':   out = setPhotoPrivacy_(req); break;
       case 'driveStatus':       return driveStatus_();
@@ -372,7 +374,7 @@ function route_(req) {
       case 'chatGroupDelete':   return chatGroupDelete_(req);
       case 'loginLog':          return { ok: true, logs: teamRows_(readLog_(Math.min(Number(req.limit) || 200, 500), String(req.uid || ''))) };
       case 'loginPhotos':       return { ok: true, photos: readLoginPhotos_(Math.min(Number(req.limit) || 60, 200), String(req.username || '').trim().toLowerCase()) };
-      case 'activityLog':       if (!isAdminCtx_() && !actUsersOn_()) fail_('The activity log is only for admins.', 'PERM'); return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
+      case 'activityLog':       if (!isAdminCtx_()) fail_('The activity log is only for admins.', 'PERM'); return { ok: true, logs: teamRows_(readActivity_(Math.min(Number(req.limit) || 200, 500), isAdminCtx_() ? String(req.uid || '') : CTX.uid)) };
       default: fail_('Unknown action: ' + a);
     }
     if (jr) { var jch = JR_end_(); if (out && out.ok !== false) recordHistory_(a, req, jch); }
@@ -536,9 +538,9 @@ function meOf_(values) {
     username: main ? String(values.username || '') : CTX.username,
     name: main ? String(values.name || values.username || '') : (CTX.name || CTX.username),
     perms: CTX.viewing ? fullPerms_() : CTX.perms,
-    actLog: CTX.role === 'admin' || actUsersOn_(), actUsers: actUsersOn_(),
+    actLog: CTX.role === 'admin', actUsers: false,
     viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName, group: CTX.group ? groupInfo_(CTX.group) : null,
-    sessHours: sessHours_(CTX.uid),
+    sessHours: sessHours_(CTX.uid), birthday: String(PropertiesService.getScriptProperties().getProperty('BD_' + (CTX.uid || 'ADMIN')) || ''),
     payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), serverNow: Date.now() };
 }
 
@@ -2864,6 +2866,26 @@ function locMap_() {
 function getMyLocation_() {
   var o = locMap_()[CTX.uid] || { tz: '', loc: '' };
   return { ok: true, tz: o.tz, loc: o.loc };
+}
+// ---------- birthdays: every user saves his own date (BD_<userId> = yyyy-mm-dd); admins read the list for the Dashboard alert ----------
+function setMyBirthday_(req) {
+  var uid = CTX.uid || 'ADMIN', d = String(req.date || '').trim(), P = PropertiesService.getScriptProperties();
+  if (!d) { P.deleteProperty('BD_' + uid); return { ok: true, birthday: '' }; }
+  var m = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) fail_('Please choose a valid date.');
+  var y = Number(m[1]), mo = Number(m[2]), da = Number(m[3]), t = new Date(y, mo - 1, da);
+  if (y < 1900 || t.getMonth() !== mo - 1 || t.getDate() !== da || t.getTime() > Date.now()) fail_('Please choose a valid date.');
+  P.setProperty('BD_' + uid, d);
+  return { ok: true, birthday: d };
+}
+function birthdayList_() {
+  var P = PropertiesService.getScriptProperties().getProperties(), s = readSettings_().values, out = [];
+  var accs = CTX.primary ? [getAccount_('ADMIN', s)].concat(readUsers_()) : readUsers_().filter(function (u) { return u.createdBy === CTX.uid; });
+  accs.forEach(function (a) {
+    var d = String(P['BD_' + a.id] || '');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) out.push({ id: a.id, name: String(a.name || a.username || ''), date: d });
+  });
+  return { ok: true, list: out };
 }
 function setMyLocation_(req) {
   var tz = String(req.tz || '').trim(), loc = String(req.loc || '').trim().slice(0, 60), P = PropertiesService.getScriptProperties();

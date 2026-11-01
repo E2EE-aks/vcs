@@ -486,7 +486,7 @@ async function loadLogs(){
   if (S.view === 'logins' || (S.view === 'dashboard' && !S.as)) render();
 }
 async function loadActivity(){
-  if (!(S.me && S.me.actLog)) return;                 // the log is admin-only (the main admin can open it for users)
+  if (!(S.me && S.me.actLog && isAdmin())) return;    // the log is admin-only (the main admin can open it for users)
   // Admins see everyone's activity; regular users only ever see their own (the server already scopes it by token,
   // uid here just lets an admin re-filter the same list client-side without asking the server again).
   try { S.acts = (await api('activityLog', { limit:300 })).logs; } catch(e){ S.acts = S.acts || []; }
@@ -836,7 +836,6 @@ function activityCard(){
     <p class="muted" style="margin-bottom:12px">${isAdmin() ? 'Every save, add or delete each user made — attendance, expenses, work, time table and more.' : 'Every save, add or delete you made.'}</p>
     ${isAdmin() ? `<div class="form-grid"><div class="field"><label>User</label><select class="select" id="afU">${uopts}</select></div>
       <div class="field"><label>Search</label><input class="input" id="afQ" placeholder="action, detail…" value="${esc(S.af.q)}"></div></div>` : ''}
-    ${S.me.primary ? `<label class="tog"><input type="checkbox" id="actUsersChk" ${S.me.actUsers ? 'checked' : ''}> Let regular users see <b>their own</b> activity log <span class="muted">(off = only admins can open the log)</span></label>` : ''}
     <div id="actList">${S.acts ? '' : '<div class="empty-state">Loading activity…</div>'}</div></div>`;
 }
 
@@ -1270,7 +1269,8 @@ const TITLES = {
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
   version:['Version','Pick files from GitHub and build an Android app (.apk) to install on your phone'],
-  settings:['Settings','Profile, security, appearance and preferences']
+  profile:['Profile','Photo, security, sign-in, appearance and preferences'],
+  settings:['Settings','Users, groups, data and system options']
 };
 
 /* =====================================================================
@@ -1444,9 +1444,42 @@ function photoCard(){
   return `<div class="card" id="phCard"><h3>🖼 Profile photo</h3>
     <p class="muted" style="margin-bottom:12px">This picture is shown next to your name in Chat, to the people who can see you.</p>
     <div class="ph-row"><div class="ch-av ph-big" style="background:${chColor(id || 'x')}">${src ? `<img class="ch-img" alt="" src="${esc(src)}">` : ''}${esc(nm.charAt(0).toUpperCase())}</div>
-      <div class="ph-btns"><label class="btn" for="phFile">📷 ${src ? 'Change photo' : 'Choose photo'}</label><input type="file" id="phFile" accept="image/*" hidden onchange="photoPick(this)">${src ? '<button class="btn ghost" type="button" onclick="photoRemove()">Remove</button>' : ''}<button class="btn ghost" type="button" onclick="photoPrivacy()">🔒 Who can see it</button></div></div>${locCard()}</div>`;
+      <div class="ph-btns"><label class="btn" for="phFile">📷 ${src ? 'Change photo' : 'Choose photo'}</label><input type="file" id="phFile" accept="image/*" hidden onchange="photoPick(this)">${src ? '<button class="btn ghost" type="button" onclick="photoRemove()">Remove</button>' : ''}<button class="btn ghost" type="button" onclick="photoPrivacy()">🔒 Who can see it</button></div></div>
+    <div class="bday-row" style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
+      <div style="font-weight:700;margin-bottom:8px">${esc(nm)}</div>
+      <label class="muted" for="bdayIn" style="display:block;margin-bottom:6px">🎂 Birthday <span style="font-size:calc(12px*var(--fs))">— the admin gets an alert on your birthday</span></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input class="input" type="date" id="bdayIn" style="width:auto" value="${esc(me.birthday || '')}" max="${todayISO()}">
+        <button class="btn" type="button" onclick="bdaySave()">Save</button>${me.birthday ? '<button class="btn ghost" type="button" onclick="bdaySave(true)">Remove</button>' : ''}</div>
+    </div>${locCard()}</div>`;
 }
 
+async function bdaySave(clear){
+  const el = document.getElementById('bdayIn'), v = clear ? '' : (el ? el.value : '');
+  if (!clear && !v) return toast('Pick your birthday date first', true);
+  try { const r = await api('setMyBirthday', { date:v }); if (S.me) S.me.birthday = r.birthday || ''; S.bdays = null; toast(clear ? 'Birthday removed' : 'Birthday saved 🎂'); render(); } catch(e){ handleErr(e); }
+}
+/* admin Dashboard: alert for every user whose birthday is today */
+async function loadBirthdays(){
+  if (S.bdLoading) return; S.bdLoading = true;
+  try { S.bdays = (await api('birthdayList')).list || []; } catch(e){ S.bdays = []; }
+  S.bdLoading = false; S.bdayDay = todayISO();
+  const t = bdayToday();
+  try { if (t.length && localStorage.getItem('ks_bd_seen') !== todayISO()){ localStorage.setItem('ks_bd_seen', todayISO()); toast('🎂 Birthday today: ' + t.map(x => x.name).join(', ')); } } catch(e){}
+  if (S.view === 'dashboard') render();
+}
+function bdayToday(){
+  const md = todayISO().slice(5), y = +todayISO().slice(0, 4);
+  return (S.bdays || []).filter(x => x.date && x.date.slice(5) === md && x.id !== (S.me && S.me.id)).map(x => ({ name:x.name, age:y - +x.date.slice(0, 4) }));
+}
+function bdayAlertHtml(){
+  if (!isAdmin() || S.as) return '';
+  if (!S.bdays || S.bdayDay !== todayISO()){ loadBirthdays(); return ''; }
+  const t = bdayToday(); if (!t.length) return '';
+  return `<div class="card" id="bdayCard" style="margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-left:5px solid #f59e0b;background:linear-gradient(135deg,rgba(245,158,11,.14),transparent)">
+    <div style="font-size:calc(34px*var(--fs))">🎂</div>
+    <div style="flex:1;min-width:200px"><div style="font-weight:800;font-size:calc(17px*var(--fs))">Birthday today!</div>
+      ${t.map(x => `<div><b>${esc(x.name)}</b>${x.age > 0 && x.age < 120 ? ` turns ${x.age} today` : ' — birthday today'} 🎉</div>`).join('')}</div></div>`;
+}
 /* ---------- my location (time zone) — other people see my local time under my name in chat ---------- */
 const KS_LOC = [
   ['India','Asia/Kolkata','Delhi / Mumbai'],['Indonesia','Asia/Jakarta','Jakarta (WIB)'],['Indonesia','Asia/Makassar','Bali (WITA)'],['Indonesia','Asia/Jayapura','Papua (WIT)'],
@@ -1723,7 +1756,7 @@ function go(v){
   setMenu(false);
   if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
   if (v !== 'chat') document.body.classList.remove('chat-conv');
-  if (v === 'settings') S.setSec = null;
+  if (v === 'settings' || v === 'profile') S.setSec = null;
   S.view = v; applyAccess(); v = S.view; document.body.dataset.view = v;
   document.querySelectorAll('#nav button').forEach(b => b.classList.toggle('active', b.dataset.v === v));
   $('#pageTitle').textContent = TITLES[v][0];
@@ -1736,7 +1769,7 @@ function go(v){
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
-$('#refreshBtn').onclick = async () => { try { await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); if (S.view === 'updates') updLoad(); } catch(e){ handleErr(e); } };
+$('#refreshBtn').onclick = async () => { try { S.bdays = null; await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); if (S.view === 'updates') updLoad(); } catch(e){ handleErr(e); } };
 /* ---------- payment / access countdown (Dashboard) ---------- */
 let payTimer = null;
 const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock
@@ -1775,12 +1808,15 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, settings:vSettings})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, settings:vSettings, profile:vProfile})[S.view]();
+  if (S.view === 'attendance') html += statusCardHtml();
+  if (S.view === 'dashboard') html = bdayAlertHtml() + html;
   if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
-  const after = ({settings:() => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); }, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
+  const setAfter = () => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); };
+  const after = ({settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 
@@ -3497,7 +3533,7 @@ async function sessSave(){
   try{ const r = await api('setMySession', { hours:v }); S.me.sessHours = r.hours; toast('Saved. You stay signed in for ' + (SESS_OPTS.find(o => o[0] === String(r.hours)) || SESS_OPTS[0])[1]); }
   catch(e){ handleErr(e); }
 }
-function vSettings(){
+function vSettingsGrid(){
   const dom = document.createElement('div'); dom.innerHTML = vSettingsBase();
   const grid = dom.firstElementChild;
   const drop = word => [...grid.children].forEach(c => { const t = c.querySelector('h3'); if (t && t.textContent.includes(word)) c.remove(); });
@@ -3516,8 +3552,36 @@ function vSettings(){
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', driveCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', histCard());
-  if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
+  if (S.me && S.me.actLog && isAdmin()) grid.insertAdjacentHTML('beforeend', activityCard());
+  return grid;
+}
+/* which settings card belongs where */
+const PROFILE_KEYS = ['photo', 'security', 'sess', 'bio', 'general', 'theme', 'smart'];   // now on the Profile page
+const PROFILE_GROUPS = [['My profile', ['photo', 'security', 'sess', 'bio']], ['Customize', ['theme', 'smart', 'general']]];
+const SET_GONE = ['status'];                                                              // Attendance status codes now live on the Attendance page
+function setKeyed(grid){
+  const found = {};
+  return [...grid.children].map((c, i) => {
+    const t = ((c.querySelector('h3') || {}).textContent || '').trim();
+    const m = SET_MATCH.find(x => t.includes(x[1]));
+    const k = m && !found[m[0]] ? m[0] : 'x' + i; found[k] = 1; return [k, c];
+  });
+}
+function vSettings(){
+  const grid = vSettingsGrid();
+  setKeyed(grid).forEach(([k, c]) => { if (PROFILE_KEYS.includes(k) || SET_GONE.includes(k)) c.remove(); });
   return settingsHub(grid);
+}
+function vProfile(){
+  const grid = vSettingsGrid();
+  setKeyed(grid).forEach(([k, c]) => { if (!PROFILE_KEYS.includes(k)) c.remove(); });
+  return settingsHub(grid, PROFILE_GROUPS);
+}
+function statusCardHtml(){            // the "Attendance status codes" card (admin only), shown on the Attendance page
+  if (!isAdmin()) return '';
+  const dom = document.createElement('div'); dom.innerHTML = vSettingsBase();
+  const c = [...dom.firstElementChild.children].find(x => ((x.querySelector('h3') || {}).textContent || '').includes('Attendance status codes'));
+  return c ? `<div class="card-wrap" style="margin-top:16px">${c.outerHTML}</div>` : '';
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
@@ -3562,7 +3626,7 @@ function setHint(k){
 }
 function setOpen(k){ S.setSec = k; render(); window.scrollTo(0, 0); }
 function setBack(){ S.setSec = null; render(); window.scrollTo(0, 0); }
-function settingsHub(grid){
+function settingsHub(grid, groups = SET_GROUPS){
   const found = {}, def = {};
   [...grid.children].forEach((c, i) => {
     const t = ((c.querySelector('h3') || {}).textContent || '').trim();
@@ -3577,16 +3641,16 @@ function settingsHub(grid){
   const tile = k => { const d = def[k], h = setHint(k);
     return `<button type="button" class="set-tile" data-q="${esc((d[1] + ' ' + d[2]).toLowerCase())}" onclick="setOpen('${k}')"><span class="set-ic">${d[0]}</span><span class="set-tx"><b>${esc(d[1])}</b><small>${esc(d[2])}</small>${h ? `<em>${esc(h)}</em>` : ''}</span><span class="set-go">›</span></button>`; };
   const used = new Set();
-  const gopen = setGrpSaved(), GI = { 'Account & security':'🔐', 'Customize':'🎨', 'People & access':'👥', 'Attendance & expenses':'🗓', 'Data & system':'🗄', 'More':'⋯' };
+  const gopen = setGrpSaved(), GI = { 'Account & security':'🔐', 'Customize':'🎨', 'People & access':'👥', 'Attendance & expenses':'🗓', 'Data & system':'🗄', 'My profile':'👤', 'More':'⋯' };
   const sec = (g, ks, gi) => `<section class="set-grp ${gopen.includes(gi) ? 'open' : ''}" data-g="${gi}"><button type="button" class="set-gt" aria-expanded="${gopen.includes(gi)}" onclick="setGrp(${gi}, this)"><span class="set-gi">${GI[g] || '•'}</span><span class="set-gn">${esc(g)}</span><i>${ks.length}</i><span class="set-chev">›</span></button><div class="set-tiles">${ks.map(tile).join('')}</div></section>`;
-  let hub = SET_GROUPS.map(([g, keys], gi) => {
+  let hub = groups.map(([g, keys], gi) => {
     const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
     return ks.length ? sec(g, ks, gi) : '';
   }).join('');
   const rest = Object.keys(found).filter(k => !used.has(k));
   if (rest.length) hub += sec('More', rest, 9);
   const search = `<div class="set-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>`;
-  const bar = open ? `<div class="set-bar"><button type="button" class="btn ghost sm" onclick="setBack()">← Settings</button><span class="set-bic">${def[open][0]}</span><div class="set-bt"><b>${esc(def[open][1])}</b>${def[open][2] ? `<small>${esc(def[open][2])}</small>` : ''}</div></div>` : '';
+  const bar = open ? `<div class="set-bar"><button type="button" class="btn ghost sm" onclick="setBack()">← ${S.view === 'profile' ? 'Profile' : 'Settings'}</button><span class="set-bic">${def[open][0]}</span><div class="set-bt"><b>${esc(def[open][1])}</b>${def[open][2] ? `<small>${esc(def[open][2])}</small>` : ''}</div></div>` : '';
   return `<div class="set-root">${open ? bar : `<div class="set-hub">${search}${hub}<div class="empty-state hidden" id="setNone">No setting matches your search</div></div>`}<div class="set-detail">${grid.innerHTML}</div></div>`;
 }
 function setGrpSaved(){ try{ return JSON.parse(localStorage.getItem('ks_set_open') || '[]'); }catch(e){ return []; } }
@@ -3643,6 +3707,18 @@ async function delStatus(code){
   if (!await confirmBox('Delete status “' + code + '”?', 'This only works if no day is marked with it.', 'Delete', true)) return;
   try { const r = await api('deleteStatus', { code }); S.d.statuses = r.statuses; render(); toast('Status deleted'); } catch(e){ handleErr(e); }
 }
+function bindStatusForms(){
+  const $ = s => document.querySelector(s) || {};
+  $('#fStat').onsubmit = async ev => {
+    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target));
+    const statuses = S.d.statuses.map((x, i) => ({ code:x.code, label:f['l'+i], factor:f['f'+i], color:f['c'+i] }));
+    try { const r = await api('saveStatuses', { statuses }); S.d.statuses = r.statuses; toast('Status codes saved'); render(); } catch(e){ handleErr(e); }
+  };
+  $('#fNewStat').onsubmit = async ev => {
+    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
+    try { const r = await api('addStatus', f); S.d.statuses = r.statuses; toast('Status code added'); render(); } catch(e){ handleErr(e); } finally { btn.disabled = false; }
+  };
+}
 function bindSettings(){
   const $ = s => document.querySelector(s) || {};          // cards can be hidden by permissions
   const rs = document.getElementById('roundSel');
@@ -3667,15 +3743,7 @@ function bindSettings(){
       S.d.settings.username = r.username; if (S.me) S.me.username = r.username; toast('Login updated'); render();
     }catch(e){ handleErr(e); }
   };
-  $('#fStat').onsubmit = async ev => {
-    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target));
-    const statuses = S.d.statuses.map((x, i) => ({ code:x.code, label:f['l'+i], factor:f['f'+i], color:f['c'+i] }));
-    try { const r = await api('saveStatuses', { statuses }); S.d.statuses = r.statuses; toast('Status codes saved'); render(); } catch(e){ handleErr(e); }
-  };
-  $('#fNewStat').onsubmit = async ev => {
-    ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
-    try { const r = await api('addStatus', f); S.d.statuses = r.statuses; toast('Status code added'); render(); } catch(e){ handleErr(e); } finally { btn.disabled = false; }
-  };
+  bindStatusForms();
   const afU = document.getElementById('afU'), afQ = document.getElementById('afQ');
   if (afU) afU.onchange = e => { S.af.u = e.target.value; drawActivityList(); };
   if (afQ) afQ.oninput = e => { S.af.q = e.target.value; drawActivityList(); };
@@ -3685,7 +3753,7 @@ function bindSettings(){
     try { await api('setActivityAccess', { on }); S.me.actUsers = on; toast(on ? 'Users can now see their own activity' : 'Activity log is now admin-only'); }
     catch(err){ e.target.checked = !on; handleErr(err); } finally { e.target.disabled = false; }
   };
-  if (S.me && S.me.actLog){ if (S.acts) drawActivityList(); else loadActivity(); }
+  if (S.me && S.me.actLog && isAdmin()){ if (S.acts) drawActivityList(); else loadActivity(); }
 }
 function download(name, rows){
   const csv = rows.map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
