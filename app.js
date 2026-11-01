@@ -3407,28 +3407,19 @@ async function ttCopyPrev(){ if (!can('tt')) return deny();
 /* =====================================================================
    VIEW: SETTINGS
    ===================================================================== */
-function exportItems(){
+function exportCard(){
   const P = perms(), items = [];
   if (P.att !== 'none') items.push(['att', '🗓️ Attendance', 'Year summary + day-wise register — how many days Present / Absent / Week off', 'Attendance']);
   if (P.exp !== 'none') items.push(['exp', '💸 Expenses — Ledger', 'Income (in), Expense (out) and running balance, with category & month summary', 'Ledger']);
   if (P.work !== 'none') items.push(['work', '🛠️ Work record', 'All daily work entries with month & product summary', 'Work']);
+  if (!items.length) return '';
   if (items.length > 1) items.push(['all', '📚 All data', items.map(x => x[3]).join(' + ') + ' in a single file', '']);
-  return items;
-}
-function exportRow(x){            // one export option (title + Excel / PDF buttons)
-  const k = x[0], n = window.mvName ? mvName('ex:' + k, x[1], x[2]) : { t:x[1], s:x[2] };
-  return `<div class="exitem"><div><span class="t">${esc(n.t)}</span><span class="s">${esc(n.s)}</span></div><div class="actions"><button class="btn soft sm" onclick="doExport('${k}','xlsx')">⬇ Excel</button><button class="btn soft sm" onclick="doExport('${k}','pdf')">⬇ PDF</button></div></div>`;
-}
-function exportCard(){
-  const P = perms(), all = exportItems();
-  let items = all;
-  if (window.mvKeep) items = all.filter(x => mvKeep('ex:' + x[0]));      // options moved to another page are not shown here
-  if (!items.length) return all.length ? '<div class="card"><h3>📦 Data & export</h3><p class="muted">All export options have been moved to other pages. Use <b>Move &amp; Edit</b> to bring them back.</p></div>' : '';
   const note = P.att !== 'none' ? ` Attendance export is for the selected employee (<b>${esc(emp().name || '—')}</b>).` : '';
   return `<div class="card"><h3>📦 Data & export</h3>
     <p class="muted" style="margin-bottom:14px">Your data lives in your Google Sheet.${note}</p>
     <div class="exgrid">
-      ${items.map(exportRow).join('')}
+      ${items.map(([k, t, s2]) =>
+        `<div class="exitem"><div><span class="t">${t}</span><span class="s">${s2}</span></div><div class="actions"><button class="btn soft sm" onclick="doExport('${k}','xlsx')">⬇ Excel</button><button class="btn soft sm" onclick="doExport('${k}','pdf')">⬇ PDF</button></div></div>`).join('')}
     </div>
   </div>`;
 }
@@ -3505,7 +3496,7 @@ async function sessSave(){
   try{ const r = await api('setMySession', { hours:v }); S.me.sessHours = r.hours; toast('Saved. You stay signed in for ' + (SESS_OPTS.find(o => o[0] === String(r.hours)) || SESS_OPTS[0])[1]); }
   catch(e){ handleErr(e); }
 }
-function vSettingsGrid(){
+function vSettings(){
   const dom = document.createElement('div'); dom.innerHTML = vSettingsBase();
   const grid = dom.firstElementChild;
   const drop = word => [...grid.children].forEach(c => { const t = c.querySelector('h3'); if (t && t.textContent.includes(word)) c.remove(); });
@@ -3526,17 +3517,11 @@ function vSettingsGrid(){
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', trashCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', dchatCard());
   if (S.me && S.me.actLog) grid.insertAdjacentHTML('beforeend', activityCard());
-  grid.insertAdjacentHTML('beforeend', window.mvCard ? mvCard() : '');
-  return grid;
-}
-function vSettings(){
-  const grid = vSettingsGrid();
-  if (window.mvFilter) mvFilter(grid);          // Move & Edit: hide moved cards, apply new names
   return settingsHub(grid);
 }
 
 /* ---------- Settings hub: one tile per card, tap a tile to open it ---------- */
-const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['dchat','Daily Chats'],['smart','Smart options'],['login','Login page'],['move','Move & Edit']];
+const SET_MATCH = [['hist','Change history'],['sess','Stay signed in'],['photo','Profile photo'],['theme','Appearance'],['users','Users & access'],['groups','Groups'],['emps','Employees'],['general','General'],['security','Login & security'],['bio','Fingerprint'],['status','Attendance status codes'],['cats','Expense categories'],['export','Data & export'],['vcsproc','VCS Processing'],['drive','Google Drive'],['activity','Activity log'],['trash','Trash'],['dchat','Daily Chats'],['smart','Smart options'],['login','Login page']];
 const SET_DEF = {
   smart:['✨','Smart options','Compact view, swipe back, call reactions, online alerts'],
   login:['🔑','Login page','Pictures, texts, fonts and colours of the sign-in screen'],
@@ -3557,12 +3542,11 @@ const SET_DEF = {
   activity:['📋','Activity log','Who did what, and when'],
   hist:['🕘','Change history','Undo edits & deletes'],
   trash:['🗑️','Trash','Deleted chat messages, photos & videos'],
-  dchat:['📄','Daily Chats','Chats older than 24 hours, saved day by day as PDF'],
-  move:['🧭','Move & Edit','Move any option to any page and rename it']
+  dchat:['📄','Daily Chats','Chats older than 24 hours, saved day by day as PDF']
 };
 const SET_GROUPS = [
   ['Account & security', ['photo','security','sess','bio']],
-  ['Customize', ['theme','login','smart','general','move']],
+  ['Customize', ['theme','login','smart','general']],
   ['People & access', ['emps','users','groups']],
   ['Attendance & expenses', ['status','cats']],
   ['Data & system', ['vcsproc','export','drive','activity','hist','trash','dchat']]
