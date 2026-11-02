@@ -3015,7 +3015,7 @@ function vLic(){
   });
   const remind = all.map(x => ({ x, rn: licRenewInfo(x) })).filter(o => o.rn.due && o.rn.days <= 30).sort((a, b) => a.rn.days - b.rn.days);
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
-      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><b>${esc(x.name) || '<span class="dim">—</span>'}</b>${licStatusTag(x.endDate)}${licGroupTag(x)}</td>
+      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><div class="lic-name"><b>${esc(x.name) || '<span class="dim">—</span>'}</b><span class="lic-name-tags">${licStatusTag(x.endDate)}${licGroupTag(x)}</span></div></td>
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
       <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
       <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>

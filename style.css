@@ -358,6 +358,10 @@ td[data-l]::before{content:none}
   table.stk td{display:flex;justify-content:space-between;align-items:center;gap:12px;border:0;padding:4px 0;white-space:normal!important;text-align:right!important;min-width:0!important}
   table.stk td[data-l]::before{content:attr(data-l);color:var(--muted);font-weight:600;font-size:calc(10.5px*var(--fs));text-transform:uppercase;text-align:left;flex:none}
   table.stk tbody tr:hover td{background:transparent}
+  /* LIC customer name: full width on top, never one letter per line */
+  table.stk td[data-l="Customer Name"]{flex-direction:column;align-items:stretch;gap:4px}
+  table.stk td[data-l="Customer Name"]::before{text-align:left}
+  table.stk td[data-l="Customer Name"] .lic-name{text-align:left;width:100%}
 
   /* work table → one card per entry */
   .wk{display:block}
@@ -1403,3 +1407,7 @@ html[data-mode="dark"] table.stk tbody tr:nth-child(even),html[data-mode="dark"]
 .vc-sl.vc-done .vc-sh{opacity:0}
 .vc-bar.call{animation:vcBarIn .35s cubic-bezier(.2,.9,.3,1) both}
 @keyframes vcBarIn{from{opacity:0;transform:translateY(40px)}to{opacity:1;transform:none}}
+
+.lic-name{min-width:0;overflow-wrap:anywhere;word-break:normal}
+.lic-name b{display:block;font-size:calc(15px*var(--fs));line-height:1.35}
+.lic-name-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
