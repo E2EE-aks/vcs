@@ -7,13 +7,16 @@
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var app = $('#app'), nav = $('#nav'); if (!app || !nav) return;
-  var FIXED = [['dashboard', 'Dashboard'], ['profile', 'Profile'], ['chat', 'Chat']];
+  var FIXED = [['dashboard', 'Dashboard'], ['profile', 'Profile'], ['chat', 'Chat'], ['telegram', 'Telegram'], ['whatsapp', 'WhatsApp'], ['mail', 'Mail']];
   var PROF = ['profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];                       // pages that belong to Profile
-  var EXC = ['dashboard', 'chat', 'profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];   // not listed in All Options
+  var EXC = ['dashboard', 'chat', 'telegram', 'whatsapp', 'mail', 'profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];   // not listed in All Options
   var SV = function(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>'; };
   var ICON = {
     dashboard: SV('<rect x="3.5" y="3.5" width="7" height="8" rx="2"/><rect x="13.5" y="3.5" width="7" height="5" rx="2"/><rect x="13.5" y="11.5" width="7" height="9" rx="2"/><rect x="3.5" y="14.5" width="7" height="6" rx="2"/>'),
     chat: SV('<path d="M20.5 11.5a7.5 7.5 0 0 1-10.9 6.7L4 19.5l1.4-4.3A7.5 7.5 0 1 1 20.5 11.5z"/><path d="M9 10.5h6M9 13.5h4"/>'),
+    telegram: SV('<path d="M21 4 3 11.2l5.6 2L10.5 20l3.2-4 4.6 3.4L21 4z"/><path d="m8.6 13.2 9-6.4"/>'),
+    whatsapp: SV('<path d="M20 11.6A8 8 0 0 1 8 18.5L4 19.8l1.3-3.8A8 8 0 1 1 20 11.6z"/><path d="M9.2 8.8c.2 2.6 2.7 5.1 5.4 5.5l1.1-1.2-1.9-1-.9.6c-.9-.4-1.7-1.2-2.1-2.1l.6-.9-1-1.9-1.2 1z"/>'),
+    mail: SV('<rect x="3" y="5.5" width="18" height="13" rx="2.5"/><path d="m3.8 7.5 8.2 6 8.2-6"/>'),
     all: SV('<circle cx="6" cy="6" r="1.6"/><circle cx="12" cy="6" r="1.6"/><circle cx="18" cy="6" r="1.6"/><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/><circle cx="6" cy="18" r="1.6"/><circle cx="12" cy="18" r="1.6"/><circle cx="18" cy="18" r="1.6"/>')
   };
   function esc(t){ return String(t).replace(/[&<>"]/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }

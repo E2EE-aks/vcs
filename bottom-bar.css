@@ -13,6 +13,7 @@
   #btmBar .bemo{font-size:var(--bb-ic,26px);line-height:1}
   #btmBar small{font-size:var(--bb-fs,12px);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;letter-spacing:.1px}
   #btmBar.nolab small{display:none}
+  @media (max-width:430px){ #btmBar{padding:5px 3px;gap:0} #btmBar small{font-size:min(var(--bb-fs,12px),10.5px);letter-spacing:0} #btmBar .bi em{right:-7px} }
   #btmBar button.on{color:var(--bb-on,var(--brand));background:color-mix(in srgb,var(--bb-on,var(--brand)) 16%,transparent)}
   #btmBar button:active{transform:scale(.95)}
   #btmBar .bi em{position:absolute;top:-5px;right:-9px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#ef4444;color:#fff;

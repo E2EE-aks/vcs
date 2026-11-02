@@ -230,13 +230,26 @@ module.exports = function makeWhatsApp(o) {
         saveSoon(uid, s);
       } catch (e) {}
     }));
-    sock.ev.on('messages.update', ups => ups.forEach(u => {                       // delivered / read ticks
-      const jid = u.key && u.key.remoteJid, list = jid && s.msgs.get(jid); if (!list || !u.update || u.update.status === undefined) return;
-      const m = list.find(x => x.id === u.key.id); if (m && m.out) m.status = ST[u.update.status] || m.status;
+    /* delivered / read ticks. The update can arrive under the number id while we stored the chat under the @lid (or the other way round),
+       so the message is looked up by its id across every chat of that person - otherwise it stays on one tick forever. */
+    const findMsg = (key) => {
+      if (!key || !key.id) return null;
+      learn(s, key.remoteJid, key.remoteJidAlt);
+      const j = bareJid(key.remoteJid), pn = pnOf(s, j), tries = [key.remoteJid, j, key.remoteJidAlt, pn];
+      if (pn) s.lid.forEach((v, k) => { if (v === pn) tries.push(k); });
+      for (const t of tries) { const l = t && s.msgs.get(t); const m = l && l.find(x => x.id === key.id); if (m) return m; }
+      for (const l of s.msgs.values()) { const m = l.find(x => x.id === key.id); if (m) return m; }    // last resort: by message id only
+      return null;
+    };
+    const RANK = { error: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
+    const bump = (m, st2) => { if (m && m.out && st2 && (RANK[st2] || 0) >= (RANK[m.status] || 0)) m.status = st2; };
+    sock.ev.on('messages.update', ups => ups.forEach(u => {
+      if (!u.update || u.update.status === undefined || u.update.status === null) return;
+      bump(findMsg(u.key), ST[u.update.status]);
     }));
     sock.ev.on('message-receipt.update', rs => rs.forEach(r => {
-      const jid = r.key && r.key.remoteJid, list = jid && s.msgs.get(jid); if (!list) return;
-      const m = list.find(x => x.id === r.key.id); if (m && m.out && r.receipt) m.status = r.receipt.readTimestamp ? 'read' : (m.status === 'read' ? 'read' : 'delivered');
+      const m = findMsg(r.key); if (!m || !r.receipt) return;
+      bump(m, (r.receipt.readTimestamp || r.receipt.type === 'read' || r.receipt.type === 'read-self') ? 'read' : 'delivered');
     }));
     return s;
   }
