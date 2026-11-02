@@ -3019,7 +3019,7 @@ function vLic(){
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
       <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
       <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>
-      <td data-l="Total Policy Amount" class="n">${licAmt(x.totalAmount)}</td>
+      <td data-l="Sum Assured" class="n">${licAmt(x.totalAmount)}</td>
       <td data-l="Nominee" style="white-space:normal;word-break:break-word">${esc(x.nominee) || '<span class="dim">—</span>'}</td>
       <td data-l="Customer Mobile" style="white-space:nowrap">${x.phone ? `<a href="tel:${esc(x.phone)}">${esc(x.phone)}</a>` : '<span class="dim">—</span>'}</td>
       <td data-l="Premium Mode"><span class="tag">${esc(LIC_FREQ[x.freq] || 'One-time')}</span></td>
@@ -3038,7 +3038,7 @@ function vLic(){
         <span class="lic-rn lic-pill ${rn.cls}" data-lic-id="${esc(x.id)}">${esc(rn.text)}</span></div>`).join('')}</div>` : '';
   return `${remindCard}<div class="grid kpis" style="margin-bottom:16px">
       <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
-      <div class="card kpi p"><div class="lbl">Total Amount</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(totalAmt))}</div></div>
+      <div class="card kpi p"><div class="lbl">Total Sum Assured</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(totalAmt))}</div></div>
       <div class="card kpi p"><div class="lbl">To pay in 1 year</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(yearAmt))}</div><div class="hint">${yearN} running polic${yearN === 1 ? 'y' : 'ies'} · monthly ×12, quarterly ×4, half-yearly ×2, yearly ×1</div></div>
       <div class="card kpi m"><div class="lbl">Renewal due ≤ 7 days</div><div class="val">${renew7}</div><div class="hint">pay soon</div></div>
       <div class="card kpi w"><div class="lbl">Renewal due ≤ 30 days</div><div class="val">${renew30}</div><div class="hint">upcoming</div></div>
@@ -3052,7 +3052,7 @@ function vLic(){
       <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
       <button class="btn" onclick="licForm()">＋ Add policy</button></div>${licChips()}</div>
     <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
-      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Total Policy Amount</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Sum Assured</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
       <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
@@ -3069,7 +3069,7 @@ async function licCopy(id){
     x.policyNo && 'Policy Number: ' + x.policyNo,
     x.policyName && 'Policy Name: ' + x.policyName,
     x.amount ? 'Premium Amount: ₹' + Number(x.amount).toLocaleString('en-IN') : '',
-    x.totalAmount ? 'Total Policy Amount: ₹' + Number(x.totalAmount).toLocaleString('en-IN') : '',
+    x.totalAmount ? 'Sum Assured: ₹' + Number(x.totalAmount).toLocaleString('en-IN') : '',
     x.nominee && 'Nominee: ' + x.nominee,
     x.phone && 'Customer Mobile: ' + x.phone,
     ...(S.d.licFields || []).filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]),
@@ -3185,12 +3185,12 @@ function dateTypeable(root){
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
   const freqOpts = Object.keys(LIC_FREQ).map(k => `<option value="${k}" ${(x ? x.freq : '') === k ? 'selected' : ''}>${LIC_FREQ[k]}</option>`).join('');
-  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer, policy name, premium and total policy amount, nominee, mobile number, premium mode, dates and the renewal (premium due) date.</p>
+  const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer, policy name, premium and sum assured, nominee, mobile number, premium mode, dates and the renewal (premium due) date.</p>
     <form id="licf" autocomplete="off">
       <div class="row2"><div class="field"><label>Customer Name</label><input class="input" name="name" maxlength="200" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
         <div class="field"><label>Policy Number</label><input class="input" name="policyNo" maxlength="80" autocomplete="off" value="${esc(x ? x.policyNo : '')}"></div></div>
       <div class="row2"><div class="field"><label>Policy Name</label><input class="input" name="policyName" maxlength="200" autocomplete="off" placeholder="e.g. Jeevan Anand" value="${esc(x ? x.policyName : '')}"></div>
-        <div class="field"><label>Total Policy Amount</label><input class="input" name="totalAmount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Total sum of the policy" value="${x && x.totalAmount ? x.totalAmount : ''}"></div></div>
+        <div class="field"><label>Sum Assured</label><input class="input" name="totalAmount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Sum assured of the policy" value="${x && x.totalAmount ? x.totalAmount : ''}"></div></div>
       <div class="row2"><div class="field"><label>Nominee</label><input class="input" name="nominee" maxlength="200" autocomplete="off" value="${esc(x ? x.nominee : '')}"></div>
         <div class="field"><label>Customer Mobile No.</label><input class="input" name="phone" type="tel" inputmode="tel" maxlength="30" autocomplete="off" value="${esc(x ? x.phone : '')}"></div></div>
       <div class="row2"><div class="field"><label>Premium Amount</label><input class="input" name="amount" type="number" min="0" step="0.01" inputmode="decimal" value="${x && x.amount ? x.amount : ''}"></div>
@@ -4139,7 +4139,7 @@ function licStatusPlain(endDate){ return licCountdown(endDate).status || '—'; 
 function xlLic(wb, d){
   const fx = S.d.licFields || [], cols = 14 + fx.length;
   const ws = xSheet(wb, 'LIC Policies', cols, [5, 24, 18, 22, 14, 16, 22, 16, 12, 12, 12, 14, 12, 16, ...fx.map(() => 20)], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
-  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Policy Name', 'Premium Amount', 'Total Policy Amount', 'Nominee', 'Customer Mobile', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status', 'Pay per Year', ...fx]);
+  xHead(ws, 4, ['#', 'Customer Name', 'Policy Number', 'Policy Name', 'Premium Amount', 'Sum Assured', 'Nominee', 'Customer Mobile', 'Premium Mode', 'Starting Date', 'Ending Date', 'Next Renewal', 'Status', 'Pay per Year', ...fx]);
   d.lic.forEach((x, i) => { const row = ws.getRow(5 + i), z = i % 2 ? X.zebra : null, rn = licRenewInfo(x);
     xCell(row.getCell(1), i + 1, { h:'center', fill:z });
     xCell(row.getCell(2), x.name, { h:'left', fill:z });
@@ -4163,7 +4163,7 @@ function xlLic(wb, d){
 function pdfLic(P, d, first){
   const fx = S.d.licFields || [];
   const y = pdfStart(P, 'LIC Policies', `${d.lic.length} policies   |   Generated ${STAMP()}`, 'l', first);
-  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Policy Name', 'Premium', 'Total Policy Amt', 'Nominee', 'Mobile', 'Mode', 'Per Year', 'Start', 'End', 'Next Renewal', 'Status', ...(fx.length ? ['More details'] : [])]],
+  pdfTable(P, { startY:y, head:[['#', 'Customer Name', 'Policy No.', 'Policy Name', 'Premium', 'Sum Assured', 'Nominee', 'Mobile', 'Mode', 'Per Year', 'Start', 'End', 'Next Renewal', 'Status', ...(fx.length ? ['More details'] : [])]],
     body:d.lic.map((x, i) => { const rn = licRenewInfo(x); return [i + 1, x.name, x.policyNo, x.policyName || '—', x.amount ? PM(x.amount) : '—', x.totalAmount ? PM(x.totalAmount) : '—', x.nominee || '—', x.phone || '—', LIC_FREQ[x.freq] || 'One-time', licYearly(x) ? PM(licYearly(x)) : '—', x.startDate || '—', x.endDate || '—', rn.due || '—', licStatusPlain(x.endDate), ...(fx.length ? [fx.filter(n => (x.extra || {})[n]).map(n => n + ': ' + x.extra[n]).join('; ') || '—'] : [])].map(PT); }),
     styles:{ fontSize:6.5, cellPadding:1.4 }, columnStyles:{ 0:{ halign:'center', cellWidth:7 }, 4:{ halign:'right' }, 5:{ halign:'right' }, 9:{ halign:'right' }, 13:{ halign:'center' } } });
 }
