@@ -15,9 +15,9 @@
   css.textContent = [
     '#waRoot{--wa-g:#25d366;--wa-d:#128c7e;--wa-bg:#efeae2;--wa-out:#d9fdd3}',
     'html[data-mode=dark] #waRoot{--wa-bg:#0b141a;--wa-out:#005c4b}',
-    '#waRoot .wa-app{display:grid;grid-template-columns:minmax(300px,380px) 1fr;height:calc(100dvh - 135px - var(--bb-gap,0px));min-height:420px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card,#fff)}',
-    '#waRoot .wa-side{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line)}',
-    '#waRoot .wa-main{display:flex;flex-direction:column;min-width:0;background:var(--wa-bg)}',
+    '#waRoot .wa-app{display:grid;grid-template-columns:minmax(300px,380px) 1fr;grid-template-rows:minmax(0,1fr);height:calc(100dvh - 135px - var(--bb-gap,0px));min-height:420px;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card,#fff)}',
+    '#waRoot .wa-side{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;border-right:1px solid var(--line)}',
+    '#waRoot .wa-main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;background:var(--wa-bg)}',
     '#waRoot .wa-top{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}',
     '#waRoot .wa-top .wa-me{flex:1;min-width:0;line-height:1.25}',
     '#waRoot .wa-top .wa-me b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -28,7 +28,7 @@
     '#waRoot .wa-srch input{width:100%;border-radius:10px}',
     '#waRoot .wa-new{padding:10px 12px;border-bottom:1px solid var(--line);background:rgba(37,211,102,.08)}',
     '#waRoot .wa-new .row{display:flex;gap:6px;margin-top:6px}',
-    '#waRoot .wa-list{flex:1;overflow-y:auto}',
+    '#waRoot .wa-list{flex:1 1 0;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y}',
     '#waRoot .wa-row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}',
     '#waRoot .wa-row:hover{background:rgba(127,127,127,.09)}',
     '#waRoot .wa-row.on{background:rgba(37,211,102,.14)}',
@@ -43,7 +43,7 @@
     '#waRoot .wa-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;padding:20px;opacity:.75}',
     '#waRoot .wa-head{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--card,#fff);border-bottom:1px solid var(--line)}',
     '#waRoot .wa-back{display:none}',
-    '#waRoot .wa-msgs{flex:1;overflow-y:auto;padding:12px 8%;display:flex;flex-direction:column;gap:3px}',
+    '#waRoot .wa-msgs{flex:1 1 0;min-height:0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;overflow-y:auto;padding:12px 8%;display:flex;flex-direction:column;gap:3px}',
     '#waRoot .wa-b{position:relative;max-width:75%;padding:6px 9px 4px;border-radius:9px;word-break:break-word;white-space:pre-wrap;line-height:1.38;background:var(--card,#fff);color:inherit;box-shadow:0 1px 1px rgba(0,0,0,.13)}',
     'html[data-mode=dark] #waRoot .wa-b{background:#202c33;color:#e9edef}',
     '#waRoot .wa-b.out{align-self:flex-end;background:var(--wa-out);color:#111}',
@@ -67,7 +67,7 @@
     '#waRoot .wa-chips{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}',
     '#waRoot .wa-chips button{border:0;border-radius:16px;padding:5px 13px;background:rgba(127,127,127,.15);color:inherit;font-size:13px;cursor:pointer}',
     '#waRoot .wa-chips button.on{background:rgba(37,211,102,.25);color:var(--wa-d);font-weight:700}',
-    '#waRoot .wa-clist{max-height:min(46vh,340px);overflow-y:auto;margin-top:8px;border-radius:10px;background:var(--card,#fff)}',
+    '#waRoot .wa-clist{max-height:min(46vh,340px);overflow-y:auto;overscroll-behavior:contain;margin-top:8px;border-radius:10px;background:var(--card,#fff)}',
     '#waRoot .wa-clist .wa-row{padding:7px 10px}',
     '#waRoot .wa-clist .wa-sec{padding:5px 12px;font-size:12px;font-weight:700;color:var(--wa-d);opacity:.9}',
     '#waRoot .wa-side{position:relative}',
@@ -75,7 +75,7 @@
     '#waRoot .wa-new .wa-pkh{display:flex;align-items:center;gap:8px;padding:10px 12px;background:var(--wa-d);color:#fff}',
     '#waRoot .wa-new .wa-pkh .wa-ic{color:#fff}',
     '#waRoot .wa-new .wa-pkh small{opacity:.85}',
-    '#waRoot .wa-new .wa-clist{flex:1;max-height:none;margin:0;border-radius:0}',
+    '#waRoot .wa-new .wa-clist{flex:1 1 0;min-height:0;max-height:none;margin:0;border-radius:0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y}',
     '#waRoot .wa-fab{position:absolute;right:16px;bottom:16px;width:54px;height:54px;border-radius:16px;border:0;background:var(--wa-g);color:#fff;font-size:24px;box-shadow:0 4px 14px rgba(0,0,0,.3);cursor:pointer;z-index:4}',
     '#waRoot .wa-more{align-self:center;margin:4px 0 8px}',
     '#waRoot .wa-title{font-size:23px;font-weight:800;color:var(--wa-g)}',
@@ -102,6 +102,14 @@
     '#waRoot .wa-qrwrap{display:flex;flex-direction:column;align-items:center;gap:10px}',
     '#waRoot .wa-qrwrap img,#waRoot .wa-qrph{width:290px;max-width:78vw;aspect-ratio:1;background:#fff;padding:10px;border-radius:12px;border:1px solid var(--line)}',
     '#waRoot .wa-qrph{display:flex;align-items:center;justify-content:center;opacity:.8;text-align:center;padding:20px;color:#444}',
+    '@media(max-width:860px){',
+    '#waRoot{position:fixed;left:0;right:0;top:0;bottom:calc(var(--bb-gap,0px) - 4px);z-index:100;background:var(--bg,#fff);padding-top:env(safe-area-inset-top,0px)}',
+    'body.wa-conv #waRoot{bottom:0;top:var(--vvt,0px);height:var(--vvh,100dvh);padding-top:0}',
+    'body.wa-conv #btmBar{display:none!important}',
+    '#waRoot .wa-app{height:100%!important;min-height:0;border:0;border-radius:0}',
+    '#waRoot .wa-login{margin:12px;overflow-y:auto;max-height:calc(100% - 24px)}',
+    '#waRoot .wa-comp{padding-bottom:calc(8px + env(safe-area-inset-bottom,0px))}',
+    '}',
     '@media(max-width:820px){',
     '#waRoot .wa-app{grid-template-columns:1fr;height:calc(100dvh - 120px - var(--bb-gap,0px))}',
     '#waRoot .wa-app .wa-main{display:none}',
@@ -141,7 +149,7 @@
   /* ---------- entry points used by app.js ---------- */
   window.vWhatsapp = function(){ return '<div id="waRoot"><div class="card"><div class="empty-state">Loading…</div></div></div>'; };
   window.waAfter = function(){ G.sigL = G.sigM = ''; draw(); };
-  window.waReset = function(){ clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} } }; };
+  window.waReset = function(){ document.body.classList.remove('wa-conv'); clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} } }; };
   window.waInit = async function(){
     try { G.st = await quiet('waStatus'); G.err = ''; }
     catch(e){ if (e.code === 'AUTH'){ return handleErr(e); } G.err = e.message || 'Could not reach the server'; G.st = G.st || { configured:true, connected:false, status:'idle' }; }
@@ -217,8 +225,11 @@
     el.innerHTML = rows || '<div class="wa-empty">' + emp + '</div>';
     el.scrollTop = top;
   }
+  function fx(){ var on = !!(G.open && S.view === 'whatsapp' && window.innerWidth <= 860 && root()); document.body.classList.toggle('wa-conv', on); }
+  setInterval(function(){ if (document.body.classList.contains('wa-conv') && (!root() || S.view !== 'whatsapp' || !G.open)) document.body.classList.remove('wa-conv'); }, 400);
+  window.addEventListener('resize', fx);
   function paintMain(force){
-    var m = $('#waMain'); if (!m) return;
+    fx(); var m = $('#waMain'); if (!m) return;
     if (!G.open){ if (m.dataset.k !== 'empty' || force){ m.dataset.k = 'empty'; m.innerHTML = '<div class="wa-empty"><div style="font-size:56px">🟢</div><h3 style="margin:0">WhatsApp</h3><div>Pick a chat on the left, or tap 💬 to message any number.</div></div>'; } return; }
     var c = G.open;
     if (m.dataset.k !== 'c:' + c.id || force){
@@ -299,13 +310,13 @@
   };
   function contactMatches(q){ q = String(q || '').toLowerCase().trim(); var d = q.replace(/\D/g, '');
     return (G.contacts || []).filter(function(c){ return !q || (c.name || '').toLowerCase().indexOf(q) > -1 || (d && (c.number || '').replace(/\D/g, '').indexOf(d) > -1); }); }
-  function loadContacts(){ return quiet('waContacts').then(function(r){ G.contacts = r.items || []; paintContacts(); }).catch(function(){ if (!G.contacts) G.contacts = []; paintContacts(); }); }
+  function loadContacts(){ return quiet('waContacts').then(function(r){ G.contacts = r.items || []; paintContacts(); if (G.contacts.length < 8 && !G.autoSync){ G.autoSync = 1; waSyncC(); } }).catch(function(){ if (!G.contacts) G.contacts = []; paintContacts(); }); }
   function act(k, ic, t){ return '<div class="wa-act" onclick="waAct(\'' + k + '\')"><span class="wa-av sm">' + ic + '</span><b>' + t + '</b></div>'; }
   function paintContacts(){
     var el = $('#waClist'); if (!el) return;
     var g = !!(G.grp && G.grp.on), pt = $('#waPkT'); if (pt) pt.textContent = g ? 'New group' : 'New chat';
     if (!G.contacts){ el.innerHTML = '<div class="wa-empty" style="padding:14px">Loading contacts…</div>'; return; }
-    var top = el.scrollTop, q = G.cq, d = q.replace(/\D/g, ''), all = contactMatches(q), list = all.slice(0, 1500), h = '', last = '', cc = $('#waCcount'), n = Object.keys(G.grp.sel).length;
+    var top = el.scrollTop, q = G.cq, d = q.replace(/\D/g, ''), all = contactMatches(q), list = all.slice(0, 3000), h = '', last = '', cc = $('#waCcount'), n = Object.keys(G.grp.sel).length;
     if (cc) cc.textContent = g ? (n + ' selected') : (G.contacts.length ? G.contacts.length + ' contacts' : '');
     if (!g && !q){
       h += act('grp', '👥', 'New group') + act('num', '👤', 'New contact (type a number above)');

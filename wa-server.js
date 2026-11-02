@@ -38,7 +38,7 @@ module.exports = function makeWhatsApp(o) {
 
   /* per user: sock, status (idle|starting|qr|open), qr, name, number, chats Map, msgs Map, raw Map (media only, in memory) */
   const users = new Map();
-  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
+  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), lid: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
   const hasSaved = uid => { try { const c = JSON.parse(fs.readFileSync(path.join(udir(uid), 'creds.json'), 'utf8')); return !!(c && c.me); } catch (e) { return false; } };   // only a really linked login counts (half-finished QR logins are ignored)
   const wipe = uid => { try { fs.rmSync(udir(uid), { recursive: true, force: true }); } catch (e) {} };
 
@@ -49,6 +49,7 @@ module.exports = function makeWhatsApp(o) {
       const j = JSON.parse(fs.readFileSync(path.join(udir(uid), 'store.json'), 'utf8'));
       (j.chats || []).forEach(c => s.chats.set(c.id, c));
       (j.contacts || []).forEach(c => s.contacts.set(c.id, c));
+      Object.keys(j.lids || {}).forEach(k => s.lid.set(k, j.lids[k]));
       Object.keys(j.msgs || {}).forEach(k => s.msgs.set(k, j.msgs[k]));
     } catch (e) {}
   }
@@ -59,7 +60,7 @@ module.exports = function makeWhatsApp(o) {
       try {
         const msgs = {}; s.msgs.forEach((v, k) => { msgs[k] = v.slice(-80).map(m => { const x = Object.assign({}, m); delete x.thumb; return x; }); });
         fs.mkdirSync(udir(uid), { recursive: true });
-        fs.writeFileSync(path.join(udir(uid), 'store.json'), JSON.stringify({ chats: [...s.chats.values()], contacts: [...s.contacts.values()], msgs }));
+        fs.writeFileSync(path.join(udir(uid), 'store.json'), JSON.stringify({ chats: [...s.chats.values()], contacts: [...s.contacts.values()], lids: Object.fromEntries(s.lid), msgs }));
       } catch (e) {}
     }, 4000);
   }
@@ -105,17 +106,35 @@ module.exports = function makeWhatsApp(o) {
       if (s.chats.size > MAX_CHATS) { const old = [...s.chats.values()].sort((a, b) => a.at - b.at)[0]; if (old && old.id !== jid) { s.chats.delete(old.id); s.msgs.delete(old.id); } } }
     return c;
   }
-  function addContact(s, c) {                           // the phone's address book (for the Select contact screen); new WhatsApp ids (@lid) are kept too
+  /* WhatsApp now hides phone numbers behind "@lid" ids. Chats are keyed by the @lid, the address book by the phone number.
+     We learn which lid belongs to which number (from contacts, history, messages) so names and numbers show correctly. */
+  const isPn = j => /@s\.whatsapp\.net$/.test(j || '');
+  const isLid = j => /@lid$/.test(j || '');
+  const bareJid = j => String(j || '').replace(/:\d+@/, '@');
+  function learn(s, a, b) {
+    a = bareJid(a); b = bareJid(b);
+    if (isLid(a) && isPn(b)) s.lid.set(a, b); else if (isPn(a) && isLid(b)) s.lid.set(b, a);
+  }
+  const pnOf = (s, jid) => isPn(jid) ? bareJid(jid) : (isLid(jid) ? (s.lid.get(bareJid(jid)) || '') : '');
+  function addContact(s, c) {                           // the phone's address book (for the Select contact screen)
     if (!c || !c.id) return;
-    const pn = /@s\.whatsapp\.net$/.test(c.phoneNumber || '') ? c.phoneNumber : (/@s\.whatsapp\.net$/.test(c.id) ? c.id : '');
-    const id = pn || (/@lid$/.test(c.id) ? c.id : ''); if (!id) return;
+    learn(s, c.id, c.phoneNumber); learn(s, c.id, c.jid); learn(s, c.id, c.lid); learn(s, c.lid, c.phoneNumber);
+    const id = bareJid(pnOf(s, c.id) || c.id); if (!isPn(id) && !isLid(id)) return;
     const o = s.contacts.get(id) || { id, name: '', pn: '' };
     if (c.name || c.verifiedName) o.name = c.name || c.verifiedName; if (c.notify) o.pn = c.notify;
     s.contacts.set(id, o);
   }
+  async function resolveLids(s) {                       // ask WhatsApp's own lid table for numbers we have not learned yet
+    try {
+      const lm = s.sock && s.sock.signalRepository && s.sock.signalRepository.lidMapping; if (!lm || !lm.getPNForLID) return;
+      const todo = new Set(); s.chats.forEach(c => { if (isLid(c.id) && !s.lid.has(bareJid(c.id))) todo.add(c.id); }); s.contacts.forEach(c => { if (isLid(c.id) && !s.lid.has(bareJid(c.id))) todo.add(c.id); });
+      await Promise.all([...todo].slice(0, 150).map(async l => { try { const p = await Promise.race([lm.getPNForLID(l), new Promise(r => setTimeout(() => r(null), 3000))]); if (p) learn(s, l, /@/.test(p) ? p : p + '@s.whatsapp.net'); } catch (e) {} }));
+    } catch (e) {}
+  }
   const setName = (c, n) => { if (n && String(n).trim()) c.name = String(n).trim(); };
   function addMsg(uid, s, jid, wm, live) {
     if (!isChat(jid) || jid === 'status@broadcast' || !wm || !wm.message) return null;
+    if (wm.key) { learn(s, jid, wm.key.remoteJidAlt); learn(s, jid, wm.key.senderPn); learn(s, wm.key.participant, wm.key.participantAlt); learn(s, wm.key.participant, wm.key.participantPn); }
     const k = kindText(wm.message); if (!k) return null;
     const out = !!(wm.key && wm.key.fromMe), id = (wm.key && wm.key.id) || crypto.randomBytes(6).toString('hex');
     const list = s.msgs.get(jid) || []; if (list.some(m => m.id === id)) return null;
@@ -170,6 +189,7 @@ module.exports = function makeWhatsApp(o) {
         setTimeout(() => { if (s.gen === gen && s.status === 'open' && s.contacts.size < 8) syncContacts(s); }, 20000);   // few contacts so far -> ask the phone for them
         s.status = 'open'; s.qr = ''; s.tries = 0;
         const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
+        setTimeout(() => { if (s.gen === gen && s.status === 'open') { resolveLids(s).then(() => saveSoon(uid, s)); } }, 6000);
         try { const g = await sock.groupFetchAllParticipating(); Object.keys(g || {}).forEach(id => { const c = chatOf(s, id); setName(c, g[id].subject); }); saveSoon(uid, s); } catch (e) {}
       }
       if (connection === 'close') {
@@ -186,11 +206,13 @@ module.exports = function makeWhatsApp(o) {
     });
     sock.ev.on('messaging-history.set', h => {
       s.hist.chats += (h.chats || []).length; s.hist.msgs += (h.messages || []).length;
-      (h.chats || []).forEach(c => { if (isChat(c.id)) { const x = chatOf(s, c.id); setName(x, c.name); if (c.unreadCount > 0) x.unread = c.unreadCount; if (c.conversationTimestamp && !x.at) x.at = tsOf(c.conversationTimestamp); } });
+      (h.lidPnMappings || []).forEach(m => learn(s, m.lid, m.pn));
+      (h.chats || []).forEach(c => { learn(s, c.id, c.pnJid); learn(s, c.id, c.lidJid); if (isChat(c.id)) { const x = chatOf(s, c.id); setName(x, c.name); if (c.unreadCount > 0) x.unread = c.unreadCount; if (c.conversationTimestamp && !x.at) x.at = tsOf(c.conversationTimestamp); } });
       (h.contacts || []).forEach(c => { addContact(s, c); if (isChat(c.id) && (c.name || c.notify)) { const x = chatOf(s, c.id); if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } });
       (h.messages || []).forEach(wm => addMsg(uid, s, wm.key && wm.key.remoteJid, wm, false));
       saveSoon(uid, s);
     });
+    try { sock.ev.on('lid-mapping.update', u => { if (u && u.lid && u.pn) { learn(s, u.lid, u.pn); saveSoon(uid, s); } }); } catch (e) {}
     sock.ev.on('chats.upsert', cs => { cs.forEach(c => { if (isChat(c.id)) setName(chatOf(s, c.id), c.name); }); saveSoon(uid, s); });
     sock.ev.on('chats.update', cs => cs.forEach(c => { const x = c.id && s.chats.get(c.id); if (x && c.unreadCount !== undefined && c.unreadCount !== null) x.unread = Math.max(0, c.unreadCount); }));
     sock.ev.on('contacts.upsert', cs => { cs.forEach(c => { addContact(s, c); if (isChat(c.id) && (c.name || c.notify)) { const x = chatOf(s, c.id); if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } }); saveSoon(uid, s); });
@@ -242,7 +264,10 @@ module.exports = function makeWhatsApp(o) {
 
   /* ---------- shaping for the browser ---------- */
   const link = (uid, jid, id, kind) => { const p = [uid, jid, id, kind, Date.now() + 6 * 3600e3].join('|'); return '/wa/media?s=' + Buffer.from(p).toString('base64url') + '.' + sign('wam:' + p); };
-  const chatView = (uid, c) => { const ct = st(uid).contacts.get(c.id); return ({ id: c.id, name: c.name || (ct && (ct.name || ct.pn)) || c.pn || (c.group ? 'Group' : numOf(c.id) || 'WhatsApp contact'), number: c.group ? '' : numOf(c.id), group: !!c.group, unread: c.unread || 0, at: c.at, last: c.last, out: !!c.out, av: link(uid, c.id, 0, 'a') }); };
+  const chatView = (uid, c) => {
+    const s = st(uid), pn = pnOf(s, c.id), ct = (pn && s.contacts.get(pn)) || s.contacts.get(c.id), num = c.group ? '' : (pn ? '+' + pn.split('@')[0] : numOf(c.id));
+    return ({ id: c.id, name: c.name || (ct && (ct.name || ct.pn)) || c.pn || (c.group ? 'Group' : num || 'WhatsApp contact'), number: num, group: !!c.group, unread: c.unread || 0, at: c.at, last: c.last, out: !!c.out, av: link(uid, c.id, 0, 'a') });
+  };
   const msgView = (uid, jid, m) => { const x = Object.assign({}, m); delete x.key; if (m.media) x.url = link(uid, jid, m.id, 'm'); return x; };
 
   /* ---------- JSON actions ---------- */
@@ -264,14 +289,21 @@ module.exports = function makeWhatsApp(o) {
     if (a === 'waLogout') { await stop(uid, true); return { ok: true }; }
     const r = await connected(uid);
     if (a === 'waChats') {
-      const items = [...r.chats.values()].filter(c => c.at || c.last || c.name || c.pn).sort((x, y) => y.at - x.at).slice(0, 250).map(c => chatView(uid, c));
+      await resolveLids(r);
+      const by = new Map();                                // one row per person, even if WhatsApp kept both an @lid chat and a number chat
+      [...r.chats.values()].filter(c => c.at || c.last || c.name || c.pn).forEach(c => {
+        const key = c.group ? c.id : (pnOf(r, c.id) || c.id), o = by.get(key);
+        if (!o) by.set(key, Object.assign({}, c)); else { const n = c.at > o.at ? Object.assign({}, c) : o; const w = c.at > o.at ? o : c; n.name = n.name || w.name; n.pn = n.pn || w.pn; n.unread = (n.unread || 0) + (w.unread || 0); by.set(key, n); }
+      });
+      const items = [...by.values()].sort((x, y) => y.at - x.at).slice(0, 400).map(c => chatView(uid, c));
       return { ok: true, hist: r.hist, items, me: { name: r.name, number: r.number, av: link(uid, 'me', 0, 'a') } };
     }
     if (a === 'waContacts') {
-      const m = new Map(); r.contacts.forEach(c => m.set(c.id, { id: c.id, name: c.name || c.pn || '', number: numOf(c.id) }));
-      r.chats.forEach(c => { if (!c.group && !m.has(c.id)) m.set(c.id, { id: c.id, name: c.name || c.pn || '', number: numOf(c.id) }); });   // people you chatted with are contacts too
-      const named = new Set([...m.values()].filter(c => c.number && c.name).map(c => c.name.toLowerCase()));
-      const items = [...m.values()].filter(c => (c.name || c.number) && !(!c.number && named.has((c.name || '').toLowerCase()))).sort((x, y) => (x.name || '~' + x.number).toLowerCase() < (y.name || '~' + y.number).toLowerCase() ? -1 : 1).slice(0, 3000).map(c => Object.assign(c, { av: link(uid, c.id, 0, 'a') }));
+      await resolveLids(r);
+      const m = new Map(), add = (id, name) => { const pn = pnOf(r, id), key = pn || id, o = m.get(key) || { id: pn || id, name: '', number: pn ? '+' + pn.split('@')[0] : numOf(id) }; if (name && !o.name) o.name = name; m.set(key, o); };
+      r.contacts.forEach(c => add(c.id, c.name || c.pn || ''));
+      r.chats.forEach(c => { if (!c.group) add(c.id, c.name || c.pn || ''); });   // people you chatted with are contacts too
+      const items = [...m.values()].filter(c => (c.name || c.number)).sort((x, y) => (x.name || '~' + x.number).toLowerCase() < (y.name || '~' + y.number).toLowerCase() ? -1 : 1).slice(0, 5000).map(c => Object.assign(c, { av: link(uid, c.id, 0, 'a') }));
       return { ok: true, items };
     }
     if (a === 'waSyncContacts') { await syncContacts(r); try { const g = await r.sock.groupFetchAllParticipating(); Object.keys(g || {}).forEach(id => setName(chatOf(r, id), g[id].subject)); } catch (e) {} return { ok: true }; }
@@ -289,9 +321,14 @@ module.exports = function makeWhatsApp(o) {
       return { ok: true };
     }
     if (a === 'waHistory') {
-      const jid = toJid(req.chat), c = r.chats.get(jid), list = r.msgs.get(jid) || [];
-      if (c && c.unread) { c.unread = 0; const last = [...list].reverse().find(m => !m.out && m.key); try { if (last) r.sock.readMessages([last.key]).catch(() => {}); } catch (e) {} }
-      return { ok: true, chat: chatView(uid, c || chatOf(r, jid)), items: list.slice(-200).map(m => msgView(uid, jid, m)) };
+      const jid = toJid(req.chat), c = r.chats.get(jid), pn = pnOf(r, jid);
+      const jids = [jid]; if (pn) { if (pn !== jid) jids.push(pn); r.lid.forEach((v, k) => { if (v === pn && k !== jid) jids.push(k); }); }
+      const seen = new Set(), all = [];
+      jids.forEach(j => (r.msgs.get(j) || []).forEach(m => { if (!seen.has(m.id)) { seen.add(m.id); all.push(msgView(uid, j, m)); } }));
+      all.sort((x, y) => x.at - y.at);
+      const list = r.msgs.get(jid) || [];
+      jids.forEach(j => { const cc = r.chats.get(j); if (cc && cc.unread) { cc.unread = 0; const l = r.msgs.get(j) || []; const last = [...l].reverse().find(m => !m.out && m.key); try { if (last) r.sock.readMessages([last.key]).catch(() => {}); } catch (e) {} } });
+      return { ok: true, chat: chatView(uid, c || chatOf(r, jid)), items: all.slice(-200) };
     }
     if (a === 'waSend') {
       const text = String(req.text || '').slice(0, 4000); if (!text.trim()) fail('Write a message first.');
