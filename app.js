@@ -94,7 +94,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   liveReset(); clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; S.setSec = null; closeModals(); chatReset(); vcReset(); ludoReset(); mailReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; S.setSec = null; closeModals(); chatReset(); vcReset(); ludoReset(); mailReset(); try { if (window.tgReset) tgReset(); } catch(e) {}
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -1769,6 +1769,7 @@ function go(v){
   if (v === 'updates') updLoad();
   if (v === 'version') verLoad();
   if (v === 'mail') mailInit();
+  if (v === 'telegram' && window.tgInit) tgInit();
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
@@ -1811,14 +1812,14 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, settings:vSettings, profile:vProfile})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
   applyRO(v);
   startPay(); startLic();
   const setAfter = () => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); };
-  const after = ({settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion})[S.view]; if (after) after();
+  const after = ({settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion, telegram:() => { if (window.tgAfter) tgAfter(); }})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 

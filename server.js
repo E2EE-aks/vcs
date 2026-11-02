@@ -220,6 +220,9 @@ function makeApp(store, env) {
     }
   }
 
+  // ---------- Telegram (per-user account; see tg-server.js) ----------
+  const TG = require('./tg-server')({ env, enc, dec, sign, warn, withWb: fn => withWb(fn) });
+
   // ---------- Fingerprint / Face / screen-lock unlock (WebAuthn passkeys) ----------
   // The phone's own biometric check happens on the device; the server only stores a PUBLIC key per device
   // and verifies a signature over a one-time challenge. No fingerprint or face data ever leaves the phone.
@@ -1076,14 +1079,20 @@ function makeApp(store, env) {
     if (!r || !MAIL_ACTIONS.has(r.action)) return null;
     return Promise.resolve().then(() => mailRoute(r)).catch(errOut);
   };
+  const fastTg = body => {                             // Telegram calls go to Telegram, so they never wait behind (or hold up) sheet saves
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !TG.actions.has(r.action)) return null;
+    return Promise.resolve().then(() => TG.route(r)).catch(errOut);
+  };
   const handle = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTr(body));
+    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastTr(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);
   };
   return { handle,
+           tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
@@ -1142,6 +1151,17 @@ function start(app, env) {
       const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
       rq.on('data', c => { n += c.length; if (n > app.mediaMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
       rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.mediaMax / 1048576) + ' MB).', code: 'MEDIA' } : await app.mediaUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
+      return;
+    }
+    if (rq.method === 'GET' && url.pathname === '/tg/media' && app.tgOpen) {                // Telegram photo / video / file (signed link, Range for video seeking)
+      return app.tgOpen(Object.fromEntries(url.searchParams), rq.headers.range).then(o => {
+        rs.writeHead(o.code, Object.assign({ 'Cross-Origin-Resource-Policy': 'cross-origin' }, o.headers)); rs.end(o.body);
+      }).catch(() => { rs.writeHead(500); rs.end('Error'); });
+    }
+    if (rq.method === 'POST' && url.pathname === '/tg/upload' && app.tgUp) {                // send a photo / video / file to Telegram (raw body, session token in the Authorization header)
+      const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
+      rq.on('data', c => { n += c.length; if (n > app.tgMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
+      rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.tgMax / 1048576) + ' MB).', code: 'TG' } : await app.tgUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
       return;
     }
     if (rq.method === 'GET' && rq.url.startsWith('/oauth/google/callback') && app.oauth) {
