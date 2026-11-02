@@ -1,6 +1,6 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v16';
+const CACHE = 'ks-shell-v17';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png'];
 
 self.addEventListener('install', e => {

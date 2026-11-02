@@ -1269,6 +1269,7 @@ const TITLES = {
   logins:['Login activity','Who signed in, when, from where and from which device'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
+  config:['Configuration','Add your devices and keep notes for each one'],
   version:['Version','Pick files from GitHub and build an Android app (.apk) to install on your phone'],
   profile:['Profile','Photo, security, sign-in, appearance and preferences'],
   settings:['Settings','Users, groups, data and system options']
@@ -1399,7 +1400,7 @@ thApply();
 /* ---------- sidebar: neat section labels (Overview / Workspace / Tools / System) ---------- */
 const NAV_GRP = { dashboard:'Overview', attendance:'Overview', expenses:'Overview', work:'Overview', timetable:'Overview',
   chat:'Workspace', vcs:'Workspace', rack:'Workspace', passwords:'Workspace', links:'Workspace', lic:'Workspace',
-  logins:'Tools', deploy:'Tools', updates:'Tools', version:'Tools', settings:'System' };
+  logins:'Tools', deploy:'Tools', updates:'Tools', version:'Tools', config:'Tools', settings:'System' };
 function navGroups(){
   const nav = document.getElementById('nav'); if (!nav) return;
   let prev = '';
@@ -1808,7 +1809,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, settings:vSettings, profile:vProfile})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
@@ -4213,6 +4214,122 @@ async function doExport(kind, fmt){
   else if (tn.length === 1) tn[0].nodeValue = '🔑 Passwords';
   else b.textContent = '🔑 Passwords';
   (nav.querySelector('[data-v="timetable"]') || src).after(b);
+})();
+
+/* =====================================================================
+   VIEW: CONFIGURATION  (All Options > Configuration)
+   Add devices (iPhone, Samsung, Laptop ...). Open a device to keep notes for it.
+   Every device has Edit / Remove; every note has Edit / Delete.
+   Saved on THIS phone / browser (localStorage), separate for every signed-in user.
+   ===================================================================== */
+const CFGV = { open: null };
+const cfgKey = () => 'ks_cfg_dev_v1_' + ((S.me && S.me.id) || 'x');
+function cfgLoad(){
+  let o = null; try { o = JSON.parse(localStorage.getItem(cfgKey()) || 'null'); } catch(e){}
+  return (o && Array.isArray(o.devices)) ? o : { devices: [] };
+}
+function cfgSave(o){ try { localStorage.setItem(cfgKey(), JSON.stringify(o)); return true; } catch(e){ toast('Could not save on this phone (storage full or blocked)', true); return false; } }
+const cfgId = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3);
+const cfgIcon = n => { n = (n || '').toLowerCase(); return /iphone|ipad|ios|apple|mac/.test(n) ? '📱' : /laptop|pc|windows|computer|desktop/.test(n) ? '💻' : /watch/.test(n) ? '⌚' : /tab/.test(n) ? '📲' : '📱'; };
+const cfgWhen = t => { try { return new Date(t).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); } catch(e){ return ''; } };
+
+function vConfig(){
+  const o = cfgLoad(), dev = CFGV.open ? o.devices.find(d => d.id === CFGV.open) : null;
+  if (CFGV.open && !dev) CFGV.open = null;
+  if (!dev){
+    const rows = o.devices.map(d => `<div class="card" style="margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <div style="font-size:28px">${cfgIcon(d.name)}</div>
+          <div style="flex:1;min-width:140px"><b style="font-size:calc(16px*var(--fs))">${esc(d.name)}</b>
+            <div class="muted" style="font-size:calc(12.5px*var(--fs))">${(d.notes || []).length} note${(d.notes || []).length === 1 ? '' : 's'}</div></div>
+          <div class="nowrap"><button class="btn soft sm" onclick="cfgOpen('${esc(d.id)}')">📝 Open</button>
+            <button class="btn ghost sm" onclick="cfgDevForm('${esc(d.id)}')">Edit</button>
+            <button class="btn ghost sm" onclick="cfgDevDel('${esc(d.id)}')">🗑 Remove</button></div></div></div>`).join('');
+    return `<div class="card" style="margin-bottom:16px"><div class="actions"><span style="flex:1"><b>My devices</b> <span class="muted">· ${o.devices.length}</span></span>
+        <button class="btn" onclick="cfgDevForm()">＋ Add device</button></div></div>
+      ${rows || '<div class="card"><div class="empty-state">No device added yet. Tap “Add device” (for example iPhone), then open it to write notes.</div></div>'}
+      <p class="muted" style="margin-top:6px;font-size:calc(13px*var(--fs))">Devices and notes are saved on this phone only.</p>`;
+  }
+  const notes = [...(dev.notes || [])].sort((a, b) => (b.at || 0) - (a.at || 0)).map(n => `<div class="card" style="margin-bottom:12px">
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
+        <div style="flex:1;min-width:160px">${n.title ? `<b>${esc(n.title)}</b>` : ''}
+          <div style="white-space:pre-wrap;word-break:break-word;margin-top:${n.title ? 4 : 0}px">${esc(n.text)}</div>
+          <div class="muted" style="font-size:calc(12px*var(--fs));margin-top:6px">${esc(cfgWhen(n.at))}</div></div>
+        <div class="nowrap"><button class="btn ghost sm" onclick="cfgNoteCopy('${esc(dev.id)}','${esc(n.id)}')" title="Copy">📋</button>
+          <button class="btn ghost sm" onclick="cfgNoteForm('${esc(dev.id)}','${esc(n.id)}')">Edit</button>
+          <button class="btn ghost sm" onclick="cfgNoteDel('${esc(dev.id)}','${esc(n.id)}')">🗑</button></div></div></div>`).join('');
+  return `<div class="card" style="margin-bottom:16px"><div class="actions">
+      <button class="btn ghost" onclick="cfgOpen(null)">← Devices</button>
+      <span style="flex:1"><b>${cfgIcon(dev.name)} ${esc(dev.name)}</b> <span class="muted">· ${(dev.notes || []).length} note${(dev.notes || []).length === 1 ? '' : 's'}</span></span>
+      <button class="btn ghost" onclick="cfgDevForm('${esc(dev.id)}')">Edit</button>
+      <button class="btn" onclick="cfgNoteForm('${esc(dev.id)}')">＋ Add note</button></div></div>
+    ${notes || '<div class="card"><div class="empty-state">No notes yet. Tap “Add note” to write the first one.</div></div>'}`;
+}
+function cfgOpen(id){ CFGV.open = id; render(); window.scrollTo(0, 0); }
+function cfgDevForm(id){
+  const o = cfgLoad(), x = id ? o.devices.find(d => d.id === id) : null;
+  const w = openModal(`<h3>${x ? 'Edit device' : 'Add device'}</h3><p class="sub">Name of the device, for example iPhone 15 or Samsung A54.</p>
+    <form id="cdf" autocomplete="off"><div class="field"><label>Device name</label><input class="input" name="name" maxlength="60" placeholder="e.g. iPhone" value="${esc(x ? x.name : '')}"></div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#cdf').onsubmit = ev => {
+    ev.preventDefault(); const name = String(new FormData(ev.target).get('name') || '').trim();
+    if (!name) return toast('Enter the device name', true);
+    const o2 = cfgLoad();
+    if (x){ const d = o2.devices.find(e => e.id === id); if (d) d.name = name; }
+    else o2.devices.push({ id: cfgId(), name, notes: [], at: Date.now() });
+    if (!cfgSave(o2)) return;
+    w.remove(); render(); toast('Saved');
+  };
+}
+async function cfgDevDel(id){
+  const o = cfgLoad(), d = o.devices.find(e => e.id === id); if (!d) return;
+  const n = (d.notes || []).length;
+  if (!await confirmBox('Remove this device?', `${d.name}${n ? ' and its ' + n + ' note' + (n === 1 ? '' : 's') : ''} will be deleted from this phone.`, 'Remove', true)) return;
+  o.devices = o.devices.filter(e => e.id !== id); if (!cfgSave(o)) return;
+  if (CFGV.open === id) CFGV.open = null;
+  render(); toast('Device removed');
+}
+function cfgNoteForm(did, nid){
+  const o = cfgLoad(), d = o.devices.find(e => e.id === did); if (!d) return;
+  const x = nid ? (d.notes || []).find(e => e.id === nid) : null;
+  const w = openModal(`<h3>${x ? 'Edit note' : 'Add note'}</h3><p class="sub">${esc(d.name)}</p>
+    <form id="cnf" autocomplete="off"><div class="field"><label>Title <span class="muted">(optional)</span></label><input class="input" name="title" maxlength="120" value="${esc(x ? x.title : '')}"></div>
+    <div class="field"><label>Note</label><textarea class="input" name="text" rows="7" maxlength="5000" placeholder="Write here…">${esc(x ? x.text : '')}</textarea></div>
+    <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#cnf').onsubmit = ev => {
+    ev.preventDefault(); const f = new FormData(ev.target), title = String(f.get('title') || '').trim(), text = String(f.get('text') || '').trim();
+    if (!text && !title) return toast('Write something first', true);
+    const o2 = cfgLoad(), d2 = o2.devices.find(e => e.id === did); if (!d2) return w.remove();
+    d2.notes = d2.notes || [];
+    if (x){ const n = d2.notes.find(e => e.id === nid); if (n){ n.title = title; n.text = text; n.at = Date.now(); } }
+    else d2.notes.push({ id: cfgId(), title, text, at: Date.now() });
+    if (!cfgSave(o2)) return;
+    w.remove(); render(); toast('Saved');
+  };
+}
+async function cfgNoteDel(did, nid){
+  const o = cfgLoad(), d = o.devices.find(e => e.id === did); if (!d) return;
+  if (!await confirmBox('Delete this note?', 'It will be removed from this phone.', 'Delete', true)) return;
+  d.notes = (d.notes || []).filter(e => e.id !== nid); if (!cfgSave(o)) return;
+  render(); toast('Deleted');
+}
+async function cfgNoteCopy(did, nid){
+  const o = cfgLoad(), d = o.devices.find(e => e.id === did), n = d && (d.notes || []).find(e => e.id === nid); if (!n) return;
+  const txt = [n.title, n.text].filter(Boolean).join('\n');
+  (await copyText(txt)) ? toast('Copied') : toast('Could not copy — please copy it manually', true);
+}
+/* the “Configuration” tab in the menu (shows in the side menu and in All Options), right above Settings */
+(function addConfigTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="updates"]');
+  if (!src || nav.querySelector('[data-v="config"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'config'; b.classList.remove('active', 'hidden');
+  const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT), tn = [];
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  tn.forEach(n => { n.nodeValue = n.nodeValue.replace('⬇️', '🧩').replace('Updates', 'Configuration'); });
+  src.after(b);
 })();
 
 /* ---------- add the "Links" tab to the menu (right after Passwords) ---------- */
