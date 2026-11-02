@@ -18,7 +18,7 @@ module.exports = function makeWhatsApp(o) {
   const { env, warn, sign } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -167,6 +167,7 @@ module.exports = function makeWhatsApp(o) {
       if (qr) { try { s.qr = await qrLib().toDataURL(qr, { margin: 1, width: 320 }); s.status = 'qr'; s.err = ''; clearTimeout(wd); } catch (e) { warn('WhatsApp QR error', e && e.message); s.err = 'Could not draw the QR code: ' + String((e && e.message) || e).slice(0, 100); } }
       if (connection === 'open') {
         clearTimeout(wd); s.err = '';
+        setTimeout(() => { if (s.gen === gen && s.status === 'open' && s.contacts.size < 8) syncContacts(s); }, 20000);   // few contacts so far -> ask the phone for them
         s.status = 'open'; s.qr = ''; s.tries = 0;
         const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
         try { const g = await sock.groupFetchAllParticipating(); Object.keys(g || {}).forEach(id => { const c = chatOf(s, id); setName(c, g[id].subject); }); saveSoon(uid, s); } catch (e) {}
@@ -229,6 +230,9 @@ module.exports = function makeWhatsApp(o) {
     if (!s.sock && hasSaved(uid)) { await open(uid); }
     return s;
   }
+  async function syncContacts(s) {                      // ask the phone to send the whole address book again (WhatsApp app-state sync)
+    try { if (s.sock && s.sock.resyncAppState) await s.sock.resyncAppState(['critical_block', 'critical_unblock_low', 'regular_high', 'regular_low', 'regular'], true); } catch (e) { warn('WhatsApp contact sync', e && e.message); }
+  }
   const waitOpen = (s, ms) => new Promise(r => { const t0 = Date.now(); (function t() { if (s.status === 'open' || Date.now() - t0 > ms) return r(); setTimeout(t, 250); })(); });
   async function connected(uid) {
     const r = await ready(uid);
@@ -267,8 +271,16 @@ module.exports = function makeWhatsApp(o) {
       const m = new Map(); r.contacts.forEach(c => m.set(c.id, { id: c.id, name: c.name || c.pn || '', number: numOf(c.id) }));
       r.chats.forEach(c => { if (!c.group && !m.has(c.id)) m.set(c.id, { id: c.id, name: c.name || c.pn || '', number: numOf(c.id) }); });   // people you chatted with are contacts too
       const named = new Set([...m.values()].filter(c => c.number && c.name).map(c => c.name.toLowerCase()));
-      const items = [...m.values()].filter(c => (c.name || c.number) && !(!c.number && named.has((c.name || '').toLowerCase()))).sort((x, y) => (x.name || '~' + x.number).toLowerCase() < (y.name || '~' + y.number).toLowerCase() ? -1 : 1).slice(0, 3000);
+      const items = [...m.values()].filter(c => (c.name || c.number) && !(!c.number && named.has((c.name || '').toLowerCase()))).sort((x, y) => (x.name || '~' + x.number).toLowerCase() < (y.name || '~' + y.number).toLowerCase() ? -1 : 1).slice(0, 3000).map(c => Object.assign(c, { av: link(uid, c.id, 0, 'a') }));
       return { ok: true, items };
+    }
+    if (a === 'waSyncContacts') { await syncContacts(r); try { const g = await r.sock.groupFetchAllParticipating(); Object.keys(g || {}).forEach(id => setName(chatOf(r, id), g[id].subject)); } catch (e) {} return { ok: true }; }
+    if (a === 'waGroup') {
+      const name = String(req.name || '').trim().slice(0, 100), ids = (Array.isArray(req.members) ? req.members : []).slice(0, 200).map(toJid);
+      if (!name) fail('Enter a group name.'); if (!ids.length) fail('Pick at least one contact.');
+      let g; try { g = await r.sock.groupCreate(name, ids); } catch (e) { fail('Could not create the group: ' + String((e && e.message) || e).slice(0, 100)); }
+      const c = chatOf(r, g.id); c.name = name; c.group = true; c.at = Date.now(); c.last = 'You created this group'; c.out = true; saveSoon(uid, r);
+      return { ok: true, chat: chatView(uid, c) };
     }
     if (a === 'waMore') {                                 // ask the phone for older messages of this chat
       const jid = toJid(req.chat), first = (r.msgs.get(jid) || []).find(m => m.key);

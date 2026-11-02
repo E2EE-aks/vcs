@@ -5,7 +5,7 @@
 (function(){
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
-  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null };
+  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} } };
   var POLL = null;
 
   try { TITLES.whatsapp = ['WhatsApp', 'Your WhatsApp, linked with a QR code — chat with anyone']; } catch(e){}
@@ -78,6 +78,21 @@
     '#waRoot .wa-new .wa-clist{flex:1;max-height:none;margin:0;border-radius:0}',
     '#waRoot .wa-fab{position:absolute;right:16px;bottom:16px;width:54px;height:54px;border-radius:16px;border:0;background:var(--wa-g);color:#fff;font-size:24px;box-shadow:0 4px 14px rgba(0,0,0,.3);cursor:pointer;z-index:4}',
     '#waRoot .wa-more{align-self:center;margin:4px 0 8px}',
+    '#waRoot .wa-title{font-size:23px;font-weight:800;color:var(--wa-g)}',
+    '#waRoot .wa-plus{flex:none;height:40px;padding:0 14px;border-radius:12px;border:0;background:var(--wa-g);color:#0b141a;font-weight:800;font-size:16px;cursor:pointer}',
+    '#waRoot .wa-menu{position:absolute;top:58px;right:10px;z-index:9;min-width:230px;padding:6px;border:1px solid var(--line);border-radius:14px;background:var(--card,#fff);box-shadow:0 8px 28px rgba(0,0,0,.3);display:flex;flex-direction:column}',
+    '#waRoot .wa-menu.hidden{display:none}',
+    '#waRoot .wa-menu button{border:0;background:none;color:inherit;text-align:left;padding:10px 12px;border-radius:8px;font-size:15px;cursor:pointer}',
+    '#waRoot .wa-menu button:hover{background:rgba(127,127,127,.15)}',
+    '#waRoot .wa-menu button.bad{color:#e5484d}',
+    '#waRoot .wa-menu .wa-mrow{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line);margin-bottom:4px}',
+    '#waRoot .wa-srch input{border-radius:22px;background:rgba(127,127,127,.14);border:0;padding:10px 16px}',
+    '#waRoot .wa-act{display:flex;align-items:center;gap:14px;padding:10px 14px;cursor:pointer}',
+    '#waRoot .wa-act:hover{background:rgba(127,127,127,.09)}',
+    '#waRoot .wa-act .wa-av{background:var(--wa-g);color:#0b141a}',
+    '#waRoot .wa-gbar{position:sticky;bottom:0;padding:10px;background:var(--card,#fff);border-top:1px solid var(--line)}',
+    '#waRoot .wa-chk{flex:none;width:22px;height:22px;border-radius:50%;border:2px solid #8696a0;display:flex;align-items:center;justify-content:center;font-size:13px;color:#0b141a}',
+    '#waRoot .wa-chk.on{background:var(--wa-g);border-color:var(--wa-g)}',
     '#waRoot .wa-sys{align-self:center;max-width:80%;text-align:center;font-size:12.5px;padding:4px 12px;border-radius:8px;background:var(--card,#fff);box-shadow:0 1px 1px rgba(0,0,0,.1);opacity:.95}',
     '#waRoot .wa-sys.miss{color:#d33}',
     /* login screen, like WhatsApp Web */
@@ -126,7 +141,7 @@
   /* ---------- entry points used by app.js ---------- */
   window.vWhatsapp = function(){ return '<div id="waRoot"><div class="card"><div class="empty-state">Loading…</div></div></div>'; };
   window.waAfter = function(){ G.sigL = G.sigM = ''; draw(); };
-  window.waReset = function(){ clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null }; };
+  window.waReset = function(){ clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} } }; };
   window.waInit = async function(){
     try { G.st = await quiet('waStatus'); G.err = ''; }
     catch(e){ if (e.code === 'AUTH'){ return handleErr(e); } G.err = e.message || 'Could not reach the server'; G.st = G.st || { configured:true, connected:false, status:'idle' }; }
@@ -173,10 +188,11 @@
   }
   function shellHtml(){
     return '<div class="wa-app' + (G.open ? ' open' : '') + '" id="waApp"><div class="wa-side">' +
-      '<div class="wa-top"><span class="wa-av sm" id="waMeAv"></span><div class="wa-me"><b id="waMeNm"></b><small id="waMeNo"></small></div>' +
-      '<button class="wa-ic" title="New chat" onclick="waNewToggle()">💬</button><button class="wa-ic" title="Refresh" onclick="waRefresh()">↻</button><button class="wa-ic" title="Disconnect" onclick="waLogout()">⏻</button></div>' +
-      '<div id="waNewBox"></div><div class="wa-srch"><input class="input" id="waSearch" placeholder="Search or start a new chat" oninput="waFilter(this.value)"></div>' +
-      '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div><button class="wa-fab" title="New chat" onclick="waNewToggle()">💬</button></div><div class="wa-main" id="waMain"></div></div>';
+      '<div class="wa-top"><div class="wa-me"><b class="wa-title">WhatsApp</b></div><button class="wa-plus" title="New chat" onclick="waNewToggle()">💬＋</button><button class="wa-ic" title="Menu" onclick="waMenu(event)">⋮</button></div>' +
+      '<div class="wa-menu hidden" id="waMenu"><div class="wa-mrow"><span class="wa-av sm" id="waMeAv"></span><div class="wa-mid"><b id="waMeNm"></b><small id="waMeNo"></small></div></div>' +
+      '<button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>' +
+      '<div id="waNewBox"></div><div class="wa-srch"><input class="input" id="waSearch" placeholder="🔍  Search or start a new chat" oninput="waFilter(this.value)"></div>' +
+      '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div></div><div class="wa-main" id="waMain"></div></div>';
   }
   function paintSide(force){
     var app = $('#waApp'); if (!app) return;
@@ -185,8 +201,8 @@
     var a = $('#waMeAv'); if (a && a.dataset.k !== nm + '|' + (me.av || '')){ a.dataset.k = nm + '|' + (me.av || ''); a.innerHTML = ini(nm) + (me.av ? '<img src="' + esc(url(me.av)) + '" alt="" onerror="this.remove()">' : ''); }
     var n1 = $('#waMeNm'), n2 = $('#waMeNo'); if (n1) n1.textContent = nm; if (n2) n2.textContent = no;
     var nb = $('#waNewBox'); if (nb){ var want = G.newOpen ? 1 : 0; if (nb.dataset.o !== String(want)){ nb.dataset.o = String(want);
-      nb.innerHTML = want ? '<div class="wa-new"><div class="wa-pkh"><button class="wa-ic" onclick="waNewToggle()">←</button><div class="wa-mid"><b>Select contact</b><small id="waCcount"></small></div></div><div class="wa-srch"><input class="input" id="waCq" placeholder="Search name or type a number" oninput="waCFilter(this.value)" onkeydown="if(event.key===\'Enter\')waNewGo()"></div><div class="wa-clist" id="waClist"></div></div>' : '';
-      if (want){ var i = $('#waCq'); if (i) i.focus(); paintContacts(); if (!G.contacts) quiet('waContacts').then(function(r){ G.contacts = r.items || []; paintContacts(); }).catch(function(){ G.contacts = []; paintContacts(); }); } } }
+      nb.innerHTML = want ? '<div class="wa-new"><div class="wa-pkh"><button class="wa-ic" onclick="waNewToggle()">←</button><div class="wa-mid"><b id="waPkT">New chat</b><small id="waCcount"></small></div><button class="wa-ic" title="Sync contacts" onclick="waSyncC()">↻</button></div><div class="wa-srch"><input class="input" id="waCq" placeholder="Search name, number or @username" oninput="waCFilter(this.value)" onkeydown="if(event.key===\'Enter\')waNewGo()"></div><div class="wa-clist" id="waClist"></div></div>' : '';
+      if (want){ var i = $('#waCq'); if (i) i.focus(); paintContacts(); if (!G.contacts) loadContacts(); } } }
     var un = G.chats.reduce(function(n, c){ return n + (c.unread ? 1 : 0); }, 0), ch = $('#waChips');
     if (ch && ch.dataset.k !== G.f + '|' + un){ ch.dataset.k = G.f + '|' + un;
       ch.innerHTML = [['all','All'],['unread','Unread' + (un ? ' ' + un : '')],['groups','Groups']].map(function(x){ return '<button class="' + (G.f === x[0] ? 'on' : '') + '" onclick="waChip(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join(''); }
@@ -274,7 +290,7 @@
   }
   window.waRefresh = function(){ G.sigL = ''; chats(); };
   window.waFilter = function(v){ G.q = String(v || ''); paintSide(true); };
-  window.waNewToggle = function(){ G.newOpen = !G.newOpen; paintSide(true); };
+  window.waNewToggle = function(){ G.newOpen = !G.newOpen; G.cq = ''; G.grp = { on:false, sel:{} }; paintSide(true); };
   window.waNewGo = async function(jid){
     var i = $('#waCq'), n = typeof jid === 'string' && jid ? jid : (i ? i.value.trim() : ''); if (!n) return toast('Pick a contact or enter a number', true);
     if (typeof jid !== 'string' && n.replace(/\D/g, '').length < 5){ var f = contactMatches(n); if (f.length === 1) n = f[0].id; else return toast('Pick a contact from the list, or type a phone number', true); }
@@ -283,15 +299,43 @@
   };
   function contactMatches(q){ q = String(q || '').toLowerCase().trim(); var d = q.replace(/\D/g, '');
     return (G.contacts || []).filter(function(c){ return !q || (c.name || '').toLowerCase().indexOf(q) > -1 || (d && (c.number || '').replace(/\D/g, '').indexOf(d) > -1); }); }
+  function loadContacts(){ return quiet('waContacts').then(function(r){ G.contacts = r.items || []; paintContacts(); }).catch(function(){ if (!G.contacts) G.contacts = []; paintContacts(); }); }
+  function act(k, ic, t){ return '<div class="wa-act" onclick="waAct(\'' + k + '\')"><span class="wa-av sm">' + ic + '</span><b>' + t + '</b></div>'; }
   function paintContacts(){
     var el = $('#waClist'); if (!el) return;
+    var g = !!(G.grp && G.grp.on), pt = $('#waPkT'); if (pt) pt.textContent = g ? 'New group' : 'New chat';
     if (!G.contacts){ el.innerHTML = '<div class="wa-empty" style="padding:14px">Loading contacts…</div>'; return; }
-    var q = G.cq, d = q.replace(/\D/g, ''), all = contactMatches(q), list = all.slice(0, 1000), h = '', last = '', cc = $('#waCcount'); if (cc) cc.textContent = (G.contacts.length ? G.contacts.length + ' contacts' : '');
-    if (d.length >= 8) h += '<div class="wa-row" data-id="' + esc(d) + '" onclick="waNewGo(this.dataset.id)"><span class="wa-av sm">＋</span><div class="wa-mid"><b>Chat with +' + esc(d) + '</b><small>Send a message to this number</small></div></div>';
+    var top = el.scrollTop, q = G.cq, d = q.replace(/\D/g, ''), all = contactMatches(q), list = all.slice(0, 1500), h = '', last = '', cc = $('#waCcount'), n = Object.keys(G.grp.sel).length;
+    if (cc) cc.textContent = g ? (n + ' selected') : (G.contacts.length ? G.contacts.length + ' contacts' : '');
+    if (!g && !q){
+      h += act('grp', '👥', 'New group') + act('num', '👤', 'New contact (type a number above)');
+      var m = G.me || {}, mn = String(m.number || (G.st && G.st.number) || '').replace(/\D/g, '');
+      if (mn) h += '<div class="wa-row" data-id="' + esc(mn + '@s.whatsapp.net') + '" onclick="waNewGo(this.dataset.id)">' + avatar({ name:m.name || 'You', av:m.av || '' }, 'sm') + '<div class="wa-mid"><b>' + esc(m.name || 'You') + ' (You)</b><small>Message yourself</small></div></div>';
+      h += '<div class="wa-sec">Contacts on WhatsApp</div>';
+    }
+    if (!g && d.length >= 8) h += '<div class="wa-row" data-id="' + esc(d) + '" onclick="waNewGo(this.dataset.id)"><span class="wa-av sm">＋</span><div class="wa-mid"><b>Chat with +' + esc(d) + '</b><small>Send a message to this number</small></div></div>';
     list.forEach(function(c){ var L = (c.name || '#').charAt(0).toUpperCase(); if (!/[A-Z]/.test(L)) L = '#'; if (L !== last){ last = L; h += '<div class="wa-sec">' + esc(L) + '</div>'; }
-      h += '<div class="wa-row" data-id="' + esc(c.id) + '" onclick="waNewGo(this.dataset.id)">' + avatar({ name:c.name, number:c.number, av:'' }, 'sm') + '<div class="wa-mid"><b>' + esc(c.name || c.number) + '</b><small>' + esc(c.number || 'WhatsApp contact') + '</small></div></div>'; });
-    el.innerHTML = h || '<div class="wa-empty" style="padding:14px">' + (G.contacts.length ? 'No contact matches. Type a full number to chat with it.' : 'Contacts appear here after your phone finishes syncing. You can still type a number above.') + '</div>';
+      h += '<div class="wa-row" data-id="' + esc(c.id) + '" onclick="' + (g ? 'waGSel' : 'waNewGo') + '(this.dataset.id)">' + avatar({ name:c.name, number:c.number, av:c.av || '' }, 'sm') + '<div class="wa-mid"><b>' + esc(c.name || c.number) + '</b><small>' + esc(c.number || 'WhatsApp contact') + '</small></div>' + (g ? '<span class="wa-chk' + (G.grp.sel[c.id] ? ' on' : '') + '">' + (G.grp.sel[c.id] ? '✓' : '') + '</span>' : '') + '</div>'; });
+    if (!h) h = '<div class="wa-empty" style="padding:14px">' + (G.contacts.length ? 'No contact matches. Type a full number to chat with it.' : 'No contacts yet. Tap ↻ at the top to load them from your phone — they appear in a few seconds. You can still type a number above.') + '</div>';
+    if (g) h += '<div class="wa-gbar"><button class="btn" style="width:100%" onclick="waGMake()">✓ Create group' + (n ? ' (' + n + ')' : '') + '</button></div>';
+    el.innerHTML = h; el.scrollTop = top;
   }
+  window.waAct = function(k){ if (k === 'grp'){ G.grp = { on:true, sel:{} }; paintContacts(); } else { var i = $('#waCq'); if (i) i.focus(); toast('Type the full number, e.g. 98765 43210'); } };
+  window.waGSel = function(id){ if (G.grp.sel[id]) delete G.grp.sel[id]; else G.grp.sel[id] = 1; paintContacts(); };
+  window.waGMake = async function(){
+    var ids = Object.keys(G.grp.sel); if (!ids.length) return toast('Pick at least one contact', true);
+    var name = window.prompt('Group name'); if (!name || !name.trim()) return;
+    try { var r = await api('waGroup', { name:name.trim(), members:ids }); G.newOpen = false; G.grp = { on:false, sel:{} }; G.cq = ''; if (!G.chats.some(function(c){ return c.id === r.chat.id; })) G.chats.unshift(r.chat); G.sigL = ''; paintSide(true); waOpen(r.chat.id); toast('Group created ✓'); } catch(e){ handleErr(e); }
+  };
+  window.waSyncC = async function(){
+    try { await quiet('waSyncContacts'); toast('Loading contacts from your phone…'); [3000, 8000, 16000].forEach(function(t){ setTimeout(loadContacts, t); }); }
+    catch(e){ if (e.code === 'AUTH' || e.code === 'PAYDUE') return handleErr(e); toast(e.message || 'Could not sync contacts', true); }
+  };
+  window.waMenu = function(e){ if (e) e.stopPropagation(); var m = $('#waMenu'); if (m) m.classList.toggle('hidden'); };
+  document.addEventListener('click', function(){ var m = $('#waMenu'); if (m) m.classList.add('hidden'); });
+  window.waMenuGo = function(k){ var m = $('#waMenu'); if (m) m.classList.add('hidden');
+    if (k === 'new'){ if (!G.newOpen) waNewToggle(); } else if (k === 'grp'){ G.newOpen = true; G.grp = { on:true, sel:{} }; paintSide(true); paintContacts(); }
+    else if (k === 'sync') waSyncC(); else if (k === 'refresh') waRefresh(); else if (k === 'relink') waRelink(); else if (k === 'out') waLogout(); };
   window.waCFilter = function(v){ G.cq = String(v || ''); paintContacts(); };
   window.waChip = function(f){ G.f = f; G.sigL = ''; paintSide(true); };
   window.waCall = async function(video){
