@@ -224,7 +224,7 @@ function makeApp(store, env) {
   const TG = require('./tg-server')({ env, enc, dec, sign, warn, withWb: fn => withWb(fn) });
 
   // ---------- WhatsApp (per-user account linked by QR code; see wa-server.js) ----------
-  const WA = require('./wa-server')({ env, warn });
+  const WA = require('./wa-server')({ env, warn, sign });
 
   // ---------- Fingerprint / Face / screen-lock unlock (WebAuthn passkeys) ----------
   // The phone's own biometric check happens on the device; the server only stores a PUBLIC key per device
@@ -1100,6 +1100,7 @@ function makeApp(store, env) {
     return (chain = chain.then(job, job)).then(fin, crash);
   };
   return { handle,
+           waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r),
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
@@ -1159,6 +1160,17 @@ function start(app, env) {
       const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
       rq.on('data', c => { n += c.length; if (n > app.mediaMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
       rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.mediaMax / 1048576) + ' MB).', code: 'MEDIA' } : await app.mediaUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
+      return;
+    }
+    if (rq.method === 'GET' && url.pathname === '/wa/media' && app.waOpen) {                // WhatsApp profile photo / photo / video / voice / file (signed link, Range for seeking)
+      return app.waOpen(Object.fromEntries(url.searchParams), rq.headers.range).then(o => {
+        rs.writeHead(o.code, Object.assign({ 'Cross-Origin-Resource-Policy': 'cross-origin' }, o.headers)); rs.end(o.body);
+      }).catch(() => { rs.writeHead(500); rs.end('Error'); });
+    }
+    if (rq.method === 'POST' && url.pathname === '/wa/upload' && app.waUp) {                // send a photo / video / voice / file on WhatsApp (raw body, session token in the Authorization header)
+      const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
+      rq.on('data', c => { n += c.length; if (n > app.waMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
+      rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.waMax / 1048576) + ' MB).', code: 'WA' } : await app.waUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
       return;
     }
     if (rq.method === 'GET' && url.pathname === '/tg/media' && app.tgOpen) {                // Telegram photo / video / file (signed link, Range for video seeking)
