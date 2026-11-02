@@ -122,7 +122,13 @@
     if (S.view !== 'whatsapp'){ clearInterval(POLL); POLL = null; return; }
     if (document.hidden) return;
     try {
-      var prev = G.st && G.st.status, st = await quiet('waStatus'); G.st = st;
+      var prev = G.st && G.st.status, st = await quiet('waStatus'), was0 = G.starting, err0 = G.err; G.st = st;
+      if (st.status === 'qr' || st.connected){ G.err = ''; }
+      else if (st.status === 'idle'){
+        if (st.error){ G.err = st.error; G.starting = false; }
+        else if (G.starting && Date.now() - (G.t0 || 0) > 25000){ G.starting = false; G.err = 'The QR code could not be loaded. Tap “Show QR code” to try again.'; }
+      }
+      if (!st.connected && (was0 !== G.starting || err0 !== G.err)) draw();
       if (st.connected){
         if (prev !== 'open'){ G.loaded = false; G.starting = false; G.sigL = G.sigM = ''; draw(); chats(true); toast('WhatsApp connected ✓'); }
         else { await chats(true); if (G.open) await poll(); }
@@ -147,7 +153,7 @@
     return '<div class="wa-login" id="waLogin"><div><h2>🟢 Use WhatsApp here</h2><ol><li>Open <b>WhatsApp</b> on your phone</li><li>Android: tap <b>⋮ ▸ Linked devices</b><br>iPhone: <b>Settings ▸ Linked devices</b></li><li>Tap <b>Link a device</b></li><li>Point your phone at this screen to scan the QR code</li></ol>' +
       (G.err ? '<p style="color:var(--bad);margin-top:12px">' + esc(G.err) + '</p>' : '') +
       '<p class="muted" style="margin-top:16px;font-size:13px;line-height:1.6">🔒 It is your own account — nobody else sees your chats. Nothing is copied into the Google Sheet. Your chats, contacts and recent messages appear here right after you scan.</p>' +
-      (working ? '<div class="actions" style="margin-top:10px"><button class="btn ghost sm" onclick="waCancel()">Cancel</button></div>' : '') + '</div><div class="wa-qrwrap">' + box + '</div></div>';
+      (working ? '<div class="actions" style="margin-top:10px"><button class="btn ghost sm" onclick="waRetry()">↻ New QR</button> <button class="btn ghost sm" onclick="waCancel()">Cancel</button></div>' : '') + '</div><div class="wa-qrwrap">' + box + '</div></div>';
   }
   function shellHtml(){
     return '<div class="wa-app' + (G.open ? ' open' : '') + '" id="waApp"><div class="wa-side">' +
@@ -216,11 +222,13 @@
 
   /* ---------- connect / disconnect ---------- */
   window.waStart = async function(){
-    G.err = ''; G.starting = true; draw();
-    try { var r = await quiet('waStart'); G.st = Object.assign({}, G.st, { status: r.status, connected: r.status === 'open' }); draw(); }
+    G.err = ''; G.starting = true; G.t0 = Date.now(); draw();
+    try { var r = await quiet('waStart'); G.st = Object.assign({}, G.st, { status: r.status, connected: r.status === 'open', qr: r.qr || '' });
+      if (r.status === 'idle'){ G.starting = false; G.err = r.error || 'The QR code could not be loaded. Tap “Show QR code” to try again.'; } draw(); }
     catch(e){ G.starting = false; if (e.code === 'AUTH' || e.code === 'PAYDUE') return handleErr(e); G.err = e.message || 'Could not start'; draw(); }
   };
   window.waCancel = async function(){ try { await quiet('waLogout'); } catch(e){} G.starting = false; G.st = { configured:true, connected:false, status:'idle' }; draw(); };
+  window.waRetry = async function(){ try { await quiet('waLogout'); } catch(e){} G.st = { configured:true, connected:false, status:'idle' }; waStart(); };
   window.waLogout = async function(){
     if (!await confirmBox('Disconnect WhatsApp?', 'This unlinks the device from your WhatsApp. Your chats stay safe on your phone.', 'Disconnect', true)) return;
     try { await api('waLogout'); waReset(); G.st = { configured:true, connected:false, status:'idle' }; draw(); POLL = setInterval(tick, 2500); toast('WhatsApp disconnected'); } catch(e){ handleErr(e); }

@@ -37,8 +37,8 @@ module.exports = function makeWhatsApp(o) {
 
   /* per user: sock, status (idle|starting|qr|open), qr, name, number, chats Map, msgs Map, raw Map (media only, in memory) */
   const users = new Map();
-  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map() }; users.set(uid, s); } return s; };
-  const hasSaved = uid => { try { return fs.existsSync(path.join(udir(uid), 'creds.json')); } catch (e) { return false; } };
+  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '' }; users.set(uid, s); } return s; };
+  const hasSaved = uid => { try { const c = JSON.parse(fs.readFileSync(path.join(udir(uid), 'creds.json'), 'utf8')); return !!(c && c.me); } catch (e) { return false; } };   // only a really linked login counts (half-finished QR logins are ignored)
   const wipe = uid => { try { fs.rmSync(udir(uid), { recursive: true, force: true }); } catch (e) {} };
 
   /* ---------- the chat list + messages survive a server restart (store.json, no media inside) ---------- */
@@ -125,32 +125,47 @@ module.exports = function makeWhatsApp(o) {
   /* ---------- the WhatsApp connection ---------- */
   async function open(uid) {
     const s = st(uid); if (s.sock || s.status === 'starting') return s;
+    s.status = 'starting'; s.wantOn = true; const gen = ++s.gen;
+    try { return await open2(uid, s, gen); }
+    catch (e) {                                           // never stay stuck on "Getting the QR code…"
+      warn('WhatsApp start failed', e && e.message);
+      if (s.gen === gen) { s.sock = null; s.status = 'idle'; s.wantOn = false; s.err = 'WhatsApp could not start: ' + String((e && e.message) || e).slice(0, 140); }
+      return s;
+    }
+  }
+  async function open2(uid, s, gen) {
     const B = L(), makeWASocket = B.default || B.makeWASocket;
     const { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = B;
-    s.status = 'starting'; s.wantOn = true; const gen = ++s.gen;
     fs.mkdirSync(udir(uid), { recursive: true }); loadStore(uid, s);
     const { state, saveCreds } = await useMultiFileAuthState(udir(uid));
-    let version; try { version = (await fetchLatestBaileysVersion()).version; } catch (e) {}
+    let version; try { version = (await Promise.race([fetchLatestBaileysVersion(), new Promise((_, no) => setTimeout(() => no(new Error('version timeout')), 8000))])).version; } catch (e) {}
     /* a "Desktop" device makes WhatsApp send the full chat list + history right after linking (like WhatsApp Web) */
     const browser = Browsers && Browsers.macOS ? Browsers.macOS('Desktop') : ['Mac OS', 'Desktop', '14.4.1'];
     const sock = makeWASocket(Object.assign({ auth: state, printQRInTerminal: false, logger: quietLog(), markOnlineOnConnect: false, syncFullHistory: true, browser,
+      connectTimeoutMs: 45000, defaultQueryTimeoutMs: 60000, keepAliveIntervalMs: 25000,
       getMessage: async () => undefined }, version ? { version } : {}));
     s.sock = sock;
+    const wd = setTimeout(() => { if (s.gen === gen && s.status === 'starting') { s.err = 'WhatsApp did not answer in time. Tap “Show QR code” to try again.'; try { sock.end(undefined); } catch (e) {} } }, 30000);   // no QR in 30 s -> give up with a message
     sock.ev.on('creds.update', saveCreds);
     sock.ev.on('connection.update', async u => {
       if (s.gen !== gen) return;
       const { connection, lastDisconnect, qr } = u;
-      if (qr) { try { s.qr = await qrLib().toDataURL(qr, { margin: 1, width: 320 }); s.status = 'qr'; } catch (e) { warn('WhatsApp QR error', e && e.message); } }
+      if (qr) { try { s.qr = await qrLib().toDataURL(qr, { margin: 1, width: 320 }); s.status = 'qr'; s.err = ''; clearTimeout(wd); } catch (e) { warn('WhatsApp QR error', e && e.message); s.err = 'Could not draw the QR code: ' + String((e && e.message) || e).slice(0, 100); } }
       if (connection === 'open') {
+        clearTimeout(wd); s.err = '';
         s.status = 'open'; s.qr = ''; s.tries = 0;
         const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
         try { const g = await sock.groupFetchAllParticipating(); Object.keys(g || {}).forEach(id => { const c = chatOf(s, id); setName(c, g[id].subject); }); saveSoon(uid, s); } catch (e) {}
       }
       if (connection === 'close') {
+        clearTimeout(wd);
         s.sock = null; s.qr = '';
         const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
         if (code === DisconnectReason.loggedOut) { s.status = 'idle'; s.wantOn = false; s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.name = s.number = ''; s.loaded = false; wipe(uid); return; }
         s.status = 'idle';
+        if (code === 405) { s.wantOn = false; s.err = 'WhatsApp refused the connection (error 405) - the WhatsApp library on the server is too old. Redeploy the server so it installs the latest version.'; return; }
+        if (code && code !== DisconnectReason.restartRequired && !s.err) s.err = 'Connection closed (code ' + code + ').';
+        if (s.wantOn && s.tries >= 6) { s.wantOn = false; s.err = s.err || 'Could not get a QR code. Tap “Show QR code” to try again.'; }
         if (s.wantOn && s.tries < 6) { s.tries++; const wait = code === DisconnectReason.restartRequired ? 300 : Math.min(30000, 1500 * s.tries); setTimeout(() => { if (s.wantOn && !s.sock) open(uid).catch(e => warn('WhatsApp reconnect', e && e.message)); }, wait); }
       }
     });
@@ -206,13 +221,15 @@ module.exports = function makeWhatsApp(o) {
     if (a === 'waStatus') {
       try { L(); } catch (e) { return { ok: true, configured: false, error: e.message }; }
       if (s.status === 'idle' && !s.sock && hasSaved(uid) && s.tries < 6) { open(uid).catch(e => warn('WhatsApp resume', e && e.message)); }
-      return { ok: true, configured: true, status: s.status, qr: s.status === 'qr' ? s.qr : '', connected: s.status === 'open', name: s.name, number: s.number };
+      return { ok: true, configured: true, status: s.status, qr: s.status === 'qr' ? s.qr : '', connected: s.status === 'open', name: s.name, number: s.number, error: s.status === 'idle' ? s.err : '' };
     }
     if (a === 'waStart') {
       L(); qrLib();
       if (s.status === 'open') return { ok: true, status: 'open' };
-      s.tries = 0; if (!s.sock && s.status !== 'starting') await open(uid);
-      return { ok: true, status: s.status };
+      s.tries = 0; s.err = '';
+      if (!s.sock && s.status !== 'starting') { if (!hasSaved(uid)) wipe(uid); await open(uid); }   // a half-finished old login is thrown away so a fresh QR appears
+      const t0 = Date.now(); while (Date.now() - t0 < 9000 && (s.status === 'starting' || (s.status === 'idle' && s.wantOn))) await new Promise(r => setTimeout(r, 250));   // wait for the first QR
+      return { ok: true, status: s.status, qr: s.status === 'qr' ? s.qr : '', error: s.status === 'idle' ? s.err : '' };
     }
     if (a === 'waLogout') { await stop(uid, true); return { ok: true }; }
     const r = await connected(uid);
