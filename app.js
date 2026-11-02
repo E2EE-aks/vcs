@@ -334,7 +334,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.licFields = S.d.licFields || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.devices = S.d.devices || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.licFields = S.d.licFields || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -4220,24 +4220,18 @@ async function doExport(kind, fmt){
    VIEW: CONFIGURATION  (All Options > Configuration)
    Add devices (iPhone, Samsung, Laptop ...). Open a device to keep notes for it.
    Every device has Edit / Remove; every note has Edit / Delete.
-   Saved on THIS phone / browser (localStorage), separate for every signed-in user.
+   Saved in the “Device Notes” tab of your Google Sheet, so it shows on every phone you sign in on.
    ===================================================================== */
 const CFGV = { open: null };
-const cfgKey = () => 'ks_cfg_dev_v1_' + ((S.me && S.me.id) || 'x');
-function cfgLoad(){
-  let o = null; try { o = JSON.parse(localStorage.getItem(cfgKey()) || 'null'); } catch(e){}
-  return (o && Array.isArray(o.devices)) ? o : { devices: [] };
-}
-function cfgSave(o){ try { localStorage.setItem(cfgKey(), JSON.stringify(o)); return true; } catch(e){ toast('Could not save on this phone (storage full or blocked)', true); return false; } }
-const cfgId = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-3);
+const cfgList = () => (S.d && S.d.devices) || (S.d.devices = []);
 const cfgIcon = n => { n = (n || '').toLowerCase(); return /iphone|ipad|ios|apple|mac/.test(n) ? '📱' : /laptop|pc|windows|computer|desktop/.test(n) ? '💻' : /watch/.test(n) ? '⌚' : /tab/.test(n) ? '📲' : '📱'; };
-const cfgWhen = t => { try { return new Date(t).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); } catch(e){ return ''; } };
+const cfgWhen = t => { try { return t ? new Date(t).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''; } catch(e){ return ''; } };
 
 function vConfig(){
-  const o = cfgLoad(), dev = CFGV.open ? o.devices.find(d => d.id === CFGV.open) : null;
+  const list = cfgList(), dev = CFGV.open ? list.find(d => d.id === CFGV.open) : null;
   if (CFGV.open && !dev) CFGV.open = null;
   if (!dev){
-    const rows = o.devices.map(d => `<div class="card" style="margin-bottom:12px">
+    const rows = list.map(d => `<div class="card" style="margin-bottom:12px">
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <div style="font-size:28px">${cfgIcon(d.name)}</div>
           <div style="flex:1;min-width:140px"><b style="font-size:calc(16px*var(--fs))">${esc(d.name)}</b>
@@ -4245,10 +4239,10 @@ function vConfig(){
           <div class="nowrap"><button class="btn soft sm" onclick="cfgOpen('${esc(d.id)}')">📝 Open</button>
             <button class="btn ghost sm" onclick="cfgDevForm('${esc(d.id)}')">Edit</button>
             <button class="btn ghost sm" onclick="cfgDevDel('${esc(d.id)}')">🗑 Remove</button></div></div></div>`).join('');
-    return `<div class="card" style="margin-bottom:16px"><div class="actions"><span style="flex:1"><b>My devices</b> <span class="muted">· ${o.devices.length}</span></span>
+    return `<div class="card" style="margin-bottom:16px"><div class="actions"><span style="flex:1"><b>My devices</b> <span class="muted">· ${list.length}</span></span>
         <button class="btn" onclick="cfgDevForm()">＋ Add device</button></div></div>
       ${rows || '<div class="card"><div class="empty-state">No device added yet. Tap “Add device” (for example iPhone), then open it to write notes.</div></div>'}
-      <p class="muted" style="margin-top:6px;font-size:calc(13px*var(--fs))">Devices and notes are saved on this phone only.</p>`;
+      <p class="muted" style="margin-top:6px;font-size:calc(13px*var(--fs))">Saved in the “Device Notes” tab of your Google Sheet — the same list shows on every phone you sign in on.</p>`;
   }
   const notes = [...(dev.notes || [])].sort((a, b) => (b.at || 0) - (a.at || 0)).map(n => `<div class="card" style="margin-bottom:12px">
       <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap">
@@ -4267,56 +4261,55 @@ function vConfig(){
 }
 function cfgOpen(id){ CFGV.open = id; render(); window.scrollTo(0, 0); }
 function cfgDevForm(id){
-  const o = cfgLoad(), x = id ? o.devices.find(d => d.id === id) : null;
+  const x = id ? cfgList().find(d => d.id === id) : null;
   const w = openModal(`<h3>${x ? 'Edit device' : 'Add device'}</h3><p class="sub">Name of the device, for example iPhone 15 or Samsung A54.</p>
     <form id="cdf" autocomplete="off"><div class="field"><label>Device name</label><input class="input" name="name" maxlength="60" placeholder="e.g. iPhone" value="${esc(x ? x.name : '')}"></div>
     <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
-  w.querySelector('#cdf').onsubmit = ev => {
-    ev.preventDefault(); const name = String(new FormData(ev.target).get('name') || '').trim();
+  w.querySelector('#cdf').onsubmit = async ev => {
+    ev.preventDefault(); const name = String(new FormData(ev.target).get('name') || '').trim(), btn = ev.submitter;
     if (!name) return toast('Enter the device name', true);
-    const o2 = cfgLoad();
-    if (x){ const d = o2.devices.find(e => e.id === id); if (d) d.name = name; }
-    else o2.devices.push({ id: cfgId(), name, notes: [], at: Date.now() });
-    if (!cfgSave(o2)) return;
-    w.remove(); render(); toast('Saved');
+    btn.disabled = true;
+    try{
+      if (x){ const r = await api('updateDevice', { id:x.id, name }); x.name = r.device.name; x.at = r.device.at; }
+      else { const r = await api('addDevice', { name }); cfgList().push(r.device); }
+      w.remove(); render(); toast('Saved');
+    }catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
 async function cfgDevDel(id){
-  const o = cfgLoad(), d = o.devices.find(e => e.id === id); if (!d) return;
+  const d = cfgList().find(e => e.id === id); if (!d) return;
   const n = (d.notes || []).length;
-  if (!await confirmBox('Remove this device?', `${d.name}${n ? ' and its ' + n + ' note' + (n === 1 ? '' : 's') : ''} will be deleted from this phone.`, 'Remove', true)) return;
-  o.devices = o.devices.filter(e => e.id !== id); if (!cfgSave(o)) return;
-  if (CFGV.open === id) CFGV.open = null;
-  render(); toast('Device removed');
+  if (!await confirmBox('Remove this device?', `${d.name}${n ? ' and its ' + n + ' note' + (n === 1 ? '' : 's') : ''} will be removed from your sheet.`, 'Remove', true)) return;
+  try { await api('deleteDevice', { id }); S.d.devices = cfgList().filter(e => e.id !== id); if (CFGV.open === id) CFGV.open = null; render(); toast('Device removed'); } catch(e){ handleErr(e); }
 }
 function cfgNoteForm(did, nid){
-  const o = cfgLoad(), d = o.devices.find(e => e.id === did); if (!d) return;
+  const d = cfgList().find(e => e.id === did); if (!d) return;
   const x = nid ? (d.notes || []).find(e => e.id === nid) : null;
   const w = openModal(`<h3>${x ? 'Edit note' : 'Add note'}</h3><p class="sub">${esc(d.name)}</p>
     <form id="cnf" autocomplete="off"><div class="field"><label>Title <span class="muted">(optional)</span></label><input class="input" name="title" maxlength="120" value="${esc(x ? x.title : '')}"></div>
     <div class="field"><label>Note</label><textarea class="input" name="text" rows="7" maxlength="5000" placeholder="Write here…">${esc(x ? x.text : '')}</textarea></div>
     <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
-  w.querySelector('#cnf').onsubmit = ev => {
-    ev.preventDefault(); const f = new FormData(ev.target), title = String(f.get('title') || '').trim(), text = String(f.get('text') || '').trim();
+  w.querySelector('#cnf').onsubmit = async ev => {
+    ev.preventDefault(); const f = new FormData(ev.target), title = String(f.get('title') || '').trim(), text = String(f.get('text') || '').trim(), btn = ev.submitter;
     if (!text && !title) return toast('Write something first', true);
-    const o2 = cfgLoad(), d2 = o2.devices.find(e => e.id === did); if (!d2) return w.remove();
-    d2.notes = d2.notes || [];
-    if (x){ const n = d2.notes.find(e => e.id === nid); if (n){ n.title = title; n.text = text; n.at = Date.now(); } }
-    else d2.notes.push({ id: cfgId(), title, text, at: Date.now() });
-    if (!cfgSave(o2)) return;
-    w.remove(); render(); toast('Saved');
+    btn.disabled = true;
+    try{
+      d.notes = d.notes || [];
+      if (x){ const r = await api('updateDevNote', { id:x.id, title, text }); Object.assign(x, r.note); }
+      else { const r = await api('addDevNote', { deviceId:did, title, text }); d.notes.push(r.note); }
+      w.remove(); render(); toast('Saved');
+    }catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
 async function cfgNoteDel(did, nid){
-  const o = cfgLoad(), d = o.devices.find(e => e.id === did); if (!d) return;
-  if (!await confirmBox('Delete this note?', 'It will be removed from this phone.', 'Delete', true)) return;
-  d.notes = (d.notes || []).filter(e => e.id !== nid); if (!cfgSave(o)) return;
-  render(); toast('Deleted');
+  const d = cfgList().find(e => e.id === did); if (!d) return;
+  if (!await confirmBox('Delete this note?', 'It will be removed from your sheet.', 'Delete', true)) return;
+  try { await api('deleteDevNote', { id:nid }); d.notes = (d.notes || []).filter(e => e.id !== nid); render(); toast('Deleted'); } catch(e){ handleErr(e); }
 }
 async function cfgNoteCopy(did, nid){
-  const o = cfgLoad(), d = o.devices.find(e => e.id === did), n = d && (d.notes || []).find(e => e.id === nid); if (!n) return;
+  const d = cfgList().find(e => e.id === did), n = d && (d.notes || []).find(e => e.id === nid); if (!n) return;
   const txt = [n.title, n.text].filter(Boolean).join('\n');
   (await copyText(txt)) ? toast('Copied') : toast('Could not copy — please copy it manually', true);
 }

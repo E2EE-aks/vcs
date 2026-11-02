@@ -43,6 +43,7 @@ const SHEET_KEYS = {
   LOG: ['login log'],
   PW: ['password manager'],
   LINK: ['links', 'link manager'],
+  DEV: ['device notes'],
   GROUPS: ['groups'],
   TT: ['timetable', 'time table'],
   CHAT: ['chat'],
@@ -57,7 +58,7 @@ const SHEET_KEYS = {
   RACK: ['rack mapping'],
   RACKCFG: ['rack config']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ARCH: 'Daily Archive', ACT: 'Activity Log', HIST: 'Change History', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', DEV: 'Device Notes', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ARCH: 'Daily Archive', ACT: 'Activity Log', HIST: 'Change History', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -94,7 +95,7 @@ function onOpen() {
     .addToUi();
 }
 function setupSheets() {
-  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'RACK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'CGRP', 'TRASH', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
+  ['SET', 'ATT', 'EMP', 'EXP', 'CAT', 'WORK', 'PW', 'LINK', 'DEV', 'RACK', 'USERS', 'GROUPS', 'TT', 'CHAT', 'CGRP', 'TRASH', 'LOG', 'ACT'].forEach(function (k) { getSheet_(k); });
   SpreadsheetApp.getUi().alert('All sheets are ready.');
 }
 // Run this ONCE from the editor so Google asks permission to send the OTP e-mails.
@@ -164,6 +165,7 @@ var WRITE_ACTIONS = {
   addWork: 1, updateWork: 1, deleteWork: 1,
   addPw: 1, updatePw: 1, deletePw: 1,
   addLink: 1, updateLink: 1, deleteLink: 1,
+  addDevice: 1, updateDevice: 1, deleteDevice: 1, addDevNote: 1, updateDevNote: 1, deleteDevNote: 1,
   addVcs: 1, updateVcs: 1,
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
@@ -304,6 +306,12 @@ function route_(req) {
       case 'addLink':           out = addLink_(req); break;
       case 'updateLink':        out = updateLink_(req); break;
       case 'deleteLink':        out = deleteLink_(req); break;
+      case 'addDevice':         out = addDevice_(req); break;
+      case 'updateDevice':      out = updateDevice_(req); break;
+      case 'deleteDevice':      out = deleteDevice_(req); break;
+      case 'addDevNote':        out = addDevNote_(req); break;
+      case 'updateDevNote':     out = updateDevNote_(req); break;
+      case 'deleteDevNote':     out = deleteDevNote_(req); break;
       case 'saveLicFields':     out = saveLicFields_(req); break;
       case 'saveLicGroup':      out = saveLicGroup_(req); break;
       case 'deleteLicGroup':    out = deleteLicGroup_(req); break;
@@ -769,7 +777,7 @@ var ACTIVITY_LABEL_ = {
   addCategory: 'Added a category', updateCategory: 'Updated a category', deleteCategory: 'Deleted a category',
   addWork: 'Added a work entry', updateWork: 'Updated a work entry', deleteWork: 'Deleted a work entry',
   addPw: 'Added a saved password', updatePw: 'Updated a saved password', deletePw: 'Deleted a saved password',
-  addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link', saveLicFields: 'Changed LIC extra fields', saveLicGroup: 'Saved a LIC policy group', deleteLicGroup: 'Deleted a LIC policy group', setLicGroup: 'Moved LIC policies to a group',
+  addLink: 'Added a link', updateLink: 'Updated a link', deleteLink: 'Deleted a link', addDevice: 'Added a device', updateDevice: 'Renamed a device', deleteDevice: 'Removed a device', addDevNote: 'Added a device note', updateDevNote: 'Updated a device note', deleteDevNote: 'Deleted a device note', saveLicFields: 'Changed LIC extra fields', saveLicGroup: 'Saved a LIC policy group', deleteLicGroup: 'Deleted a LIC policy group', setLicGroup: 'Moved LIC policies to a group',
   addVcs: 'Logged a VCS complaint', updateVcs: 'Updated a VCS complaint',
   addRack: 'Added a rack item', updateRack: 'Updated a rack item', deleteRack: 'Deleted a rack item',
   saveRackRows: 'Customised rack rows', saveRackCats: 'Changed rack categories', saveRackFields: 'Changed rack fields', saveRackData: 'Saved rack details', saveRackPresets: 'Changed INS packing list',
@@ -790,6 +798,8 @@ function activityDetail_(a, req) {
     if (a === 'deleteUser' || a === 'deleteEmployee' || a === 'kickUser') return String(req.id || req.uid || '');
     if (a === 'addPw' || a === 'updatePw') return req.site || req.url || '';
     if (a === 'addLink' || a === 'updateLink') return req.name || '';
+    if (a === 'addDevice' || a === 'updateDevice') return req.name || '';
+    if (a === 'addDevNote' || a === 'updateDevNote') return req.title || '';
     if (a === 'addVcs') return String(req.title || '').slice(0, 60);
     if (a === 'updateVcs') return [req.status, req.toId].filter(has_).join(' · ');
     if (a === 'addRack' || a === 'updateRack') return [String(req.rack || '') + String(req.row || ''), req.name].filter(has_).join(' · ');
@@ -1163,7 +1173,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['LIC', 8], ['RACK', 10], ['RACKCFG', 4], ['CAT', 3], ['TT', 4]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['DEV', 5], ['LIC', 8], ['RACK', 10], ['RACKCFG', 4], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -1273,6 +1283,10 @@ function createSheet_(k) {
   } else if (k === 'PW') {
     sh.getRange(1, 1, 1, 5).setValues([['Website URL', 'User ID', 'Password', 'ID', 'Owner']]);
     sh.getRange('A:E').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'DEV') {
+    sh.getRange(1, 1, 1, 7).setValues([['Kind (D = device, N = note)', 'Device name / Note title', 'Note text', 'ID', 'Owner', 'Device ID (notes only)', 'Updated (ms)']]);
+    sh.getRange('A:G').setNumberFormat('@');
     sh.setFrozenRows(1);
   } else if (k === 'LINK') {
     sh.getRange(1, 1, 1, 5).setValues([['Name', 'Type', 'Link', 'ID', 'Owner']]);
@@ -2033,6 +2047,92 @@ function deleteLink_(req) {
   var sh = ownedSheet_('LINK', 5);
   var row = findLinkRow_(sh, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
+  sh.deleteRow(row);
+  return { ok: true };
+}
+
+// ---------- Device Notes (All Options > Configuration) ----------
+// One sheet, two kinds of rows:  D = a device (iPhone, Samsung ...)   N = a note that belongs to a device (Device ID column).
+// Like Links: every user (or group) only sees / changes its own rows, and sees them on every phone it logs in on.
+// Columns: Kind | Name / Title | Note text | ID | Owner | Device ID | Updated (ms)
+function devRows_(sh) {
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, 7).getValues();
+}
+function readDev_() {
+  var sh = ownedSheet_('DEV', 5), rows = devRows_(sh), devs = [], byId = {};
+  rows.forEach(function (r) {
+    if (String(r[0]) !== 'D' || ownerOf_(r[4]) !== CTX.owner) return;
+    var d = { id: String(r[3]), name: String(r[1]), at: Number(r[6]) || 0, notes: [] };
+    byId[d.id] = d; devs.push(d);
+  });
+  rows.forEach(function (r) {
+    if (String(r[0]) !== 'N' || ownerOf_(r[4]) !== CTX.owner) return;
+    var d = byId[String(r[5])]; if (!d) return;
+    d.notes.push({ id: String(r[3]), title: String(r[1]), text: String(r[2]), at: Number(r[6]) || 0 });
+  });
+  return devs;
+}
+function findDevRow_(sh, kind, id) {
+  var rows = devRows_(sh);
+  for (var i = 0; i < rows.length; i++) if (String(rows[i][0]) === kind && String(rows[i][3]) === String(id) && ownerOf_(rows[i][4]) === CTX.owner) return i + 2;
+  return -1;
+}
+function putDevRow_(sh, row, vals) {
+  var rng = sh.getRange(row, 1, 1, 7);
+  rng.setNumberFormat('@');
+  rng.setValues([vals]);
+}
+function addDevice_(req) {
+  var name = String(req.name || '').trim().slice(0, 60);
+  if (!name) fail_('Enter the device name.');
+  var sh = ownedSheet_('DEV', 5), id = 'DV' + Utilities.getUuid().replace(/-/g, '').slice(0, 7), at = Date.now();
+  putDevRow_(sh, sh.getLastRow() + 1, ['D', name, '', id, CTX.owner, '', String(at)]);
+  return { ok: true, device: { id: id, name: name, at: at, notes: [] } };
+}
+function updateDevice_(req) {
+  var name = String(req.name || '').trim().slice(0, 60);
+  if (!name) fail_('Enter the device name.');
+  var sh = ownedSheet_('DEV', 5), row = findDevRow_(sh, 'D', req.id);
+  if (row < 0) fail_('Device not found. Please refresh.');
+  var at = Date.now();
+  putDevRow_(sh, row, ['D', name, '', String(req.id), CTX.owner, '', String(at)]);
+  return { ok: true, device: { id: String(req.id), name: name, at: at } };
+}
+function deleteDevice_(req) {
+  var sh = ownedSheet_('DEV', 5), id = String(req.id || '');
+  if (findDevRow_(sh, 'D', id) < 0) fail_('Device not found. Please refresh.');
+  var rows = devRows_(sh), del = [];
+  rows.forEach(function (r, i) {
+    if (ownerOf_(r[4]) !== CTX.owner) return;
+    if ((String(r[0]) === 'D' && String(r[3]) === id) || (String(r[0]) === 'N' && String(r[5]) === id)) del.push(i + 2);
+  });
+  for (var k = del.length - 1; k >= 0; k--) sh.deleteRow(del[k]);        // bottom to top, so the row numbers stay right
+  return { ok: true };
+}
+function validDevNote_(req) {
+  var p = { title: String(req.title || '').trim().slice(0, 120), text: String(req.text || '').trim().slice(0, 5000) };
+  if (!p.title && !p.text) fail_('Write something first.');
+  return p;
+}
+function addDevNote_(req) {
+  var p = validDevNote_(req), sh = ownedSheet_('DEV', 5), did = String(req.deviceId || '');
+  if (findDevRow_(sh, 'D', did) < 0) fail_('Device not found. Please refresh.');
+  var id = 'DN' + Utilities.getUuid().replace(/-/g, '').slice(0, 7), at = Date.now();
+  putDevRow_(sh, sh.getLastRow() + 1, ['N', p.title, p.text, id, CTX.owner, did, String(at)]);
+  return { ok: true, note: { id: id, title: p.title, text: p.text, at: at } };
+}
+function updateDevNote_(req) {
+  var p = validDevNote_(req), sh = ownedSheet_('DEV', 5), row = findDevRow_(sh, 'N', req.id);
+  if (row < 0) fail_('Note not found. Please refresh.');
+  var did = String(sh.getRange(row, 6).getValue()), at = Date.now();
+  putDevRow_(sh, row, ['N', p.title, p.text, String(req.id), CTX.owner, did, String(at)]);
+  return { ok: true, note: { id: String(req.id), title: p.title, text: p.text, at: at } };
+}
+function deleteDevNote_(req) {
+  var sh = ownedSheet_('DEV', 5), row = findDevRow_(sh, 'N', req.id);
+  if (row < 0) fail_('Note not found. Please refresh.');
   sh.deleteRow(row);
   return { ok: true };
 }
@@ -3516,6 +3616,7 @@ function getAll_() {
     work: p.work === 'none' ? [] : readWork_(),
     passwords: p.pw === 'none' ? [] : readPw_(),
     links: p.link === 'none' ? [] : readLink_(),
+    devices: readDev_(),
     lic: p.lic === 'none' ? [] : readLic_(),
     licFields: p.lic === 'none' ? [] : readLicFields_(),
     licGroups: p.lic === 'none' ? [] : readLicGroups_(),
