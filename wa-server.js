@@ -18,7 +18,7 @@ module.exports = function makeWhatsApp(o) {
   const { env, warn, sign } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -38,7 +38,7 @@ module.exports = function makeWhatsApp(o) {
 
   /* per user: sock, status (idle|starting|qr|open), qr, name, number, chats Map, msgs Map, raw Map (media only, in memory) */
   const users = new Map();
-  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0 }; users.set(uid, s); } return s; };
+  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map() }; users.set(uid, s); } return s; };
   const hasSaved = uid => { try { const c = JSON.parse(fs.readFileSync(path.join(udir(uid), 'creds.json'), 'utf8')); return !!(c && c.me); } catch (e) { return false; } };   // only a really linked login counts (half-finished QR logins are ignored)
   const wipe = uid => { try { fs.rmSync(udir(uid), { recursive: true, force: true }); } catch (e) {} };
 
@@ -48,6 +48,7 @@ module.exports = function makeWhatsApp(o) {
     try {
       const j = JSON.parse(fs.readFileSync(path.join(udir(uid), 'store.json'), 'utf8'));
       (j.chats || []).forEach(c => s.chats.set(c.id, c));
+      (j.contacts || []).forEach(c => s.contacts.set(c.id, c));
       Object.keys(j.msgs || {}).forEach(k => s.msgs.set(k, j.msgs[k]));
     } catch (e) {}
   }
@@ -58,7 +59,7 @@ module.exports = function makeWhatsApp(o) {
       try {
         const msgs = {}; s.msgs.forEach((v, k) => { msgs[k] = v.slice(-80).map(m => { const x = Object.assign({}, m); delete x.thumb; return x; }); });
         fs.mkdirSync(udir(uid), { recursive: true });
-        fs.writeFileSync(path.join(udir(uid), 'store.json'), JSON.stringify({ chats: [...s.chats.values()], msgs }));
+        fs.writeFileSync(path.join(udir(uid), 'store.json'), JSON.stringify({ chats: [...s.chats.values()], contacts: [...s.contacts.values()], msgs }));
       } catch (e) {}
     }, 4000);
   }
@@ -103,6 +104,12 @@ module.exports = function makeWhatsApp(o) {
     if (!c) { c = { id: jid, name: '', at: 0, last: '', out: false, unread: 0, group: jid.endsWith('@g.us') }; s.chats.set(jid, c);
       if (s.chats.size > MAX_CHATS) { const old = [...s.chats.values()].sort((a, b) => a.at - b.at)[0]; if (old && old.id !== jid) { s.chats.delete(old.id); s.msgs.delete(old.id); } } }
     return c;
+  }
+  function addContact(s, c) {                           // the phone's address book (for the New chat contact picker)
+    if (!c || !c.id || !/@s\.whatsapp\.net$/.test(c.id)) return;
+    const o = s.contacts.get(c.id) || { id: c.id, name: '', pn: '' };
+    if (c.name || c.verifiedName) o.name = c.name || c.verifiedName; if (c.notify) o.pn = c.notify;
+    s.contacts.set(c.id, o);
   }
   const setName = (c, n) => { if (n && String(n).trim()) c.name = String(n).trim(); };
   function addMsg(uid, s, jid, wm, live) {
@@ -176,16 +183,27 @@ module.exports = function makeWhatsApp(o) {
     });
     sock.ev.on('messaging-history.set', h => {
       (h.chats || []).forEach(c => { if (isChat(c.id)) { const x = chatOf(s, c.id); setName(x, c.name); if (c.unreadCount > 0) x.unread = c.unreadCount; if (c.conversationTimestamp && !x.at) x.at = tsOf(c.conversationTimestamp); } });
-      (h.contacts || []).forEach(c => { if (isChat(c.id) && (c.name || c.notify)) { const x = chatOf(s, c.id); if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } });
+      (h.contacts || []).forEach(c => { addContact(s, c); if (isChat(c.id) && (c.name || c.notify)) { const x = chatOf(s, c.id); if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } });
       (h.messages || []).forEach(wm => addMsg(uid, s, wm.key && wm.key.remoteJid, wm, false));
       saveSoon(uid, s);
     });
     sock.ev.on('chats.upsert', cs => { cs.forEach(c => { if (isChat(c.id)) setName(chatOf(s, c.id), c.name); }); saveSoon(uid, s); });
     sock.ev.on('chats.update', cs => cs.forEach(c => { const x = c.id && s.chats.get(c.id); if (x && c.unreadCount !== undefined && c.unreadCount !== null) x.unread = Math.max(0, c.unreadCount); }));
-    sock.ev.on('contacts.upsert', cs => { cs.forEach(c => { if (isChat(c.id) && (c.name || c.notify)) { const x = chatOf(s, c.id); if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } }); saveSoon(uid, s); });
-    sock.ev.on('contacts.update', cs => cs.forEach(c => { const x = c.id && s.chats.get(c.id); if (x && (c.name || c.notify)) { if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } }));
+    sock.ev.on('contacts.upsert', cs => { cs.forEach(c => { addContact(s, c); if (isChat(c.id) && (c.name || c.notify)) { const x = chatOf(s, c.id); if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } }); saveSoon(uid, s); });
+    sock.ev.on('contacts.update', cs => cs.forEach(c => { addContact(s, c); const x = c.id && s.chats.get(c.id); if (x && (c.name || c.notify)) { if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } }));
     sock.ev.on('groups.update', gs => gs.forEach(g => { const x = g.id && s.chats.get(g.id); if (x && g.subject) x.name = g.subject; }));
     sock.ev.on('messages.upsert', ev => (ev.messages || []).forEach(wm => addMsg(uid, s, wm.key && wm.key.remoteJid, wm, ev.type === 'notify')));
+    sock.ev.on('call', calls => (calls || []).forEach(cl => {        // incoming / missed WhatsApp calls show up in the chat like on WhatsApp Web
+      try {
+        const jid = cl.chatId && isChat(cl.chatId) ? cl.chatId : cl.from; if (!isChat(jid)) return;
+        const mid = 'call_' + cl.id, list = s.msgs.get(jid) || [], v = cl.isVideo ? 'video' : 'voice';
+        const label = cl.status === 'timeout' ? '📵 Missed ' + v + ' call' : cl.status === 'reject' ? '📵 ' + v[0].toUpperCase() + v.slice(1) + ' call declined' : cl.status === 'accept' ? (cl.isVideo ? '🎥' : '📞') + ' ' + v[0].toUpperCase() + v.slice(1) + ' call' : (cl.isVideo ? '🎥' : '📞') + ' Incoming ' + v + ' call';
+        let m = list.find(x => x.id === mid);
+        if (!m) { m = { id: mid, out: false, at: tsOf(cl.date), kind: 'call', text: '', label, status: '' }; list.push(m); list.sort((a, b) => a.at - b.at); s.msgs.set(jid, list); const c = chatOf(s, jid); if (m.at >= c.at) { c.at = m.at; c.last = label; c.out = false; } if (cl.status === 'offer' || cl.status === 'ringing') c.unread = (c.unread || 0) + 1; }
+        else { m.label = label; const c = s.chats.get(jid); if (c && c.at === m.at) c.last = label; }
+        saveSoon(uid, s);
+      } catch (e) {}
+    }));
     sock.ev.on('messages.update', ups => ups.forEach(u => {                       // delivered / read ticks
       const jid = u.key && u.key.remoteJid, list = jid && s.msgs.get(jid); if (!list || !u.update || u.update.status === undefined) return;
       const m = list.find(x => x.id === u.key.id); if (m && m.out) m.status = ST[u.update.status] || m.status;
@@ -241,6 +259,11 @@ module.exports = function makeWhatsApp(o) {
     if (a === 'waChats') {
       const items = [...r.chats.values()].filter(c => c.at || c.last || c.name || c.pn).sort((x, y) => y.at - x.at).slice(0, 250).map(c => chatView(uid, c));
       return { ok: true, items, me: { name: r.name, number: r.number, av: link(uid, 'me', 0, 'a') } };
+    }
+    if (a === 'waContacts') {
+      const items = [...r.contacts.values()].map(c => ({ id: c.id, name: c.name || c.pn || '', number: numOf(c.id) })).filter(c => c.number && (c.name || c.number))
+        .sort((x, y) => (x.name || '~' + x.number).toLowerCase() < (y.name || '~' + y.number).toLowerCase() ? -1 : 1).slice(0, 2000);
+      return { ok: true, items };
     }
     if (a === 'waHistory') {
       const jid = toJid(req.chat), c = r.chats.get(jid), list = r.msgs.get(jid) || [];

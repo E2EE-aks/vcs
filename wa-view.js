@@ -5,7 +5,7 @@
 (function(){
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
-  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false };
+  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all' };
   var POLL = null;
 
   try { TITLES.whatsapp = ['WhatsApp', 'Your WhatsApp, linked with a QR code — chat with anyone']; } catch(e){}
@@ -64,6 +64,14 @@
     '#waRoot .wa-emo{position:absolute;left:8px;bottom:58px;width:min(320px,92%);display:grid;grid-template-columns:repeat(8,1fr);gap:2px;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--card,#fff);box-shadow:0 6px 24px rgba(0,0,0,.2);z-index:5}',
     '#waRoot .wa-emo button{border:0;background:none;font-size:22px;cursor:pointer;border-radius:6px;padding:3px}',
     '#waRoot .wa-emo button:hover{background:rgba(127,127,127,.18)}',
+    '#waRoot .wa-chips{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid var(--line)}',
+    '#waRoot .wa-chips button{border:0;border-radius:16px;padding:5px 13px;background:rgba(127,127,127,.15);color:inherit;font-size:13px;cursor:pointer}',
+    '#waRoot .wa-chips button.on{background:rgba(37,211,102,.25);color:var(--wa-d);font-weight:700}',
+    '#waRoot .wa-clist{max-height:min(46vh,340px);overflow-y:auto;margin-top:8px;border-radius:10px;background:var(--card,#fff)}',
+    '#waRoot .wa-clist .wa-row{padding:7px 10px}',
+    '#waRoot .wa-clist .wa-sec{padding:5px 12px;font-size:12px;font-weight:700;color:var(--wa-d);opacity:.9}',
+    '#waRoot .wa-sys{align-self:center;max-width:80%;text-align:center;font-size:12.5px;padding:4px 12px;border-radius:8px;background:var(--card,#fff);box-shadow:0 1px 1px rgba(0,0,0,.1);opacity:.95}',
+    '#waRoot .wa-sys.miss{color:#d33}',
     /* login screen, like WhatsApp Web */
     '#waRoot .wa-login{display:grid;grid-template-columns:1.2fr 1fr;gap:28px;align-items:center;padding:26px;border:1px solid var(--line);border-radius:14px;background:var(--card,#fff)}',
     '#waRoot .wa-login h2{margin:0 0 14px;font-size:26px;font-weight:400}',
@@ -110,7 +118,7 @@
   /* ---------- entry points used by app.js ---------- */
   window.vWhatsapp = function(){ return '<div id="waRoot"><div class="card"><div class="empty-state">Loading…</div></div></div>'; };
   window.waAfter = function(){ G.sigL = G.sigM = ''; draw(); };
-  window.waReset = function(){ clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false }; };
+  window.waReset = function(){ clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all' }; };
   window.waInit = async function(){
     try { G.st = await quiet('waStatus'); G.err = ''; }
     catch(e){ if (e.code === 'AUTH'){ return handleErr(e); } G.err = e.message || 'Could not reach the server'; G.st = G.st || { configured:true, connected:false, status:'idle' }; }
@@ -160,7 +168,7 @@
       '<div class="wa-top"><span class="wa-av sm" id="waMeAv"></span><div class="wa-me"><b id="waMeNm"></b><small id="waMeNo"></small></div>' +
       '<button class="wa-ic" title="New chat" onclick="waNewToggle()">💬</button><button class="wa-ic" title="Refresh" onclick="waRefresh()">↻</button><button class="wa-ic" title="Disconnect" onclick="waLogout()">⏻</button></div>' +
       '<div id="waNewBox"></div><div class="wa-srch"><input class="input" id="waSearch" placeholder="Search or start a new chat" oninput="waFilter(this.value)"></div>' +
-      '<div class="wa-list" id="waList"></div></div><div class="wa-main" id="waMain"></div></div>';
+      '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div></div><div class="wa-main" id="waMain"></div></div>';
   }
   function paintSide(force){
     var app = $('#waApp'); if (!app) return;
@@ -169,15 +177,19 @@
     var a = $('#waMeAv'); if (a && a.dataset.k !== nm + '|' + (me.av || '')){ a.dataset.k = nm + '|' + (me.av || ''); a.innerHTML = ini(nm) + (me.av ? '<img src="' + esc(url(me.av)) + '" alt="" onerror="this.remove()">' : ''); }
     var n1 = $('#waMeNm'), n2 = $('#waMeNo'); if (n1) n1.textContent = nm; if (n2) n2.textContent = no;
     var nb = $('#waNewBox'); if (nb){ var want = G.newOpen ? 1 : 0; if (nb.dataset.o !== String(want)){ nb.dataset.o = String(want);
-      nb.innerHTML = want ? '<div class="wa-new"><b>New chat</b><div class="muted" style="font-size:12px">Type any phone number (no country code = India +91)</div><div class="row"><input class="input" id="waNum" type="tel" placeholder="98765 43210" style="flex:1" onkeydown="if(event.key===\'Enter\')waNewGo()"><button class="btn" onclick="waNewGo()">Chat</button></div></div>' : ''; if (want){ var i = $('#waNum'); if (i) i.focus(); } } }
-    var sig = G.q + '|' + (G.open ? G.open.id : '') + '|' + G.chats.map(function(c){ return c.id + c.at + c.unread + c.last + c.name; }).join(',');
+      nb.innerHTML = want ? '<div class="wa-new"><b>New chat</b><div class="muted" style="font-size:12px">Pick a contact, or type a number (no country code = India +91)</div><div class="row"><input class="input" id="waCq" placeholder="Search contact or type a number" style="flex:1" oninput="waCFilter(this.value)" onkeydown="if(event.key===\'Enter\')waNewGo()"><button class="btn" onclick="waNewGo()">Chat</button></div><div class="wa-clist" id="waClist"></div></div>' : '';
+      if (want){ var i = $('#waCq'); if (i) i.focus(); paintContacts(); if (!G.contacts) quiet('waContacts').then(function(r){ G.contacts = r.items || []; paintContacts(); }).catch(function(){ G.contacts = []; paintContacts(); }); } } }
+    var un = G.chats.reduce(function(n, c){ return n + (c.unread ? 1 : 0); }, 0), ch = $('#waChips');
+    if (ch && ch.dataset.k !== G.f + '|' + un){ ch.dataset.k = G.f + '|' + un;
+      ch.innerHTML = [['all','All'],['unread','Unread' + (un ? ' ' + un : '')],['groups','Groups']].map(function(x){ return '<button class="' + (G.f === x[0] ? 'on' : '') + '" onclick="waChip(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join(''); }
+    var sig = G.f + '|' + G.q + '|' + (G.open ? G.open.id : '') + '|' + G.chats.map(function(c){ return c.id + c.at + c.unread + c.last + c.name; }).join(',');
     if (!force && sig === G.sigL) return; G.sigL = sig;
     var el = $('#waList'); if (!el) return; var top = el.scrollTop, q = G.q.toLowerCase();
-    var rows = G.chats.filter(function(c){ return !q || (title(c) + ' ' + c.number).toLowerCase().indexOf(q) > -1; }).map(function(c){
+    var rows = G.chats.filter(function(c){ return (G.f === 'unread' ? c.unread : G.f === 'groups' ? c.group : true) && (!q || (title(c) + ' ' + c.number).toLowerCase().indexOf(q) > -1); }).map(function(c){
       return '<div class="wa-row' + (G.open && G.open.id === c.id ? ' on' : '') + '" data-id="' + esc(c.id) + '" onclick="waOpen(this.dataset.id)">' + avatar(c) +
         '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small>' + (c.out ? 'You: ' : '') + esc(c.last) + '</small></div>' +
         '<div class="wa-end">' + esc(when(c.at)) + (c.unread ? '<br><em>' + c.unread + '</em>' : '') + '</div></div>'; }).join('');
-    el.innerHTML = rows || '<div class="wa-empty">' + (G.loaded ? (G.q ? 'No chat matches.<br>Tap 💬 to start a new chat.' : 'Your chats are loading… If this stays empty, tap 💬 and start a chat with any number.') : 'Loading chats…') + '</div>';
+    el.innerHTML = rows || '<div class="wa-empty">' + (G.loaded ? ((G.q || G.f !== 'all') ? 'No chat matches.<br>Tap 💬 to start a new chat.' : 'Your chats are loading… If this stays empty, tap 💬 and start a chat with any number.') : 'Loading chats…') + '</div>';
     el.scrollTop = top;
   }
   function paintMain(force){
@@ -187,7 +199,7 @@
     if (m.dataset.k !== 'c:' + c.id || force){
       m.dataset.k = 'c:' + c.id; G.sigM = '';
       m.innerHTML = '<div class="wa-head"><button class="wa-ic wa-back" onclick="waBack()">←</button>' + avatar(c, 'sm') +
-        '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small class="muted">' + esc(c.number || (c.group ? 'Group' : '')) + '</small></div></div>' +
+        '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small class="muted">' + esc(c.number || (c.group ? 'Group' : '')) + '</small></div><button class="wa-ic" title="Video call" onclick="waCall(1)">🎥</button><button class="wa-ic" title="Voice call" onclick="waCall(0)">📞</button></div>' +
         '<div class="wa-msgs" id="waMsgs"></div>' +
         '<div class="wa-comp">' + (G.emoji ? emojiHtml() : '') + '<button class="wa-ic" title="Emoji" onclick="waEmoji()">😊</button><button class="wa-ic" title="Photo / video" onclick="waPick(0)">📷</button><button class="wa-ic" title="Document / file" onclick="waPick(1)">📎</button>' +
         '<textarea class="input" id="waIn" rows="1" placeholder="Type a message" oninput="this.style.height=\'auto\';this.style.height=Math.min(this.scrollHeight,120)+\'px\'" onkeydown="waKey(event)"></textarea>' +
@@ -201,6 +213,7 @@
   window.waAddEmoji = function(e){ var i = $('#waIn'); if (!i) return; i.value += e; i.focus(); };
   function tick1(m){ if (!m.out) return ''; var s = m.status || 'sent'; return '<i class="' + (s === 'read' ? 'rd' : '') + '">' + (s === 'sending' ? '🕓' : s === 'sent' ? '✓' : s === 'error' ? '❗' : '✓✓') + '</i>'; }
   function bubble(m){
+    if (m.kind === 'call') return '<div class="wa-sys' + (/Missed|declined/.test(m.label || '') ? ' miss' : '') + '">' + esc(m.label || 'Call') + ' · ' + esc(hm(m.at)) + '</div>';
     var u = m.url ? url(m.url) : '', h = '', th = m.thumb ? 'data:image/jpeg;base64,' + m.thumb : '';
     if (m.kind === 'photo') h += '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img class="wa-pic" loading="lazy" src="' + esc(u) + '" alt="photo" onerror="' + (th ? 'this.onerror=null;this.src=\'' + th + '\'' : 'this.remove()') + '"></a>';
     else if (m.kind === 'sticker') h += '<img class="wa-pic wa-st" loading="lazy" src="' + esc(u) + '" alt="sticker" onerror="this.remove()">';
@@ -243,10 +256,29 @@
   window.waRefresh = function(){ G.sigL = ''; chats(); };
   window.waFilter = function(v){ G.q = String(v || ''); paintSide(true); };
   window.waNewToggle = function(){ G.newOpen = !G.newOpen; paintSide(true); };
-  window.waNewGo = async function(){
-    var i = $('#waNum'), n = i ? i.value.trim() : ''; if (!n) return toast('Enter a phone number', true);
-    try { var r = await api('waHistory', { chat:n }); G.newOpen = false; if (!G.chats.some(function(c){ return c.id === r.chat.id; })) G.chats.unshift(r.chat);
+  window.waNewGo = async function(jid){
+    var i = $('#waCq'), n = typeof jid === 'string' && jid ? jid : (i ? i.value.trim() : ''); if (!n) return toast('Pick a contact or enter a number', true);
+    if (typeof jid !== 'string' && n.replace(/\D/g, '').length < 5){ var f = contactMatches(n); if (f.length === 1) n = f[0].id; else return toast('Pick a contact from the list, or type a phone number', true); }
+    try { var r = await api('waHistory', { chat:n }); G.newOpen = false; G.cq = ''; if (!G.chats.some(function(c){ return c.id === r.chat.id; })) G.chats.unshift(r.chat);
       G.open = Object.assign({}, r.chat); G.msgs = r.items; G.sigL = ''; paintSide(true); paintMain(true); var t = $('#waIn'); if (t) t.focus(); } catch(e){ handleErr(e); }
+  };
+  function contactMatches(q){ q = String(q || '').toLowerCase().trim(); var d = q.replace(/\D/g, '');
+    return (G.contacts || []).filter(function(c){ return !q || (c.name || '').toLowerCase().indexOf(q) > -1 || (d && c.number.replace(/\D/g, '').indexOf(d) > -1); }); }
+  function paintContacts(){
+    var el = $('#waClist'); if (!el) return;
+    if (!G.contacts){ el.innerHTML = '<div class="wa-empty" style="padding:14px">Loading contacts…</div>'; return; }
+    var q = G.cq, d = q.replace(/\D/g, ''), list = contactMatches(q).slice(0, 80), h = '', last = '';
+    if (d.length >= 8) h += '<div class="wa-row" data-id="' + esc(d) + '" onclick="waNewGo(this.dataset.id)"><span class="wa-av sm">＋</span><div class="wa-mid"><b>Chat with +' + esc(d) + '</b><small>Send a message to this number</small></div></div>';
+    list.forEach(function(c){ var L = (c.name || '#').charAt(0).toUpperCase(); if (!/[A-Z]/.test(L)) L = '#'; if (L !== last){ last = L; h += '<div class="wa-sec">' + esc(L) + '</div>'; }
+      h += '<div class="wa-row" data-id="' + esc(c.id) + '" onclick="waNewGo(this.dataset.id)">' + avatar({ name:c.name, number:c.number, av:'' }, 'sm') + '<div class="wa-mid"><b>' + esc(c.name || c.number) + '</b><small>' + esc(c.number) + '</small></div></div>'; });
+    el.innerHTML = h || '<div class="wa-empty" style="padding:14px">' + (G.contacts.length ? 'No contact matches. Type a full number to chat with it.' : 'Contacts appear here after your phone finishes syncing. You can still type a number above.') + '</div>';
+  }
+  window.waCFilter = function(v){ G.cq = String(v || ''); paintContacts(); };
+  window.waChip = function(f){ G.f = f; G.sigL = ''; paintSide(true); };
+  window.waCall = async function(video){
+    var c = G.open; if (!c) return; var num = String(c.number || '').replace(/\D/g, '');
+    if (!num) return toast('Calls work only with one person’s number, not groups', true);
+    if (await confirmBox((video ? 'Video call ' : 'Voice call ') + title(c) + '?', 'WhatsApp does not allow calls from a linked device like this web app. This opens the chat in the WhatsApp app on your phone, where you can tap the ' + (video ? 'video' : 'call') + ' icon. Incoming and missed calls still show here.', 'Open WhatsApp', false)) window.open('https://wa.me/' + num, '_blank');
   };
   window.waOpen = async function(id){
     var c = G.chats.filter(function(x){ return x.id === id; })[0]; if (!c) return;
