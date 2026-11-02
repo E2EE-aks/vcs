@@ -94,7 +94,7 @@ function saveToken(t, remember){
 function clearToken(){ S.token = null; store.del(TK); }
 function forceLogout(msg){
   liveReset(); clearInterval(syncT); syncT = null; setMenu(false);
-  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; S.setSec = null; closeModals(); chatReset(); vcReset(); ludoReset();
+  clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; S.setSec = null; closeModals(); chatReset(); vcReset(); ludoReset(); mailReset();
   $('#app').classList.add('hidden');
   showLogin(false, msg);
 }
@@ -1270,6 +1270,7 @@ const TITLES = {
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
   config:['Configuration','Add your devices and keep notes for each one'],
+  mail:['Mail','Your Gmail inbox — read, search and open your mails'],
   version:['Version','Pick files from GitHub and build an Android app (.apk) to install on your phone'],
   profile:['Profile','Photo, security, sign-in, appearance and preferences'],
   settings:['Settings','Users, groups, data and system options']
@@ -1399,7 +1400,7 @@ function thApply(){
 thApply();
 /* ---------- sidebar: neat section labels (Overview / Workspace / Tools / System) ---------- */
 const NAV_GRP = { dashboard:'Overview', attendance:'Overview', expenses:'Overview', work:'Overview', timetable:'Overview',
-  chat:'Workspace', vcs:'Workspace', rack:'Workspace', passwords:'Workspace', links:'Workspace', lic:'Workspace',
+  chat:'Workspace', mail:'Workspace', vcs:'Workspace', rack:'Workspace', passwords:'Workspace', links:'Workspace', lic:'Workspace',
   logins:'Tools', deploy:'Tools', updates:'Tools', version:'Tools', config:'Tools', settings:'System' };
 function navGroups(){
   const nav = document.getElementById('nav'); if (!nav) return;
@@ -1767,6 +1768,7 @@ function go(v){
   if (v === 'deploy') depLoad();
   if (v === 'updates') updLoad();
   if (v === 'version') verLoad();
+  if (v === 'mail') mailInit();
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
@@ -1809,7 +1811,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, settings:vSettings, profile:vProfile})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
@@ -4214,6 +4216,114 @@ async function doExport(kind, fmt){
   else if (tn.length === 1) tn[0].nodeValue = '🔑 Passwords';
   else b.textContent = '🔑 Passwords';
   (nav.querySelector('[data-v="timetable"]') || src).after(b);
+})();
+
+/* =====================================================================
+   VIEW: MAIL  (All Options > Mail)  —  the user's own Gmail, READ-ONLY
+   Every user links THEIR OWN Gmail (Google asks for permission once). The server reads the mails from Google each time,
+   nothing is copied into the sheet, and nobody else (not even an admin) can see your mail.
+   ===================================================================== */
+const MAILV = { st:null, folder:'inbox', q:'', items:[], next:'', busy:false, err:'', open:null, imgs:false, waiting:false, loaded:false };
+function mailReset(){ Object.assign(MAILV, { st:null, folder:'inbox', q:'', items:[], next:'', busy:false, err:'', open:null, imgs:false, waiting:false, loaded:false }); }
+const MAIL_FOLDERS = [['inbox','📥 Inbox'], ['unread','🔵 Unread'], ['starred','⭐ Starred'], ['sent','📤 Sent'], ['spam','🚫 Spam'], ['all','🗂 All mail']];
+const mailName = f => { f = String(f || ''); const m = f.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/); return (m ? (m[1].trim() || m[2]) : f.trim()) || '(unknown)'; };
+const mailWhen = t => { if (!t) return ''; const d = new Date(t), n = new Date();
+  try { return d.toDateString() === n.toDateString() ? d.toLocaleTimeString('en-IN', { hour:'2-digit', minute:'2-digit' }) : d.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year: d.getFullYear() === n.getFullYear() ? undefined : 'numeric' }); } catch(e){ return ''; } };
+const mailFull = t => { try { return t ? new Date(t).toLocaleString('en-IN', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''; } catch(e){ return ''; } };
+const mailSize = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+
+async function mailInit(){
+  if (!MAILV.st){ try { MAILV.st = await api('mailStatus'); } catch(e){ MAILV.err = e.message || 'Could not reach the server'; MAILV.st = { configured:true, connected:false }; } if (S.view === 'mail') render(); }
+  if (MAILV.st.connected && !MAILV.loaded) mailFetch(true);
+}
+async function mailFetch(reset){
+  if (MAILV.busy) return;
+  MAILV.busy = true; MAILV.err = ''; if (reset){ MAILV.items = []; MAILV.next = ''; MAILV.loaded = true; } if (S.view === 'mail') render();
+  try {
+    const r = await api('mailList', { folder:MAILV.folder, q:MAILV.q, pageToken: reset ? '' : MAILV.next });
+    MAILV.items = reset ? r.items : MAILV.items.concat(r.items); MAILV.next = r.next || '';
+  } catch(e){ if (e.code === 'AUTH' || e.code === 'PAYDUE'){ MAILV.busy = false; return handleErr(e); } MAILV.err = e.message || 'Could not load mails'; }
+  MAILV.busy = false; if (S.view === 'mail') render();
+}
+function mailFolder(f){ MAILV.folder = f; MAILV.open = null; mailFetch(true); }
+function mailSearch(v){ MAILV.q = String(v || '').trim(); MAILV.open = null; mailFetch(true); }
+async function mailOpen(id){
+  const it = MAILV.items.find(x => x.id === id) || {};
+  MAILV.open = { id, loading:true, subject:it.subject, from:it.from, at:it.at }; MAILV.imgs = false; render(); window.scrollTo(0, 0);
+  try { const r = await api('mailGet', { id }); if (MAILV.open && MAILV.open.id === id) MAILV.open = r.mail; }
+  catch(e){ if (e.code === 'AUTH'){ return handleErr(e); } if (MAILV.open && MAILV.open.id === id) MAILV.open = { id, error: e.message || 'Could not open this mail', subject: it.subject, from: it.from, at: it.at }; }
+  if (S.view === 'mail') render();
+}
+function mailBack(){ MAILV.open = null; render(); }
+async function mailConnect(){
+  try { const u = await api('mailAuthUrl'); MAILV.waiting = true; window.open(u.url, '_blank'); toast('Allow Gmail in the new tab, then come back here'); } catch(e){ handleErr(e); }
+}
+async function mailRecheck(){
+  try { MAILV.st = await api('mailStatus'); MAILV.waiting = false; MAILV.loaded = false; render(); if (MAILV.st.connected) mailFetch(true); else toast('Not connected yet', true); } catch(e){ handleErr(e); }
+}
+async function mailDisconnect(){
+  if (!await confirmBox('Disconnect Gmail?', 'Your mails stay safe in Gmail. This app will just stop reading them.', 'Disconnect', true)) return;
+  try { await api('mailDisconnect'); const keep = MAILV.st; mailReset(); MAILV.st = { configured: keep ? keep.configured : true, connected:false }; render(); toast('Gmail disconnected'); } catch(e){ handleErr(e); }
+}
+function mailImgs(){ MAILV.imgs = !MAILV.imgs; render(); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && MAILV.waiting && S.view === 'mail') mailRecheck(); });
+
+function mailFrame(m){
+  if (!m.html) return `<div style="white-space:pre-wrap;word-break:break-word;line-height:1.55">${esc(m.text || '(no text)')}</div>`;
+  const csp = "default-src 'none'; style-src 'unsafe-inline'; font-src data:; img-src data:" + (MAILV.imgs ? ' https: http:' : '');
+  const doc = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base target="_blank">' +
+    '<meta http-equiv="Content-Security-Policy" content="' + csp + '"><style>body{margin:0;padding:12px;font:15px/1.5 system-ui,sans-serif;word-break:break-word;color:#111;background:#fff}img{max-width:100%;height:auto}table{max-width:100%}</style></head><body>' + m.html + '</body></html>';
+  return `<iframe sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" style="width:100%;height:68vh;border:1px solid var(--line);border-radius:10px;background:#fff" srcdoc="${esc(doc)}"></iframe>`;
+}
+function vMail(){
+  const st = MAILV.st;
+  if (!st) return `<div class="card"><div class="empty-state">Loading…</div></div>`;
+  if (!st.configured) return `<div class="card"><h3>📧 Mail is not set up yet</h3><p class="muted">The server needs the same Google keys that Calendar sync uses (<b>CAL_CLIENT_ID</b>, <b>CAL_CLIENT_SECRET</b> and <b>PUBLIC_URL</b>). Add them in Render → Environment, then open this tab again.</p></div>`;
+  if (!st.connected) return `<div class="card"><h3>📧 Connect your Gmail</h3>
+      <p class="muted" style="margin-bottom:12px">Link your Gmail once and all your mails show here — inbox, unread, starred, sent and search.</p>
+      <ul class="muted" style="margin:0 0 14px 18px;line-height:1.7"><li>Read-only — this app cannot send, delete or change any mail.</li><li>Only you see your mail, nobody else (not even an admin).</li><li>Mail is never copied into the Google Sheet.</li></ul>
+      <div class="actions"><button class="btn" onclick="mailConnect()">🔗 Connect Gmail</button>${MAILV.waiting ? '<button class="btn soft" onclick="mailRecheck()">✅ I have connected — refresh</button>' : ''}</div>
+      ${MAILV.err ? `<p style="color:var(--bad);margin-top:10px">${esc(MAILV.err)}</p>` : ''}</div>`;
+  const m = MAILV.open;
+  if (m){
+    if (m.loading) return `<div class="card"><button class="btn ghost" onclick="mailBack()">← Back</button><div class="empty-state" style="margin-top:12px">Opening…</div></div>`;
+    if (m.error) return `<div class="card"><button class="btn ghost" onclick="mailBack()">← Back</button><h3 style="margin-top:12px">${esc(m.subject || '(no subject)')}</h3><p style="color:var(--bad)">${esc(m.error)}</p></div>`;
+    const files = (m.files || []).map(f => `<span class="tag" style="margin:2px 4px 2px 0">📎 ${esc(f.name)} · ${mailSize(f.size)}</span>`).join('');
+    return `<div class="card" style="margin-bottom:12px"><div class="actions"><button class="btn ghost" onclick="mailBack()">← Back</button><span style="flex:1"></span>
+        ${m.html && /<img/i.test(m.html) ? `<button class="btn soft sm" onclick="mailImgs()">${MAILV.imgs ? '🖼 Hide images' : '🖼 Load images'}</button>` : ''}
+        <a class="btn soft sm" target="_blank" rel="noopener noreferrer" href="https://mail.google.com/mail/u/0/#all/${esc(m.id)}">Open in Gmail ↗</a></div>
+      <h3 style="margin:12px 0 6px;word-break:break-word">${esc(m.subject || '(no subject)')}</h3>
+      <div style="font-size:calc(13.5px*var(--fs));line-height:1.6;word-break:break-word"><b>${esc(mailName(m.from))}</b> <span class="muted">&lt;${esc((String(m.from).match(/<([^>]+)>/) || [0, m.from])[1])}&gt;</span><br>
+        ${m.to ? `<span class="muted">To:</span> ${esc(m.to)}<br>` : ''}${m.cc ? `<span class="muted">Cc:</span> ${esc(m.cc)}<br>` : ''}<span class="muted">${esc(mailFull(m.at))}</span></div>
+      ${files ? `<div style="margin-top:8px">${files}<div class="muted" style="font-size:calc(12px*var(--fs));margin-top:4px">Attachments can be opened in Gmail.</div></div>` : ''}</div>
+      <div class="card">${mailFrame(m)}</div>`;
+  }
+  const chips = MAIL_FOLDERS.map(([k, l]) => `<button class="btn ${MAILV.folder === k ? '' : 'ghost'} sm" onclick="mailFolder('${k}')">${l}</button>`).join(' ');
+  const rows = MAILV.items.map(x => `<div onclick="mailOpen('${esc(x.id)}')" style="cursor:pointer;padding:11px 4px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start">
+      <div style="width:9px;padding-top:7px">${x.unread ? '<span style="display:block;width:9px;height:9px;border-radius:50%;background:var(--brand)"></span>' : ''}</div>
+      <div style="flex:1;min-width:0"><div style="display:flex;gap:8px;justify-content:space-between"><span style="${x.unread ? 'font-weight:700' : ''};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${x.starred ? '⭐ ' : ''}${esc(mailName(x.from))}</span><span class="muted" style="font-size:calc(12px*var(--fs));white-space:nowrap">${esc(mailWhen(x.at))}</span></div>
+        <div style="${x.unread ? 'font-weight:600' : ''};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.subject || '(no subject)')}</div>
+        <div class="muted" style="font-size:calc(12.5px*var(--fs));overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(x.snippet)}</div></div></div>`).join('');
+  return `<div class="card" style="margin-bottom:12px">
+      <div class="actions" style="margin-bottom:10px"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis"><b>📧 ${esc(st.email || 'Gmail')}</b></span>
+        <button class="btn ghost sm" onclick="mailFetch(true)">↻ Refresh</button><button class="btn ghost sm" onclick="mailDisconnect()">Disconnect</button></div>
+      <input class="input" id="mailQ" placeholder="Search mail (e.g. from:bob invoice)…" value="${esc(MAILV.q)}" onkeydown="if(event.key==='Enter')mailSearch(this.value)" style="margin-bottom:10px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${chips}</div></div>
+    <div class="card">${MAILV.err ? `<p style="color:var(--bad)">${esc(MAILV.err)}</p><div class="actions"><button class="btn soft sm" onclick="mailFetch(true)">Try again</button><button class="btn soft sm" onclick="mailConnect()">Connect Gmail again</button></div>` : ''}
+      ${rows || (MAILV.busy ? '' : (MAILV.err ? '' : `<div class="empty-state">${MAILV.q ? 'No mail matches your search.' : 'No mail here.'}</div>`))}
+      ${MAILV.busy ? '<div class="empty-state">Loading…</div>' : ''}
+      ${MAILV.next && !MAILV.busy ? `<div style="text-align:center;margin-top:12px"><button class="btn soft" onclick="mailFetch(false)">Load more</button></div>` : ''}</div>`;
+}
+/* the “Mail” tab in the menu (shows in the side menu and in All Options), right below Chat */
+(function addMailTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="updates"]'), chat = nav && nav.querySelector('[data-v="chat"]');
+  if (!src || nav.querySelector('[data-v="mail"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'mail'; b.classList.remove('active', 'hidden');
+  const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT), tn = [];
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  tn.forEach(n => { n.nodeValue = n.nodeValue.replace('⬇️', '📧').replace('Updates', 'Mail'); });
+  (chat || src).after(b);
 })();
 
 /* =====================================================================

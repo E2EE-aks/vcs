@@ -15,6 +15,7 @@ function makeApp(store, env) {
     { id: 'sheets', name: 'Google Sheets (database)', on: true },
     { id: 'calendar', name: 'Google Calendar', on: !!(env.CAL_CLIENT_ID && env.CAL_CLIENT_SECRET && env.PUBLIC_URL) },
     { id: 'drive', name: 'Google Drive (chat media)', on: !!(env.CAL_CLIENT_ID && env.CAL_CLIENT_SECRET) },
+    { id: 'gmail', name: 'Gmail (Mail tab)', on: !!(env.CAL_CLIENT_ID && env.CAL_CLIENT_SECRET && env.PUBLIC_URL) },
     { id: 'github', name: 'GitHub (Deploy / Updates)', on: !!(env.GITHUB_REPO && env.GITHUB_TOKEN) },
     { id: 'mail', name: 'E-mail (Gmail SMTP)', on: !!(env.SMTP_USER && env.SMTP_PASS) },
     { id: 'turn', name: 'Call relay (TURN)', on: !!(env.ICE_SERVERS || (env.METERED_APP && env.METERED_API_KEY)) }
@@ -110,8 +111,9 @@ function makeApp(store, env) {
     (code === 200 ? '✅ ' + (what || 'Google Calendar') + ' connected' : '⚠️ Could not connect') + '</h2><p>' + String(msg).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])) + '</p></body>' });
   async function runOauth(q) {
     if (q.error) return page(400, 'Google said: ' + q.error);
-    let uid = calCheck(q.state), drv = false;
+    let uid = calCheck(q.state), drv = false, mail = false;
     if (!uid){ uid = drvCheck(q.state); drv = !!uid; }
+    if (!uid){ uid = mailCheck(q.state); mail = !!uid; }
     if (!uid) return page(400, 'This link expired. Go back to the app and click "Connect" again.');
     if (!globalThis.CAL_CFG_.ready) return page(400, 'Calendar sync is not configured on the server.');
     const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -128,10 +130,94 @@ function makeApp(store, env) {
       await wb.flush(); drvTok = null;
       return page(200, (email ? email + ' is' : 'Your Drive is') + ' now linked. Photos and videos sent in Chat will be saved in a folder called \"KS Chat Media\". Close this tab and go back to the app.', 'Google Drive');
     }
+    if (mail){
+      p.setProperty('MAIL_TOK_' + uid, enc(j.refresh_token)); p.setProperty('MAIL_META_' + uid, JSON.stringify({ email, at: Date.now() }));
+      await wb.flush(); mailCache.delete(uid);
+      return page(200, (email ? email + ' is' : 'Your Gmail is') + ' now linked. Close this tab and go back to the app — open the Mail tab.', 'Gmail');
+    }
     p.setProperty('CAL_TOK_' + uid, enc(j.refresh_token));
     p.setProperty('CAL_META_' + uid, JSON.stringify({ email, at: Date.now() }));
     await wb.flush(); accessCache.delete(uid);
     return page(200, (email ? email + ' is' : 'Your account is') + ' now linked. Close this tab and go back to the app.');
+  }
+
+  // ---------- Gmail (per-user OAuth, READ-ONLY: scope gmail.readonly) ----------
+  // Every user connects THEIR OWN Gmail; nobody (not even an admin) can read another person's mail. The refresh token is encrypted
+  // in the sheet like the Calendar one. Mail text itself is never stored - it is fetched from Google each time it is opened.
+  const MAIL_ACTIONS = new Set(['mailStatus', 'mailAuthUrl', 'mailDisconnect', 'mailList', 'mailGet']);
+  globalThis.mailState_ = uid => { const p = uid + '|' + (Date.now() + 600000) + '|' + crypto.randomBytes(6).toString('hex');
+    return Buffer.from(p).toString('base64url') + '.' + sign('mail:' + p); };
+  const mailCheck = st => { const [b, g] = String(st || '').split('.'); if (!b || !g) return '';
+    const p = Buffer.from(b, 'base64url').toString(), good = sign('mail:' + p);
+    if (g.length !== good.length || !crypto.timingSafeEqual(Buffer.from(g), Buffer.from(good))) return '';
+    const [uid, exp] = p.split('|'); return Number(exp) > Date.now() ? uid : ''; };
+  const mailCache = new Map();
+  const mailFail = (m, code) => globalThis.fail_(m, code || 'MAIL');
+  async function mailAccess(uid, refresh) {
+    const c = mailCache.get(uid); if (c && c.tok && c.exp > Date.now() + 30000) return c.tok;
+    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: env.CAL_CLIENT_ID, client_secret: env.CAL_CLIENT_SECRET, refresh_token: refresh, grant_type: 'refresh_token' }) });
+    const j = await r.json().catch(() => ({}));
+    if (!j.access_token) { warn('Gmail token refresh failed for', uid, j.error); mailCache.delete(uid);
+      mailFail(j.error === 'invalid_grant' ? 'Your Gmail link has expired or was removed. Tap “Connect Gmail” again.' : 'Could not sign in to Gmail (' + (j.error || r.status) + ').'); }
+    mailCache.set(uid, { tok: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 }); return j.access_token;
+  }
+  const mailRefreshOf = uid => dec(globalThis.PropertiesService.getScriptProperties().getProperty('MAIL_TOK_' + uid) || '');
+  async function gmail(uid, path) {
+    const refresh = mailRefreshOf(uid); if (!refresh) mailFail('Connect Gmail first.');
+    const tok = await mailAccess(uid, refresh);
+    const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/' + path, { headers: { Authorization: 'Bearer ' + tok } });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const m = (j.error && j.error.message) || ('Gmail error ' + r.status);
+      if (r.status === 401) mailCache.delete(uid);
+      if (/has not been used|is disabled|accessNotConfigured/i.test(m + JSON.stringify(j.error || ''))) mailFail('The Gmail API is switched off in your Google Cloud project. Enable “Gmail API” there, then try again.');
+      if (r.status === 403 && /insufficient|scope/i.test(m)) mailFail('This Gmail link has no permission to read mail. Tap “Disconnect”, then “Connect Gmail” again and allow reading mail.');
+      mailFail(m);
+    }
+    return j;
+  }
+  const mailText = s => String(s || '').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  const mailHdr = (m, n) => { const h = ((m.payload && m.payload.headers) || []).find(x => String(x.name).toLowerCase() === n.toLowerCase()); return h ? String(h.value) : ''; };
+  const mailView = m => { const L = m.labelIds || [];
+    return { id: m.id, from: mailHdr(m, 'From'), subject: mailHdr(m, 'Subject'), at: Number(m.internalDate) || 0, snippet: mailText(m.snippet), unread: L.includes('UNREAD'), starred: L.includes('STARRED') }; };
+  const MAIL_FOLDERS = { inbox: ['INBOX'], unread: ['INBOX', 'UNREAD'], starred: ['STARRED'], sent: ['SENT'], spam: ['SPAM'], trash: ['TRASH'], all: [] };
+  function mailBody(part, out) {
+    if (!part) return;
+    const t = String(part.mimeType || '').toLowerCase(), d = part.body && part.body.data;
+    if (part.filename && part.body && (part.body.attachmentId || part.body.size)) out.files.push({ name: part.filename, size: Number(part.body.size) || 0, type: t });
+    else if (d && t === 'text/html' && !out.html) out.html = Buffer.from(d, 'base64url').toString('utf8');
+    else if (d && t === 'text/plain' && !out.text) out.text = Buffer.from(d, 'base64url').toString('utf8');
+    (part.parts || []).forEach(p => mailBody(p, out));
+  }
+  async function mailRoute(req) {
+    const a = req.action, uid = globalThis.checkToken_(req.token);
+    if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    const P = globalThis.PropertiesService.getScriptProperties();
+    const metaOf = () => { try { return JSON.parse(P.getProperty('MAIL_META_' + uid) || 'null'); } catch (e) { return null; } };
+    if (a === 'mailStatus') { const m = metaOf(), ok = !!mailRefreshOf(uid); return { ok: true, configured: !!globalThis.CAL_CFG_.ready, connected: ok && !!m, email: m ? m.email : '', at: m ? m.at : 0 }; }
+    if (a === 'mailAuthUrl') {
+      const C = globalThis.CAL_CFG_; if (!C.ready) mailFail('Mail is not set up on the server yet (it needs CAL_CLIENT_ID, CAL_CLIENT_SECRET and PUBLIC_URL, the same as Calendar sync).');
+      return { ok: true, url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(C.clientId) + '&redirect_uri=' + encodeURIComponent(C.redirect) +
+        '&response_type=code&access_type=offline&prompt=consent&include_granted_scopes=true&scope=' + encodeURIComponent('https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email') +
+        '&state=' + encodeURIComponent(globalThis.mailState_(uid)) };
+    }
+    if (a === 'mailDisconnect') return withWb(() => { P.setProperty('MAIL_TOK_' + uid, ''); P.setProperty('MAIL_META_' + uid, ''); mailCache.delete(uid); return { ok: true }; });
+    if (a === 'mailList') {
+      const lab = MAIL_FOLDERS[String(req.folder || 'inbox')] || MAIL_FOLDERS.inbox, q = String(req.q || '').trim().slice(0, 200);
+      let path = 'messages?maxResults=20' + lab.map(l => '&labelIds=' + l).join('') + (q ? '&q=' + encodeURIComponent(q) : '') + (req.pageToken ? '&pageToken=' + encodeURIComponent(String(req.pageToken)) : '');
+      if (String(req.folder) === 'trash' || String(req.folder) === 'spam') path += '&includeSpamTrash=true';
+      const list = await gmail(uid, path);
+      const items = (await Promise.all((list.messages || []).map(m => gmail(uid, 'messages/' + m.id + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject').then(mailView).catch(() => null)))).filter(Boolean);
+      return { ok: true, items, next: list.nextPageToken || '' };
+    }
+    if (a === 'mailGet') {
+      const id = String(req.id || ''); if (!/^[\w-]{6,40}$/.test(id)) mailFail('Bad message.');
+      const m = await gmail(uid, 'messages/' + id + '?format=full'), out = { html: '', text: '', files: [] };
+      mailBody(m.payload, out);
+      return { ok: true, mail: { id: m.id, from: mailHdr(m, 'From'), to: mailHdr(m, 'To'), cc: mailHdr(m, 'Cc'), subject: mailHdr(m, 'Subject'), at: Number(m.internalDate) || 0,
+        html: out.html.slice(0, 400000), text: out.text.slice(0, 200000) || mailText(m.snippet), files: out.files.slice(0, 20), unread: (m.labelIds || []).includes('UNREAD') } };
+    }
   }
 
   // ---------- Fingerprint / Face / screen-lock unlock (WebAuthn passkeys) ----------
@@ -985,9 +1071,14 @@ function makeApp(store, env) {
     if (!r || (r.action !== 'chatLive' && r.action !== 'chatTyping')) return null;
     return Promise.resolve().then(() => r.action === 'chatTyping' ? chatTypingRoute(r) : chatLiveRoute(r)).catch(errOut);
   };
+  const fastMail = body => {                           // Gmail calls go to Google, so they never wait behind (or hold up) sheet saves
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !MAIL_ACTIONS.has(r.action)) return null;
+    return Promise.resolve().then(() => mailRoute(r)).catch(errOut);
+  };
   const handle = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastTr(body));
+    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTr(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);
