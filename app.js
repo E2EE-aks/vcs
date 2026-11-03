@@ -109,7 +109,7 @@ function showLogin(needsSetup, message, needsCode){
   S.setup = !!needsSetup;
   $('#app').classList.add('hidden');
   $('#login').classList.remove('hidden');
-  $('#resetForm').classList.add('hidden'); $('#loginForm').classList.remove('hidden');
+  $('#resetForm').classList.add('hidden'); $('#regForm').classList.add('hidden'); $('#loginForm').classList.remove('hidden');
   $('#forgotBtn').classList.toggle('hidden', !!needsSetup);
   $('#loginTitle').textContent = needsSetup ? 'Create your login' : 'Sign in to your account';
   $('#loginSub').textContent = needsSetup ? 'First time here — choose a username and password' : 'Enter your username and password';
@@ -285,6 +285,38 @@ async function bindBio(){
     finally{ add.disabled = false; }
   };
 }
+
+
+/* ---------- "Ask your admin": self-service 24-hour account ---------- */
+const RG_SECS = [['att','🗓️ Attendance'],['exp','💸 Expenses'],['work','🛠️ Work'],['tt','⏱️ Time Table'],['vcs','📋 VCS Complaint'],['rack','📦 Rack Mapping'],['pw','🔑 Passwords'],['link','🔗 Links'],['lic','🪪 LIC']];
+function rgErr(m){ const e = $('#rgErr'); e.textContent = m || ''; e.classList.toggle('hidden', !m); }
+function showReg(){
+  $('#loginForm').classList.add('hidden'); $('#resetForm').classList.add('hidden'); $('#regForm').classList.remove('hidden');
+  $('#rgForm').classList.remove('hidden'); $('#rgDone').classList.add('hidden'); rgErr('');
+  ['#rgName','#rgUser','#rgPw'].forEach(i => $(i).value = ''); $('#rgPw').type = 'password'; $('#rgToggle').textContent = 'Show';
+  $('#rgAcc').innerHTML = RG_SECS.map(([k, l]) => `<div class="rg-row"><span>${l}</span><select class="select" data-k="${k}"><option value="none">No access</option><option value="view">View only</option><option value="edit">Full (edit)</option></select></div>`).join('');
+  $('#rgUser').focus();
+}
+$('#askAdmin').onclick = showReg;
+$('#askAdmin').onkeydown = e => { if (e.key === 'Enter' || e.key === ' '){ e.preventDefault(); showReg(); } };
+$('#rgBack').onclick = () => showLogin(false);
+$('#rgToggle').onclick = () => { const p = $('#rgPw'), show = p.type === 'password'; p.type = show ? 'text' : 'password'; $('#rgToggle').textContent = show ? 'Hide' : 'Show'; };
+$('#regForm').addEventListener('submit', async ev => {
+  ev.preventDefault(); rgErr('');
+  const u = $('#rgUser').value.trim(), p = $('#rgPw').value, btn = $('#rgGo');
+  if (!/^\S{3,40}$/.test(u)) return rgErr('User ID must be 3 to 40 characters, without spaces.');
+  if (p.length < 6) return rgErr('Password must be at least 6 characters.');
+  const access = {}; document.querySelectorAll('#rgAcc select').forEach(s => { access[s.dataset.k] = s.value; });
+  btn.disabled = true; btn.textContent = 'Creating…';
+  try{
+    const r = await api('requestAccess', { username:u, password:p, name:$('#rgName').value.trim(), access });
+    $('#rgForm').classList.add('hidden');
+    const d = $('#rgDone'); d.classList.remove('hidden');
+    d.innerHTML = `<div class="rg-ok"><b>✅ User created</b><p>User ID: <b>${esc(r.username)}</b></p><p>Valid for ${r.hours} hours (till ${esc(r.until)}). Your admin has been informed in Chat.</p><button type="button" class="btn block" id="rgUse">Sign in now</button></div>`;
+    $('#rgUse').onclick = () => { showLogin(false); $('#lu').value = u; $('#lp').value = p; $('#lp').focus(); };
+  }catch(e){ rgErr(e.message); }
+  finally{ btn.disabled = false; btn.textContent = 'Create'; }
+});
 
 /* ---------- forgot password (OTP by e-mail) ---------- */
 function rsErr(m){ const e = $('#rsErr'); e.textContent = m || ''; e.classList.toggle('hidden', !m); }

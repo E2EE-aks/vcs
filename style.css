@@ -1411,3 +1411,11 @@ html[data-mode="dark"] table.stk tbody tr:nth-child(even),html[data-mode="dark"]
 .lic-name{min-width:0;overflow-wrap:anywhere;word-break:normal}
 .lic-name b{display:block;font-size:calc(15px*var(--fs));line-height:1.35}
 .lic-name-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+
+/* ---- "Ask your admin" request form ---- */
+#login .rg-acc{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+#login .rg-row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#login .rg-row span{font-size:14px}
+#login .rg-row select{width:auto;min-width:132px;padding:8px 10px}
+#login .rg-ok{text-align:center;padding:6px 0}
+#login .rg-ok p{margin:8px 0;color:#c3d0e8;font-size:14px}

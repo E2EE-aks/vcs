@@ -12,8 +12,8 @@
 <script>try{var t=JSON.parse(localStorage.getItem('ks_theme_v1')||'null');if(t&&(t.mode==='dark'||(t.mode==='auto'&&window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)))document.documentElement.setAttribute('data-mode','dark')}catch(e){}</script>
 <link rel="preconnect" href="https://attendance-api-yjtj.onrender.com" crossorigin>
 <link rel="dns-prefetch" href="https://attendance-api-yjtj.onrender.com">
-<link rel="preload" href="app.js?v=81" as="script">
-<link rel="stylesheet" href="style.css?v=42">
+<link rel="preload" href="app.js?v=82" as="script">
+<link rel="stylesheet" href="style.css?v=43">
 <link rel="stylesheet" href="ks-extras.css?v=8">
 <link rel="stylesheet" href="bottom-bar.css?v=6">
 </head>
@@ -47,7 +47,7 @@
       <button type="button" class="linkbtn" id="forgotBtn">Forgot password?</button></div>
     <button class="btn block" id="loginBtn" type="submit">Sign in</button>
     <button class="btn ghost block hidden" id="bioBtn" type="button" style="margin-top:10px">👆 Unlock with fingerprint / face</button>
-    <p class="lg-foot">Don’t have an account? <b>Ask your admin</b></p>
+    <p class="lg-foot">Don’t have an account? <b id="askAdmin" role="button" tabindex="0" style="cursor:pointer">Ask your admin</b></p>
     <p class="note">🔒 For security, your sign-in time, location and device are recorded for the admin.</p>
   </form>
 
@@ -65,6 +65,25 @@
       <button class="btn ghost block" id="rsResend" type="button" style="margin-top:8px">Resend OTP</button>
     </div>
     <div style="text-align:center;margin-top:14px"><button type="button" class="linkbtn" id="rsBack">← Back to sign in</button></div>
+  </form>
+
+  <form class="login-card hidden" id="regForm" autocomplete="off">
+    <div class="lg-brand"><img src="logo-sm.png" alt=""><span>AKS_VCS</span></div>
+    <h1>New user request</h1>
+    <p class="sub">Create your ID &amp; password and choose the access you need. The account works for 24 hours and your admin is informed instantly.</p>
+    <div id="rgErr" class="err hidden"></div>
+    <div id="rgForm">
+      <div class="field"><label for="rgName">Your name <span class="muted">(optional)</span></label><input class="input" id="rgName" maxlength="60" autocomplete="off"></div>
+      <div class="field"><label for="rgUser">Create User ID</label><input class="input" id="rgUser" maxlength="40" autocomplete="off" autocapitalize="off" placeholder="3 to 40 characters, no spaces"></div>
+      <div class="field"><label for="rgPw">Create Password</label><div class="pw"><input class="input" id="rgPw" type="password" autocomplete="new-password" placeholder="At least 6 characters"><button type="button" id="rgToggle">Show</button></div></div>
+      <div class="field"><label>Which access do you need?</label>
+        <div id="rgAcc" class="rg-acc"></div>
+        <div class="muted" style="font-size:12px;margin-top:6px">Chat is always included.</div>
+      </div>
+      <button class="btn block" id="rgGo" type="submit">Create</button>
+    </div>
+    <div id="rgDone" class="hidden"></div>
+    <div style="text-align:center;margin-top:14px"><button type="button" class="linkbtn" id="rgBack">← Back to sign in</button></div>
   </form>
   </div>
  </div>
@@ -114,7 +133,7 @@
   </main>
 </div>
 
-<script src="app.js?v=81"></script>
+<script src="app.js?v=82"></script>
 <script src="ui-plus.js?v=2" defer></script>
 <script src="ks-extras.js?v=3" defer></script>
 <script src="login-custom.js?v=1" defer></script>

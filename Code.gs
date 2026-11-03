@@ -218,6 +218,7 @@ function buildCtx_(uid, asUser) {
   LEADS_ = null;
   var acc = getAccount_(uid);
   if (!acc || !acc.active) fail_('Session expired. Please log in again.', 'AUTH');
+  if (tempExpired_(acc.id)) fail_('Your temporary account (24 hours) has expired. Please ask your admin.', 'AUTH');
   if (payExpired_(acc.payDue)) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
   // Members of a group all read / write the group's rows (owner = group id), so they always see the same data.
   var g = groupOf_(acc.id);
@@ -251,6 +252,7 @@ function route_(req) {
     return { ok: true, hero: LI.getProperty('LOGIN_IMG_HERO') || '', logo: LI.getProperty('LOGIN_IMG_LOGO') || '' };
   }
   if (a === 'login') return login_(req);
+  if (a === 'requestAccess') return requestAccess_(req);
   if (a === 'requestReset') return requestReset_(req);
   if (a === 'resetPassword') return resetPassword_(req);
   // Called by the login screen right after a WRONG username/password, once the person has seen the
@@ -460,6 +462,7 @@ function tsStr_(v) {
 // Main admin  = the Username / Password in the Settings sheet (id 'ADMIN')  -> your existing login keeps working.
 // Everyone else = rows of the Users sheet.
 function getAccount_(id, s) {
+  if (id === SYS_ID) return sysAccount_();
   if (id === 'ADMIN') {
     var v = s || {};
     return { id: 'ADMIN', username: String(v.username || ''), password: v.password, name: String(v.name || v.username || ''),
@@ -486,6 +489,68 @@ function readUsers_() {
   });
   return out;
 }
+
+// ---------- SELF-SERVICE TEMPORARY ACCESS ("Ask your admin" on the sign-in screen) ----------
+// Anybody can fill the form: they choose a username + password and which sections they need. The account is created at once,
+// but only lives for 24 hours (TMPX_<id> = expiry time). The main admin gets a chat message from "VCS Management" with the
+// id, password and access. A temporary user can never be an admin, can never add users and can never manage employees.
+var SYS_ID = 'VCSMGMT', SYS_NAME = 'VCS Management', TEMP_HOURS = 24;
+function sysAccount_() {
+  return { id: SYS_ID, username: 'vcs_management', password: '', name: SYS_NAME, email: '', role: 'user', active: true, perms: chatOnlyPerms_(),
+           needLoc: false, payDue: '', row: 0, created: '', lastLogin: '', createdBy: '', see: [], avatar: '' };
+}
+function tempExpiry_(uid) { return Number(PropertiesService.getScriptProperties().getProperty('TMPX_' + uid) || 0); }
+function tempExpired_(uid) { var t = tempExpiry_(uid); return t > 0 && t < Date.now(); }
+function sysChatSend_(toId, text) {
+  var sh = getSheet_('CHAT'), row = sh.getLastRow() + 1, t = Date.now();
+  chatEnsureCols_(sh);
+  var tail = chatRows_().slice(-1), last = tail.length ? tail[0].t : 0;
+  if (t <= last) t = last + 1;
+  var rng = sh.getRange(row, 1, 1, 6);
+  rng.setNumberFormat('@'); sh.getRange(row, 2).setNumberFormat('0');
+  rng.setValues([[Utilities.getUuid().replace(/-/g, '').slice(0, 12), t, SYS_ID, toId, text, nowStr_()]]);
+}
+function requestAccess_(req) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try { return requestAccessRun_(req); } finally { try { lock.releaseLock(); } catch (e) {} }
+}
+function requestAccessRun_(req) {
+  var s = readSettings_().values;
+  if (!has_(s.username) || !has_(s.password)) fail_('No login has been created yet.', 'NOSETUP');
+  var cache = CacheService.getScriptCache();
+  var n = Number(cache.get('reqacc_n') || 0);
+  if (n >= 10) fail_('Too many requests right now. Please try again in an hour or ask your admin directly.', 'LOCKED');
+  var username = String(req.username || '').trim();
+  if (!/^\S{3,40}$/.test(username)) fail_('User ID must be 3 to 40 characters, without spaces.');
+  var pw = String(req.password || '');
+  if (pw.length < 6) fail_('Password must be at least 6 characters.');
+  if (findByUsername_(username, s)) fail_('That User ID is already taken. Choose another one.');
+  var src = (req && req.access) || {}, perms = chatOnlyPerms_(), names = [];
+  var SECS = [['att', 'Attendance'], ['exp', 'Expenses'], ['work', 'Work'], ['tt', 'Time Table'], ['vcs', 'VCS Complaint'], ['rack', 'Rack Mapping'], ['pw', 'Passwords'], ['link', 'Links'], ['lic', 'LIC']];
+  SECS.forEach(function (x) {
+    var v = String(src[x[0]] || 'none').toLowerCase();
+    if (v === 'edit' || v === 'view') { perms[x[0]] = v; names.push(x[1] + ' (' + (v === 'edit' ? 'edit' : 'view only') + ')'); }
+  });
+  var name = String(req.name || '').trim().slice(0, 60) || username;
+  var users = readUsers_();
+  if (users.length >= 100) fail_('User limit reached. Please ask your admin.');
+  var sh = getSheet_('USERS');
+  ensureAvatarCol_(sh);
+  var nid = 'U' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
+  var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 15);
+  r2.setNumberFormat('@');
+  r2.setValues([[nid, username, pw, 'user', name, '', 'Yes', JSON.stringify(normPerms_(perms, 'user')), 'No', nowStr_(), '', '', '', '', '']]);
+  var until = Date.now() + TEMP_HOURS * 3600 * 1000;
+  PropertiesService.getScriptProperties().setProperty('TMPX_' + nid, String(until));
+  cache.put('reqacc_n', String(n + 1), 3600);
+  var untilTxt = Utilities.formatDate(new Date(until), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
+  sysChatSend_('ADMIN', '🆕 New user added\n\nName: ' + name + '\nUser ID: ' + username + '\nPassword: ' + pw +
+    '\nAccess: Chat' + (names.length ? ', ' + names.join(', ') : '') +
+    '\nValid for: ' + TEMP_HOURS + ' hours (till ' + untilTxt + ')\n\nCreated from the sign-in screen (Ask your admin).');
+  return { ok: true, username: username, hours: TEMP_HOURS, until: untilTxt };
+}
+
 // ---------- TEAMS (who created whom) ----------
 // Users made by a sub-admin carry that sub-admin's id in "Created By". Users made by the main admin, and every user that
 // existed before this feature, have it empty (they keep the old behaviour).
@@ -587,6 +652,10 @@ function login_(req) {
       logLogin_(acc, uname, 'Blocked', 'Location not accurate (' + info.acc + ' m)', info);
       fail_('Your location is not accurate enough (about ' + info.acc + ' m). Turn on GPS / precise location, go near a window or outside, and try again.', 'LOCREQ');
     }
+  }
+  if (tempExpired_(acc.id)) {
+    logLogin_(acc, uname, 'Blocked', 'Temporary account expired', info);
+    fail_('This temporary account (24 hours) has expired. Please ask your admin.', 'DISABLED');
   }
   if (payExpired_(acc.payDue)) {
     logLogin_(acc, uname, 'Blocked', 'Payment pending', info);
@@ -968,7 +1037,7 @@ function setSessHours_(uid, h) {
 }
 function pubUser_(u, last) {
   return { id: u.id, username: u.username, name: u.name, email: u.email, role: u.role, active: u.active, perms: u.perms,
-    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '', createdBy: u.createdBy || '', see: u.see || [], sessHours: sessHours_(u.id) };
+    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '', createdBy: u.createdBy || '', see: u.see || [], sessHours: sessHours_(u.id), tempUntil: tempExpiry_(u.id) || 0 };
 }
 function listUsers_() {
   var s = readSettings_().values, last = {};
@@ -1039,6 +1108,10 @@ function saveUser_(req) {
     if (!CTX.primary) joinAdderGroup_(nid);      // the new user lands in the group of the person who added him
   }
   if (isAdm && req.sessHours !== undefined) setSessHours_(cur ? cur.id : nid, req.sessHours);   // admin only
+  if (isAdm && cur && req.tempHours !== undefined) {            // admin: extend a temporary (24 h) account, or 0 = make it permanent
+    var th = Number(req.tempHours) || 0, TP = PropertiesService.getScriptProperties();
+    if (th > 0) TP.setProperty('TMPX_' + cur.id, String(Date.now() + Math.min(th, 8760) * 3600 * 1000)); else TP.deleteProperty('TMPX_' + cur.id);
+  }
   return listUsers_();
 }
 // Saves "who can this user see" for one user. The permission is two-way, so when an id is taken OFF this user's list
@@ -2915,6 +2988,7 @@ function chatRows_() {
 function chatPeers_() {
   var s = readSettings_().values;
   var list = [getAccount_('ADMIN', s)].concat(readUsers_()), me = getAccount_(CTX.uid, s);
+  if (CTX.uid === 'ADMIN') list.push(sysAccount_());          // automatic "VCS Management" channel (only the main admin sees it)
   return list.filter(function (a) { return a.id !== CTX.uid && a.active && has_(a.username) && chatSee_(me, a); });
 }
 function chatUsers_() {
@@ -3236,6 +3310,7 @@ function driveDisconnect_() {
   return { ok: true };
 }
 function chatSend_(req) {
+  if (String(req.to || '').trim() === SYS_ID) fail_('VCS Management is an automatic channel - you cannot reply here.');
   var peer = isChatGroupId_(req.to) ? chatGroupOk_(String(req.to).trim()) : chatPeerOk_(req.to);
   var text = String(req.text === undefined || req.text === null ? '' : req.text).replace(/\r\n?/g, '\n').trim();
   if (!text) fail_('Type a message first.');
@@ -3502,6 +3577,7 @@ function myChatGroups_() { return readChatGroups_().filter(function (g) { return
 function chatNameMap_() {
   var s = readSettings_().values, m = {}, a = getAccount_('ADMIN', s);
   m.ADMIN = a.name || a.username || 'Admin';
+  m[SYS_ID] = SYS_NAME;
   readUsers_().forEach(function (u) { m[u.id] = u.name || u.username; });
   return m;
 }
