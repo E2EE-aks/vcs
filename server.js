@@ -226,6 +226,9 @@ function makeApp(store, env) {
   // ---------- WhatsApp (per-user account linked by QR code; see wa-server.js) ----------
   const WA = require('./wa-server')({ env, warn, sign });
 
+  // ---------- Music tab: search + trending (see sp-server.js) ----------
+  const SP = require('./sp-server')({ env, warn });
+
   // ---------- Fingerprint / Face / screen-lock unlock (WebAuthn passkeys) ----------
   // The phone's own biometric check happens on the device; the server only stores a PUBLIC key per device
   // and verifies a signature over a one-time challenge. No fingerprint or face data ever leaves the phone.
@@ -1092,9 +1095,14 @@ function makeApp(store, env) {
     if (!r || !WA.actions.has(r.action)) return null;
     return Promise.resolve().then(() => WA.route(r)).catch(errOut);
   };
+  const fastSp = body => {                             // Music search never waits behind sheet saves
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !SP.actions.has(r.action)) return null;
+    return Promise.resolve().then(() => SP.route(r)).catch(errOut);
+  };
   const handle = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastTr(body));
+    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastTr(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);
