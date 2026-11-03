@@ -512,6 +512,13 @@ async function setAs(id){
 $('#asSel').onchange = e => setAs(e.target.value);
 async function loadGroups(){ try { S.groups = (await api('listGroups')).groups; } catch(e){ S.groups = S.groups || []; } }
 async function loadUsers(){ try { S.users = (await api('listUsers')).users; } catch(e){ S.users = S.users || []; } }
+/* new users (e.g. created from "Ask your admin") must show up in Users & access without a manual refresh */
+async function refreshUsersLive(){
+  const before = JSON.stringify(S.users || []);
+  await loadUsers();
+  if (JSON.stringify(S.users || []) !== before && (S.view === 'settings' || S.view === 'profile') && !document.querySelector('.overlay') && !typing()) render();
+}
+setInterval(() => { if (!document.hidden && S.token && S.d && (S.view === 'settings' || S.view === 'profile') && canAddUsers() && !S.setSec) refreshUsersLive(); }, 15000);
 async function loadLogs(){
   if (!isAdmin()) return;
   try { S.logs = (await api('loginLog', { limit:300 })).logs; } catch(e){ S.logs = S.logs || []; }
@@ -638,18 +645,23 @@ function permSummary(u){
   const p = u.perms || {}, L = { none:'no access', view:'view only', edit:'can edit' };
   return `Attendance: ${L[p.att]} · Expenses: ${L[p.exp]} · Work: ${L[p.work]} · Passwords: ${L[p.pw || 'edit']} · Links: ${L[p.link || 'edit']} · LIC: ${L[p.lic || 'edit']} · Rack Mapping: ${L[p.rack || 'edit']} · Time Table: ${L[p.tt || 'edit']} · Employees: ${p.emp ? 'can manage' : 'no'}${p.addUser ? ' · Can add users' : ''}`;
 }
+function tempLeftTxt(ms){
+  const m = Math.max(0, Math.floor(ms / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
+  return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + (m % 60) + 'm' : (m % 60) + 'm';
+}
 function usersCard(){
   const list = S.users || [];
   const rows = list.map(u => {
     const tag = u.primary ? '<span class="tag main">Main admin</span>' : u.role === 'admin' ? '<span class="tag adm">Admin</span>' : '<span class="tag">User</span>';
     const off = u.active ? '' : '<span class="tag off">Disabled</span>';
+    const tmp = u.tempUntil ? (u.tempUntil < Date.now() ? '<span class="tag off">⏳ Expired</span>' : `<span class="tag" style="background:#f59e0b22;color:#b45309">⏳ Temp · ${esc(tempLeftTxt(u.tempUntil - Date.now()))} left</span>`) : '';
     const last = u.lastLogin ? 'Last login ' + fmtLogTime(u.lastLogin) : 'Never signed in';
     const mine = S.me && u.id === S.me.id;
     const editable = !u.primary && (S.me.primary || u.role !== 'admin') && !(mine && !S.me.primary);
     const acts = (!mine && isAdmin() ? `<button class="btn ghost sm" onclick="setAs('${esc(u.id)}')" title="See this user’s data">👁 View</button>` : '')
       + (editable ? `<button class="btn ghost sm" onclick="userForm('${esc(u.id)}')">✎ Edit</button><button class="btn ghost sm" onclick="kickUser('${esc(u.id)}')" title="Sign out everywhere">⎋</button><button class="btn ghost sm" onclick="delUser('${esc(u.id)}')" title="Delete user">🗑</button>` : '');
     return `<div class="emp-item"><div class="avatar">${esc((u.name || u.username || '?').trim().charAt(0).toUpperCase())}</div>
-      <div class="info"><b>${esc(u.name || u.username)}${tag}${off}</b><span>@${esc(u.username)} · ${esc(last)}</span><span class="perm-sum">${esc(permSummary(u))}${u.needLoc ? ' · location required' : ''}</span></div>
+      <div class="info"><b>${esc(u.name || u.username)}${tag}${off}${tmp}</b><span>@${esc(u.username)} · ${esc(last)}</span><span class="perm-sum">${esc(permSummary(u))}${u.needLoc ? ' · location required' : ''}</span></div>
       <div class="acts">${acts}</div></div>`;
   }).join('');
   return `<div class="card"><h3>🛡️ Users & access <button class="btn sm" onclick="userForm()">＋ Add user</button></h3>
@@ -696,6 +708,8 @@ function userForm(id){
       ${isAdmin() ? `<label class="tog"><input type="checkbox" name="needLoc" ${x && x.needLoc ? 'checked' : ''}> Location required to sign in <span class="muted">(blocks login unless the phone gives a real GPS location, accurate to 500 m)</span></label>
       <div class="field"><label>Payment due until <span class="muted">(after this date/time, login is blocked with a payment-reminder message, until you clear or extend it)</span></label>
         <input class="input" type="datetime-local" name="payDue" value="${x && x.payDue ? x.payDue.replace(' ', 'T').slice(0,16) : ''}"></div>
+      ${x && x.tempUntil ? `<div class="field"><label>🕒 Temporary account <span class="muted">(expires ${esc(new Date(x.tempUntil).toLocaleString('en-IN'))})</span></label>
+        <select class="select" name="tempHours"><option value="">Keep as it is</option><option value="24">Extend: 24 hours from now</option><option value="72">Extend: 3 days from now</option><option value="168">Extend: 7 days from now</option><option value="720">Extend: 30 days from now</option><option value="0">Make permanent (never expires)</option></select></div>` : ''}
       <div class="field"><label>⏳ Stay signed in for <span class="muted">(only admins can change this. The user is signed out after this time and must log in again. It works on every phone this user is signed in on, and straight away)</span></label>
         <select class="select" name="sessHours">${[['0','Normal (6 hours)'],['1','1 hour'],['2','2 hours'],['5','5 hours'],['12','12 hours'],['24','1 day'],['72','3 days'],['168','7 days'],['720','30 days']].map(o => `<option value="${o[0]}" ${String(x && x.sessHours || 0) === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></div>` : ''}
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save user' : 'Add user'}</button></div></form>`, 'wide');
@@ -706,7 +720,7 @@ function userForm(id){
     ev.preventDefault(); const f = new FormData(ev.target), btn = ev.submitter; btn.disabled = true;
     try {
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
-        role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '', ...(isAdmin() ? { sessHours:Number(f.get('sessHours')) || 0 } : {}),
+        role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '', ...(isAdmin() ? { sessHours:Number(f.get('sessHours')) || 0 } : {}), ...(isAdmin() && f.get('tempHours') !== null && f.get('tempHours') !== '' ? { tempHours:Number(f.get('tempHours')) } : {}),
         ...(S.me.primary ? { see:f.getAll('see') } : {}),
         perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), vcs:f.get('p_vcs'), rack:f.get('p_rack'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
       S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
@@ -1796,6 +1810,7 @@ function go(v){
   $('#pageTitle').textContent = TITLES[v][0];
   $('#pageSub').textContent = TITLES[v][1];
   render(); window.scrollTo(0,0);
+  if ((v === 'settings' || v === 'profile') && canAddUsers()) refreshUsersLive();
   if (v === 'logins') loadLogs();
   if (v === 'deploy') depLoad();
   if (v === 'updates') updLoad();
@@ -1810,6 +1825,36 @@ $('#refreshBtn').onclick = async () => { try { S.bdays = null; await loadAll(); 
 /* ---------- payment / access countdown (Dashboard) ---------- */
 let payTimer = null;
 const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock
+function tmpCountdownHtml(){
+  if (!S.me || !S.me.tempUntilMs) return '';
+  return `<div id="tmpCd" class="card" style="margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;border-left:5px solid #f59e0b">
+    <div style="font-size:calc(26px*var(--fs))">🕒</div>
+    <div style="flex:1;min-width:200px"><div style="font-weight:700">Temporary account — expires on <span id="tmpCdDate"></span></div>
+      <div class="muted" style="font-size:calc(13px*var(--fs))">After this time you will be signed out automatically. Ask your admin to extend it.</div></div>
+    <div id="tmpCdTxt" style="font-weight:800;font-size:calc(20px*var(--fs));font-variant-numeric:tabular-nums"></div></div>`;
+}
+let tmpTimer = null;
+function tickTmp(){
+  const box = document.getElementById('tmpCd');
+  if (!box || !S.me || !S.me.tempUntilMs){ clearInterval(tmpTimer); tmpTimer = null; return; }
+  const left = S.me.tempUntilMs - (Date.now() + payOff());
+  document.getElementById('tmpCdDate').textContent = new Date(S.me.tempUntilMs).toLocaleString('en-IN', { day:'numeric', month:'short', year:'numeric', hour:'numeric', minute:'2-digit' });
+  if (left <= 0){
+    clearInterval(tmpTimer); tmpTimer = null;
+    box.style.borderLeftColor = 'var(--bad,#dc2626)';
+    document.getElementById('tmpCdTxt').textContent = 'Expired';
+    loadAll().then(render).catch(handleErr);        // server now answers "temporary account expired" -> signs the user out
+    return;
+  }
+  const t = Math.floor(left / 1000), d = Math.floor(t / 86400), h = Math.floor(t % 86400 / 3600), m = Math.floor(t % 3600 / 60), sec = t % 60, p2 = n => String(n).padStart(2, '0');
+  document.getElementById('tmpCdTxt').textContent = (d ? d + 'd ' : '') + p2(h) + 'h ' + p2(m) + 'm ' + p2(sec) + 's';
+  box.style.borderLeftColor = left > 6 * 3600e3 ? '#f59e0b' : 'var(--bad,#dc2626)';
+}
+function startTmp(){
+  clearInterval(tmpTimer); tmpTimer = null;
+  if (!document.getElementById('tmpCd')) return;
+  tickTmp(); tmpTimer = setInterval(tickTmp, 1000);
+}
 function payCountdownHtml(){
   if (!S.me || !S.me.payDueMs) return '';
   return `<div id="payCd" class="card" style="margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;border-left:5px solid var(--good,#16a34a)">
@@ -1848,9 +1893,9 @@ function render(){
   let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
-  v.innerHTML = banner() + (S.view === 'dashboard' ? payCountdownHtml() : '') + html;
+  v.innerHTML = banner() + (S.view === 'dashboard' ? tmpCountdownHtml() + payCountdownHtml() : '') + html;
   applyRO(v);
-  startPay(); startLic();
+  startTmp(); startPay(); startLic();
   const setAfter = () => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); };
   const after = ({settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion, telegram:() => { if (window.tgAfter) tgAfter(); }, whatsapp:() => { if (window.waAfter) waAfter(); }, music:() => { if (window.musicAfter) musicAfter(); }, youtube:() => { if (window.youtubeAfter) youtubeAfter(); }, websites:() => { if (window.websitesAfter) websitesAfter(); }})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise

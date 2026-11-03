@@ -614,7 +614,7 @@ function meOf_(values) {
     actLog: CTX.role === 'admin', actUsers: false,
     viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName, group: CTX.group ? groupInfo_(CTX.group) : null,
     sessHours: sessHours_(CTX.uid), birthday: String(PropertiesService.getScriptProperties().getProperty('BD_' + (CTX.uid || 'ADMIN')) || ''),
-    payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), serverNow: Date.now() };
+    payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), tempUntilMs: tempExpiry_(CTX.uid) || 0, serverNow: Date.now() };
 }
 
 // ---------- LOGIN ----------
