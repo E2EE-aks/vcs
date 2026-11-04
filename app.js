@@ -960,7 +960,7 @@ function photosCard(){
 /* =====================================================================
    VIEW: DEPLOY  (main admin only) — publish updated files to GitHub, Render redeploys by itself
    ===================================================================== */
-const DEP = { st:null, files:null, commits:[], hist:null, hpath:'', err:'', prog:null, timer:null, ticks:0 };
+const DEP = { rd:null, rdBusy:false, rdTimer:null, st:null, files:null, commits:[], hist:null, hpath:'', err:'', prog:null, timer:null, ticks:0 };
 const depBase = p => String(p).split('/').pop();
 const depBackend = p => /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i.test(depBase(p));
 const depWhen = t => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
@@ -969,7 +969,7 @@ async function depLoad(){
   if (DEP.st.configured){
     try { const r = await api('deployFiles'); DEP.files = r.files; DEP.commits = r.commits; DEP.err = ''; }
     catch(e){ DEP.err = e.message; DEP.files = DEP.files || []; }
-    await depPoll();
+    await depPoll(); await rdLoad(true);
     if (DEP.prog && DEP.prog.state === 'pending' && Date.now() - new Date(DEP.prog.at).getTime() < 15 * 60000) depWatch(true);   // a deploy is still running
   }
   if (S.view === 'deploy') render();
@@ -1046,6 +1046,7 @@ function vDeploy(){
     <div class="card" style="margin-bottom:16px"><h3>🕘 File history &amp; restore</h3>
       <div class="form-grid"><div class="field"><label>File</label><select class="select" id="depHSel"><option value="">Choose a file…</option>${fileOpts}</select></div></div>
       <div id="depHist">${DEP.hist ? (DEP.hist.map(c => commitRow(c, DEP.hpath)).join('') || '<div class="empty-state">No history for this file</div>') : '<div class="muted">Pick a file to see its older versions and bring one back.</div>'}</div></div>
+    <div class="card" style="margin-bottom:16px"><h3>🔁 Manual deploy on Render <button class="btn ghost sm" onclick="rdLoad()">↻ Refresh</button></h3><div id="rdBox">${rdHtml()}</div></div>
     <div class="card"><h3>📜 Recent changes on GitHub</h3>
       ${(DEP.commits || []).map(c => commitRow(c, '')).join('') || '<div class="empty-state">No commits</div>'}
       <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Files in the repository (${files.length})</summary>
@@ -1059,6 +1060,62 @@ function bindDeploy(){
     try { DEP.hist = (await api('deployHistory', { path:DEP.hpath })).commits; } catch(err){ DEP.hist = []; handleErr(err); }
     render();
   };
+}
+
+/* ---- Render: manual deploy + "is the latest commit live?" ---- */
+const RD_TXT = { live:['✅','Live'], build_in_progress:['🟡','Building…'], update_in_progress:['🟡','Going live…'], pre_deploy_in_progress:['🟡','Preparing…'], created:['🟡','Queued…'],
+  build_failed:['❌','Build failed'], update_failed:['❌','Failed to start'], pre_deploy_failed:['❌','Pre-deploy failed'], canceled:['⚪','Cancelled'], deactivated:['⚪','Replaced by a newer deploy'] };
+const rdBusyState = s => ['created', 'build_in_progress', 'update_in_progress', 'pre_deploy_in_progress'].includes(s);
+async function rdLoad(quiet){
+  try { DEP.rd = await api('renderStatus'); DEP.rd.err = ''; }
+  catch(e){ DEP.rd = DEP.rd || { deploys:[] }; DEP.rd.err = e.message; if (!quiet) handleErr(e); }
+  rdDraw(); rdWatch();
+}
+function rdDraw(){ const el = document.getElementById('rdBox'); if (S.view === 'deploy' && el) el.innerHTML = rdHtml(); }
+function rdWatch(){
+  clearInterval(DEP.rdTimer);
+  const d = DEP.rd && DEP.rd.deploys && DEP.rd.deploys[0];
+  if (!d || !rdBusyState(d.status)) return;
+  let n = 0;
+  DEP.rdTimer = setInterval(async () => {
+    if (S.view !== 'deploy' || !S.token || ++n > 150){ clearInterval(DEP.rdTimer); return; }
+    const was = d.status;
+    try { DEP.rd = await api('renderStatus'); DEP.rd.err = ''; } catch(e){ return; }
+    rdDraw(); const x = DEP.rd.deploys[0];
+    if (x && !rdBusyState(x.status)){ clearInterval(DEP.rdTimer); toast(x.status === 'live' ? '✅ Render: deploy is live' : '❌ Render: ' + (RD_TXT[x.status] || ['', x.status])[1], x.status !== 'live'); }
+  }, 5000);
+}
+function rdHtml(){
+  const r = DEP.rd;
+  if (!r) return '<div class="muted">Loading Render status…</div>';
+  const setup = `<p class="muted" style="margin-bottom:8px">Render is not connected yet. On Render → your service → <b>Environment</b>, add:</p>
+    <ul style="margin:0 0 10px 18px;line-height:1.7"><li><code>RENDER_API_KEY</code> — Render → Account Settings → <b>API Keys</b> → Create</li>
+      <li><code>RENDER_SERVICE_ID</code> — the <code>srv-…</code> id in your service URL / Settings</li></ul>
+    <p class="muted" style="font-size:calc(12.5px*var(--fs))">Only want the button (no status)? Add just <code>RENDER_DEPLOY_HOOK</code> (Settings → Deploy Hook) instead.</p>`;
+  if (!r.canDeploy) return setup;
+  const head = r.head, d0 = (r.deploys || [])[0];
+  let verdict = '';
+  if (head && r.canStatus){
+    const live = (r.deploys || []).find(x => x.status === 'live'), building = d0 && rdBusyState(d0.status);
+    const same = x => x && x.sha && x.sha.slice(0, 7) === head.short;
+    if (live && same(live)) verdict = `<div class="log-item"><div class="l1"><b>✅ Committed &amp; live</b></div><div class="l2">Latest commit <code>${esc(head.short)}</code> “${esc(head.msg)}” is running on Render.</div></div>`;
+    else if (building && same(d0)) verdict = `<div class="log-item"><div class="l1"><b>🟡 Committed — Render is deploying it…</b></div><div class="l2">Commit <code>${esc(head.short)}</code> · updates by itself every 5 seconds.</div></div>`;
+    else verdict = `<div class="log-item bad"><div class="l1"><b>⚠ Committed on GitHub, but NOT live on Render yet</b></div><div class="l2">Latest commit <code>${esc(head.short)}</code> “${esc(head.msg)}”. Tap <b>Deploy latest commit</b> below.</div></div>`;
+  } else if (head) verdict = `<div class="l2" style="margin-bottom:8px">Latest GitHub commit: <code>${esc(head.short)}</code> “${esc(head.msg)}” · ${esc(depWhen(head.at))}</div>`;
+  const rows = (r.deploys || []).map(x => { const t = RD_TXT[x.status] || ['•', x.status];
+    return `<div class="log-item"><div class="l1"><b>${t[0]} ${esc(t[1])}</b><span class="muted">${esc(depWhen(x.at))}</span></div>
+      <div class="l2">${x.sha ? `<code>${esc(x.sha.slice(0, 7))}</code> ` : ''}${esc(x.msg || (x.trigger === 'manual' ? 'Manual deploy' : x.trigger || ''))}</div></div>`; }).join('');
+  return `${r.err ? `<div class="log-item bad"><div class="l1"><b>${esc(r.err)}</b></div></div>` : ''}${verdict}
+    <div class="actions" style="margin:10px 0"><button class="btn" id="rdGo" onclick="rdDeploy(false)" ${DEP.rdBusy ? 'disabled' : ''}>🚀 Deploy latest commit</button>
+      <button class="btn ghost" onclick="rdDeploy(true)" ${DEP.rdBusy ? 'disabled' : ''}>🧹 Clear cache &amp; deploy</button></div>
+    ${r.canStatus ? rows || '<div class="muted">No deploys yet</div>' : '<div class="muted">Status is not shown because only the deploy hook is set. Add RENDER_API_KEY and RENDER_SERVICE_ID to see live status.</div>'}`;
+}
+async function rdDeploy(clear){
+  if (!await confirmBox('Deploy on Render now?', 'Render builds the latest GitHub commit and restarts the site (about 1–3 minutes). The old version keeps running until the new one is ready.' + (clear ? ' The build cache is cleared first, so it takes longer.' : ''), 'Deploy', false)) return;
+  DEP.rdBusy = true; rdDraw();
+  try { await api('renderDeploy', { clearCache: !!clear }); toast('Deploy started on Render'); await new Promise(r => setTimeout(r, 2500)); await rdLoad(true); }
+  catch(e){ handleErr(e); }
+  DEP.rdBusy = false; rdDraw();
 }
 const depB64 = buf => { const u = new Uint8Array(buf); let out = ''; for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(out); };
 const depFromB64 = b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };

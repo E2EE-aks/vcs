@@ -620,7 +620,7 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'verFiles', 'verBuild', 'verList', 'verTicket']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'verFiles', 'verBuild', 'verList', 'verTicket']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself (only a warning in the app, never blocks)
   const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60;   // generous limits: any file type (text or binary), many files
@@ -729,12 +729,39 @@ function makeApp(store, env) {
       return { ok: true, id: 'apk:' + aid, ticket: exp + '.' + updTicketSig('apk:' + aid, exp) };
     }
   }
+  // ---------- Render: manual deploy + status. Env on Render: RENDER_API_KEY + RENDER_SERVICE_ID (status and deploy), or only RENDER_DEPLOY_HOOK (deploy button only) ----------
+  const RD = { key: String(env.RENDER_API_KEY || '').trim(), svc: String(env.RENDER_SERVICE_ID || '').trim(), hook: String(env.RENDER_DEPLOY_HOOK || '').trim() };
+  async function rdApi(method, url, body) {
+    const r = await fetch('https://api.render.com/v1' + url, { method, headers: { Authorization: 'Bearer ' + RD.key, Accept: 'application/json', 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) globalThis.fail_(r.status === 401 ? 'Render rejected the API key. Check RENDER_API_KEY.' : r.status === 404 ? 'Render could not find the service. Check RENDER_SERVICE_ID (looks like srv-xxxxxxxx).' : 'Render error ' + r.status + ': ' + (j.message || ''), 'RENDER');
+    return j;
+  }
+  async function renderRoute(a, req, ghReady) {
+    const canStatus = !!(RD.key && RD.svc), canDeploy = canStatus || !!RD.hook;
+    if (a === 'renderStatus') {
+      const out = { ok: true, canStatus, canDeploy, deploys: [], head: null };
+      if (ghReady) { try { const c = await gh('GET', '/commits/' + encodeURIComponent(GH.branch)); out.head = { sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0], at: c.commit && c.commit.author ? c.commit.author.date : '' }; } catch (e) { out.headErr = e.message; } }
+      if (canStatus) {
+        const l = await rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=6');
+        out.deploys = (Array.isArray(l) ? l : []).map(x => x.deploy || x).map(d => ({ id: d.id, status: d.status, trigger: d.trigger || '', at: d.createdAt, done: d.finishedAt || '',
+          sha: d.commit ? String(d.commit.id || '') : '', msg: d.commit ? String(d.commit.message || '').split('\n')[0] : '' }));
+      }
+      return out;
+    }
+    if (!canDeploy) globalThis.fail_('Render is not connected. Add RENDER_API_KEY + RENDER_SERVICE_ID (or RENDER_DEPLOY_HOOK) on Render first.', 'NORENDER');
+    if (canStatus) { const d = await rdApi('POST', '/services/' + encodeURIComponent(RD.svc) + '/deploys', { clearCache: req.clearCache === true ? 'clear' : 'do_not_clear' }); return { ok: true, id: (d.deploy || d).id || '' }; }
+    const r = await fetch(RD.hook, { method: 'POST' });
+    if (!r.ok) globalThis.fail_('The Render deploy hook was refused (error ' + r.status + ').', 'RENDER');
+    return { ok: true, id: '' };
+  }
   async function deployRoute(req) {
     const uid = globalThis.checkToken_(req.token);
     if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
     if (uid !== 'ADMIN') globalThis.fail_('Only the main admin can use Deploy.', 'PERM');
     const a = req.action, ready = !!(GH.repo && GH.token);
     if (a === 'deployStatus') return { ok: true, configured: ready, repo: GH.repo, branch: GH.branch };
+    if (a === 'renderStatus' || a === 'renderDeploy') return renderRoute(a, req, ready);
     if (!ready) globalThis.fail_('GitHub is not connected yet. Add GITHUB_TOKEN and GITHUB_REPO on Render first.', 'NOGH');
     const S0 = globalThis.readSettings_().values, acc = globalThis.getAccount_('ADMIN', S0) || {};
     const ctx = { uid: 'ADMIN', username: acc.username || 'admin', name: acc.name || '' };
