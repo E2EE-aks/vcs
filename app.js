@@ -839,14 +839,45 @@ function logItem(l, compact){
     ${compact ? '' : `<div class="l2">🏠 ${esc(l.city || '—')}</div>
     <div class="l2">🌐 ${esc(l.ip || '—')}${l.deviceId ? ' · Device ID ' + esc(l.deviceId.slice(-6)) : ''}${l.tz ? ' · ' + esc(l.tz) : ''}${l.reason ? ' · ' + esc(l.reason) : ''}</div>`}
     ${photo ? `<div class="l2" style="display:flex;gap:10px;margin-top:8px;align-items:center">
-      📷 ${photoThumb(photo.front, 'Front camera')}${photoThumb(photo.back, 'Back camera')}
+      📷 ${photoThumb(photo.front, 'Front camera', '@' + l.username + ' · ' + fmtLogTime(l.time))}${photoThumb(photo.back, 'Back camera', '@' + l.username + ' · ' + fmtLogTime(l.time))}
     </div>` : ''}
   </div>`;
 }
-function photoThumb(src, label){
+function photoThumb(src, label, cap){
   return src
-    ? `<a href="${src}" target="_blank" rel="noopener" title="${esc(label)} — open full size"><img src="${src}" alt="${esc(label)}" style="width:92px;height:70px;object-fit:cover;border-radius:8px;border:1px solid var(--border,#ddd)"></a>`
+    ? `<img data-pv="${esc(label)}" data-cap="${esc(cap || '')}" src="${src}" alt="${esc(label)}" title="${esc(label)} — tap to open full screen" onclick="photoView(this)" style="width:92px;height:70px;object-fit:cover;border-radius:8px;border:1px solid var(--border,#ddd);cursor:zoom-in">`
     : '';
+}
+/* full-screen photo viewer: tap a thumbnail; ‹ › or swipe for the other camera; ✕, tap outside, Back or Esc to close; Save keeps a copy */
+function photoView(img){
+  const all = [...img.parentNode.querySelectorAll('img[data-pv]')]; let i = Math.max(0, all.indexOf(img));
+  const w = document.createElement('div');
+  w.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.96);display:flex;flex-direction:column;touch-action:manipulation';
+  const bt = 'background:rgba(255,255,255,.14);color:#fff;border:0;border-radius:12px;font-size:18px;min-width:44px;height:44px;cursor:pointer';
+  w.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:calc(10px + env(safe-area-inset-top,0px)) 12px 10px;color:#fff">
+      <div style="flex:1;min-width:0"><div id="pvT" style="font-weight:700;font-size:15px"></div><div id="pvC" style="opacity:.7;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div></div>
+      <button id="pvS" style="${bt};padding:0 14px;font-size:14px">⬇ Save</button><button id="pvX" style="${bt}">✕</button></div>
+    <div id="pvB" style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;position:relative;padding:0 0 calc(12px + env(safe-area-inset-bottom,0px))">
+      <img id="pvI" alt="" style="max-width:100%;max-height:100%;object-fit:contain">
+      ${all.length > 1 ? `<button id="pvP" style="${bt};position:absolute;left:10px">‹</button><button id="pvN" style="${bt};position:absolute;right:10px">›</button>` : ''}</div>`;
+  document.body.appendChild(w);
+  const el = q => w.querySelector(q);
+  const show = n => { i = (n + all.length) % all.length; const a = all[i];
+    el('#pvI').src = a.src; el('#pvT').textContent = a.dataset.pv + (all.length > 1 ? '  (' + (i + 1) + '/' + all.length + ')' : ''); el('#pvC').textContent = a.dataset.cap || ''; };
+  const close = () => { w.remove(); document.removeEventListener('keydown', key); window.removeEventListener('popstate', close); };
+  const key = e => { if (e.key === 'Escape') close(); else if (e.key === 'ArrowLeft') show(i - 1); else if (e.key === 'ArrowRight') show(i + 1); };
+  document.addEventListener('keydown', key);
+  try { history.pushState({ pv:1 }, ''); window.addEventListener('popstate', close, { once:true }); } catch (e) {}     // phone Back button closes the viewer
+  el('#pvX').onclick = () => { close(); try { if (history.state && history.state.pv) history.back(); } catch (e) {} };
+  el('#pvB').onclick = e => { if (e.target.id === 'pvB') el('#pvX').onclick(); };
+  if (all.length > 1){ el('#pvP').onclick = () => show(i - 1); el('#pvN').onclick = () => show(i + 1); }
+  let x0 = null; el('#pvB').addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive:true });
+  el('#pvB').addEventListener('touchend', e => { if (x0 === null || all.length < 2) return; const dx = e.changedTouches[0].clientX - x0; x0 = null; if (Math.abs(dx) > 50) show(i + (dx < 0 ? 1 : -1)); }, { passive:true });
+  el('#pvS').onclick = async () => {
+    try { const b = await (await fetch(all[i].src)).blob(); saveBlob('login-photo-' + all[i].dataset.pv.split(' ')[0].toLowerCase() + '-' + Date.now() + '.jpg', b); }
+    catch (e) { toast('Could not save the photo', true); }
+  };
+  show(i);
 }
 
 /* ---------- Activity log (every save / add / delete a user makes, not just sign-ins) ---------- */
@@ -946,7 +977,7 @@ function photoItem(p){
   return `<div class="log-item bad">
     <div class="l1"><b>@${esc(p.username)}</b><span class="muted">${esc(fmtLogTime(p.time))}</span></div>
     <div class="l2">${esc(p.reason || 'Wrong username/password')}</div>
-    <div class="l2" style="display:flex;gap:10px;margin-top:6px">${photoThumb(p.front, 'Front camera') || '<span class="muted" style="font-size:calc(12px*var(--fs))">no front photo</span>'}${photoThumb(p.back, 'Back camera') || '<span class="muted" style="font-size:calc(12px*var(--fs))">no back photo</span>'}</div>
+    <div class="l2" style="display:flex;gap:10px;margin-top:6px">${photoThumb(p.front, 'Front camera', '@' + p.username + ' · ' + fmtLogTime(p.time)) || '<span class="muted" style="font-size:calc(12px*var(--fs))">no front photo</span>'}${photoThumb(p.back, 'Back camera', '@' + p.username + ' · ' + fmtLogTime(p.time)) || '<span class="muted" style="font-size:calc(12px*var(--fs))">no back photo</span>'}</div>
   </div>`;
 }
 function photosCard(){
