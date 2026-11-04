@@ -1033,17 +1033,23 @@ function vDeploy(){
     <div class="card" style="margin-bottom:16px"><h3>🚀 Publish to GitHub</h3>
       <p class="muted" style="margin-bottom:12px">Repository <b>${esc(DEP.st.repo)}</b> · branch <b>${esc(DEP.st.branch)}</b>. Choose the updated files; they go to GitHub as <b>one commit</b> and Render redeploys by itself (about 1–2 minutes).</p>
       ${DEP.err ? `<div class="log-item bad"><div class="l1"><b>${esc(DEP.err)}</b></div></div>` : ''}
-      <div class="field"><label>Updated files <span class="muted">(app.js, style.css, index.html, server.js … you can pick several)</span></label>
+      <div class="field"><label>Files <span class="muted">(any file — app.js, style.css, index.html, images, fonts, zip … pick as many as you like)</span></label>
         <input class="input" type="file" id="depFiles" multiple></div>
       <div class="actions"><button class="btn" onclick="depReview()">Review &amp; publish →</button></div>
-      <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Safety: a JS/JSON file with a mistake is refused before it reaches GitHub. Changing <code>server.js</code>, <code>package.json</code> or other server files asks for an extra confirmation. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
+      <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">No file-type or small-size limit (up to 25 MB per file, 60 MB per upload). A JS/JSON mistake only shows a warning — you can always bring the old version back from File history. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
+    <div class="card" style="margin-bottom:16px"><h3>⬇️ Download website files</h3>
+      <p class="muted" style="margin-bottom:12px">Take a copy of the website exactly as it is on GitHub (<b>${esc(DEP.st.branch)}</b> branch).</p>
+      <div class="actions" style="margin-bottom:12px"><button class="btn" onclick="depZip()">⬇ Download whole website (ZIP)</button></div>
+      <div class="field"><label>Or one file</label>
+        <div style="display:flex;gap:8px"><select class="select" id="depDlSel" style="flex:1;min-width:0"><option value="">Choose a file…</option>${files.map(f => `<option value="${esc(f.path)}">${esc(f.path)}</option>`).join('')}</select>
+        <button class="btn soft" onclick="depDownload(document.getElementById('depDlSel').value)">⬇ Download</button></div></div></div>
     <div class="card" style="margin-bottom:16px"><h3>🕘 File history &amp; restore</h3>
       <div class="form-grid"><div class="field"><label>File</label><select class="select" id="depHSel"><option value="">Choose a file…</option>${fileOpts}</select></div></div>
       <div id="depHist">${DEP.hist ? (DEP.hist.map(c => commitRow(c, DEP.hpath)).join('') || '<div class="empty-state">No history for this file</div>') : '<div class="muted">Pick a file to see its older versions and bring one back.</div>'}</div></div>
     <div class="card"><h3>📜 Recent changes on GitHub</h3>
       ${(DEP.commits || []).map(c => commitRow(c, '')).join('') || '<div class="empty-state">No commits</div>'}
       <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Files in the repository (${files.length})</summary>
-        <div style="margin-top:8px">${files.map(f => `<div class="l2">📄 ${esc(f.path)} <span class="muted">${(f.size / 1024).toFixed(1)} KB</span></div>`).join('')}</div></details></div>`;
+        <div style="margin-top:8px">${files.map(f => `<div class="l2">📄 ${esc(f.path)} <span class="muted">${(f.size / 1024).toFixed(1)} KB</span> <button class="btn soft sm" style="margin-left:6px" onclick="depDownload('${esc(f.path)}')">⬇</button></div>`).join('')}</div></details></div>`;
 }
 function bindDeploy(){
   const sel = document.getElementById('depHSel');
@@ -1054,41 +1060,55 @@ function bindDeploy(){
     render();
   };
 }
+const depB64 = buf => { const u = new Uint8Array(buf); let out = ''; for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(out); };
+const depFromB64 = b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
 async function depReview(){
   const fl = [...(document.getElementById('depFiles').files || [])];
   if (!fl.length) return toast('Choose the files to publish first', true);
-  const bad = fl.find(f => !/\.(js|css|html|md|json|gs|txt|svg)$/i.test(f.name));
-  if (bad) return toast(bad.name + ' — only js, css, html, md, json, gs, txt, svg files can be published', true);
   const rows = []; let total = 0;
   for (const f of fl){
-    if (f.size > 900 * 1024) return toast(f.name + ' is too big (max 900 KB)', true);
-    total += f.size; const text = await f.text();
-    if (!text.trim()) return toast(f.name + ' is empty', true);
+    if (f.size > 25 * 1024 * 1024) return toast(f.name + ' is too big (max 25 MB per file)', true);
+    total += f.size;
     const m = (DEP.files || []).filter(x => depBase(x.path).toLowerCase() === f.name.toLowerCase());
-    rows.push({ name:f.name, text, size:f.size, matches:m });
+    rows.push({ name:f.name, file:f, size:f.size, matches:m });
   }
-  if (total > 1500 * 1024) return toast('The files together are too big for one upload', true);
+  if (total > 60 * 1024 * 1024) return toast('The files together are too big for one upload (max 60 MB)', true);
   const backend = rows.some(r => depBackend(r.name));
   const w = openModal(`<h3>Publish to GitHub</h3>
     <p class="sub">${esc(DEP.st.repo)} · ${esc(DEP.st.branch)} — one commit, then the site redeploys.</p>
-    ${rows.map((r, i) => `<div class="log-item"><div class="l1"><b>${esc(r.name)}</b> <span class="muted">${(r.size / 1024).toFixed(1)} KB</span></div>
+    ${rows.map((r, i) => `<div class="log-item"><div class="l1"><b>${esc(r.name)}</b> <span class="muted">${r.size > 1048576 ? (r.size / 1048576).toFixed(1) + ' MB' : (r.size / 1024).toFixed(1) + ' KB'}</span></div>
       <div class="l2">${r.matches.length > 1 ? `Replace: <select class="select" data-i="${i}">${r.matches.map(x => `<option>${esc(x.path)}</option>`).join('')}</select>`
-        : r.matches.length ? `Replaces <code>${esc(r.matches[0].path)}</code>` : `<span class="pill exp">NEW</span> not in the repository yet — will be added as <code>${esc(r.name)}</code>`}</div></div>`).join('')}
+        : r.matches.length ? `Replaces <code>${esc(r.matches[0].path)}</code>` : `<span class="pill exp">NEW</span> not in the repository yet — saved as:`}
+        ${!r.matches.length ? `<input class="input" data-p="${i}" value="${esc(r.name)}" style="margin-top:6px" placeholder="folder/file.ext">` : ''}</div></div>`).join('')}
     ${backend ? '<div class="log-item bad"><div class="l1"><b>⚠ This changes the server itself.</b></div><div class="l2">A mistake here can take the whole site down until you restore the old version (File history). The server restarts and running Ludo games end.</div></div>' : ''}
     <div class="field"><label>Note (optional)</label><input class="input" id="depMsg" maxlength="120" placeholder="What changed?"></div>
-    <div class="foot"><button class="btn ghost" data-x>Cancel</button><button class="btn" data-go>${backend ? 'I understand — publish' : 'Publish'}</button></div>`);
+    <div class="foot"><button class="btn ghost" data-x>Cancel</button><button class="btn" data-go>${backend ? 'Publish anyway' : 'Publish'}</button></div>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
   w.querySelector('[data-go]').onclick = async ev => {
     const btn = ev.currentTarget; btn.disabled = true;
-    const files = rows.map((r, i) => { const s = w.querySelector(`select[data-i="${i}"]`); return { path: s ? s.value : (r.matches[0] ? r.matches[0].path : r.name), content:r.text }; });
     try {
-      const r = await api('deployUpload', { files, message:(w.querySelector('#depMsg').value || '').trim(), confirmBackend:backend });
+      const files = [];
+      for (let i = 0; i < rows.length; i++){
+        const r = rows[i], s = w.querySelector(`select[data-i="${i}"]`), p = w.querySelector(`input[data-p="${i}"]`);
+        const path = (s ? s.value : (r.matches[0] ? r.matches[0].path : ((p && p.value.trim()) || r.name))).replace(/^\/+/, '');
+        files.push({ path, b64: depB64(await r.file.arrayBuffer()) });
+      }
+      const res = await api('deployUpload', { files, message:(w.querySelector('#depMsg').value || '').trim(), confirmBackend:true });
       w.remove();
-      if (r.unchanged) toast('Nothing changed — these files are already the same on GitHub');
-      else { toast('Published ' + r.changed.length + ' file' + (r.changed.length === 1 ? '' : 's') + ' — watch the Live status card'); document.getElementById('depFiles').value = ''; }
-      await depLoad(); if (!r.unchanged) depWatch();
+      if (res.unchanged) toast('Nothing changed — these files are already the same on GitHub');
+      else { toast('Published ' + res.changed.length + ' file' + (res.changed.length === 1 ? '' : 's') + ' — watch the Live status card'); document.getElementById('depFiles').value = ''; }
+      if (res.warnings && res.warnings.length) setTimeout(() => toast('⚠ Published, but check: ' + res.warnings.join(' | '), true), 1200);
+      await depLoad(); if (!res.unchanged) depWatch();
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
+}
+async function depDownload(path){
+  if (!path) return toast('Choose a file first', true);
+  try { const r = await api('deployDownload', { path }); saveBlob(r.name, new Blob([depFromB64(r.b64)])); toast('Downloaded ' + r.name); } catch(e){ handleErr(e); }
+}
+async function depZip(){
+  toast('Preparing the ZIP…');
+  try { const r = await api('deployZip'); saveBlob(r.name, new Blob([depFromB64(r.b64)], { type:'application/zip' })); toast('Downloaded ' + r.name); } catch(e){ handleErr(e); }
 }
 async function depRestore(path, sha){
   const backend = depBackend(path);
@@ -3811,14 +3831,18 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
     const cam = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8a2 2 0 0 1 2-2h1.6l1.2-1.8h6.4L16.4 6H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.4"/></svg>';
     const head = `<div class="tg-top"><button type="button" class="tg-av" ${found.photo ? 'onclick="setOpen(\'photo\')"' : ''} aria-label="Profile photo"><span class="tg-pic" style="${img ? `background-image:url('${esc(img)}')` : ''}">${img ? '' : esc(nm.trim().charAt(0).toUpperCase())}</span><span class="tg-cam">${cam}</span></button>
       <div class="tg-name">${esc(nm)}</div><div class="tg-sub">${esc(role)}${me.username ? ' • @' + esc(me.username) : ''}</div></div>`;
-    const navItem = v => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (!b || b.classList.contains('hidden') || b.classList.contains('th-off')) return '';
+    const navItem = v => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (!b || b.classList.contains('hidden') || b.classList.contains('th-off') || b.classList.contains('ks-del')) return ''; if (window.bbPlace && bbPlace(v) !== 'profile') return '';
       const ic = (b.querySelector('.ico') || {}).textContent || '•', t = TITLES[v] || [v, ''];
       return `<button type="button" class="tg-item" data-q="${esc((t[0] + ' ' + t[1]).toLowerCase())}" onclick="go('${v}')"><span class="tg-ic" style="--c:${TGC[v] || '#3b82f6'}">${ic}</span><span class="tg-tx"><b>${esc(t[0])}</b><small>${esc(t[1])}</small></span></button>`; };
     const cards = groups.map(([g, keys]) => { const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
       const extra = /Version Control/.test(g) ? navItem('vcs') + navItem('version') + navItem('logins') + navItem('deploy') + navItem('updates') : '';
       return (ks.length || extra) ? `<section class="tg-grp"><div class="tg-gl">${esc(g)}</div><div class="tg-card">${extra}${ks.map(tgItem).join('')}</div></section>` : ''; }).join('');
+    const DEFP = ['vcs', 'version', 'logins', 'deploy', 'updates', 'profile', 'settings'];
+    const moved = window.bbPlace ? [...document.querySelectorAll('#nav [data-v]')].map(x => x.dataset.v).filter(v => !DEFP.includes(v) && bbPlace(v) === 'profile').map(navItem).join('') : '';
+    const manageRow = window.bbManage ? `<section class="tg-grp"><div class="tg-card"><button type="button" class="tg-item" data-q="manage menu move delete bar more profile" onclick="bbManage()"><span class="tg-ic" style="--c:#0ea5e9">🧩</span><span class="tg-tx"><b>Manage menu</b><small>Move options between Bar, More and Profile, or delete them</small></span></button></div></section>` : '';
+    const movedHtml = manageRow + (moved ? `<section class="tg-grp"><div class="tg-gl">Moved here</div><div class="tg-card">${moved}</div></section>` : '');
     const left = Object.keys(found).filter(k => !used.has(k));
-    return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards +
+    return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards + movedHtml +
       (left.length ? `<section class="tg-grp"><div class="tg-gl">More</div><div class="tg-card">${left.map(tgItem).join('')}</div></section>` : '') + '<div class="empty-state hidden" id="setNone">No setting matches your search</div>';
   };
   const search = `<div class="set-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>`;

@@ -620,16 +620,15 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'verFiles', 'verBuild', 'verList', 'verTicket']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'verFiles', 'verBuild', 'verList', 'verTicket']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
-  const DEP_EXT = /\.(js|css|html|md|json|gs|txt|svg)$/i;
-  const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself
-  const DEP_MAX = 900 * 1024, DEP_TOTAL = 1500 * 1024;
+  const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself (only a warning in the app, never blocks)
+  const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60;   // generous limits: any file type (text or binary), many files
   const depBase = p => String(p).split('/').pop();
   function depPathOk(p) {
     p = String(p || '');
-    return p.length > 0 && p.length < 200 && /^[\w.\- \/]+$/.test(p) && !p.startsWith('/') && !p.includes('..') && !p.includes('//')
-      && p.split('/').every(s => s && !s.startsWith('.') && s !== 'node_modules') && DEP_EXT.test(p);
+    return p.length > 0 && p.length < 240 && !/[\\:*?"<>|\x00-\x1f]/.test(p) && !p.startsWith('/') && !p.includes('..') && !p.includes('//')
+      && p.split('/').every(s => s && s !== '.git' && s !== 'node_modules');
   }
   async function gh(method, url, body) {
     const r = await fetch('https://api.github.com/repos/' + GH.repo + url, { method,
@@ -647,26 +646,33 @@ function makeApp(store, env) {
     return j;
   }
   const ghPath = p => p.split('/').map(encodeURIComponent).join('/');
-  const gitBlobSha = text => crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob ' + Buffer.byteLength(text) + '\0'), Buffer.from(text, 'utf8')])).digest('hex');
-  function depCheckSyntax(path, text) {
+  const gitBlobSha = buf => crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob ' + buf.length + '\0'), buf])).digest('hex');
+  function depCheckSyntax(path, buf) {          // returns a warning text (never blocks the upload)
     try {
+      const text = buf.toString('utf8');
       if (/\.(js|gs)$/i.test(path)) new vm.Script(text.replace(/^#!.*/, ''), { filename: path });
       else if (/\.json$/i.test(path)) JSON.parse(text);
-    } catch (e) { globalThis.fail_('"' + path + '" has an error and was NOT published: ' + e.message, 'SYNTAX'); }
+    } catch (e) { return path + ': ' + e.message; }
+    return '';
   }
   const depCommits = list => (Array.isArray(list) ? list : []).map(c => ({ sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0],
     by: c.commit && c.commit.author ? c.commit.author.name : '', at: c.commit && c.commit.author ? c.commit.author.date : '' }));
   // ONE commit for all the files (so Render redeploys once, with a consistent set of files)
-  async function depCommit(files, message) {
+  async function depCommit(files, message) {          // files: [{ path, buf: Buffer }]
     const br = encodeURIComponent(GH.branch);
     const ref = await gh('GET', '/git/ref/heads/' + br), head = ref.object.sha;
     const hc = await gh('GET', '/git/commits/' + head);
     const tree = await gh('GET', '/git/trees/' + hc.tree.sha + '?recursive=1');
     const cur = new Map((tree.tree || []).filter(x => x.type === 'blob').map(x => [x.path, x.sha]));
-    const changed = files.filter(f => cur.get(f.path) !== gitBlobSha(f.content));
+    const changed = files.filter(f => cur.get(f.path) !== gitBlobSha(f.buf));
     const skipped = files.filter(f => !changed.includes(f)).map(f => f.path);
     if (!changed.length) return { unchanged: true, skipped };
-    const nt = await gh('POST', '/git/trees', { base_tree: hc.tree.sha, tree: changed.map(f => ({ path: f.path, mode: '100644', type: 'blob', content: f.content })) });
+    const entries = [];
+    for (const f of changed) {                      // every file goes up as a blob, so text and binary (images, zip, fonts …) work the same
+      const bl = await gh('POST', '/git/blobs', { content: f.buf.toString('base64'), encoding: 'base64' });
+      entries.push({ path: f.path, mode: '100644', type: 'blob', sha: bl.sha });
+    }
+    const nt = await gh('POST', '/git/trees', { base_tree: hc.tree.sha, tree: entries });
     const nc = await gh('POST', '/git/commits', { message, tree: nt.sha, parents: [head] });
     await gh('PATCH', '/git/refs/heads/' + br, { sha: nc.sha });
     return { sha: String(nc.sha).slice(0, 7), url: nc.html_url, changed: changed.map(f => ({ path: f.path, isNew: !cur.has(f.path) })), skipped };
@@ -734,7 +740,7 @@ function makeApp(store, env) {
     const ctx = { uid: 'ADMIN', username: acc.username || 'admin', name: acc.name || '' };
     if (a === 'deployFiles') {
       const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
-      const files = (t.tree || []).filter(x => x.type === 'blob' && depPathOk(x.path)).map(x => ({ path: x.path, size: x.size || 0 }));
+      const files = (t.tree || []).filter(x => x.type === 'blob' && depPathOk(x.path)).slice(0, 3000).map(x => ({ path: x.path, size: x.size || 0 }));
       const cm = await gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&per_page=15');
       return { ok: true, files, commits: depCommits(cm) };
     }
@@ -762,31 +768,45 @@ function makeApp(store, env) {
     }
     if (a === 'deployUpload') {
       const files = Array.isArray(req.files) ? req.files : [];
-      if (!files.length || files.length > 20) globalThis.fail_('Choose between 1 and 20 files.', 'DEPLOY');
-      let total = 0; const seen = new Set();
+      if (!files.length || files.length > DEP_FILES) globalThis.fail_('Choose between 1 and ' + DEP_FILES + ' files.', 'DEPLOY');
+      let total = 0; const seen = new Set(), bufs = [], warn = [];
       for (const f of files) {
-        if (!f || !depPathOk(f.path) || typeof f.content !== 'string' || !f.content.length) globalThis.fail_('"' + (f && f.path) + '" is not an allowed file (allowed: js, css, html, md, json, gs, txt, svg).', 'DEPLOY');
+        if (!f || !depPathOk(f.path)) globalThis.fail_('"' + (f && f.path) + '" is not a valid file path.', 'DEPLOY');
         if (seen.has(f.path)) globalThis.fail_('"' + f.path + '" was chosen twice.', 'DEPLOY'); seen.add(f.path);
-        const n = Buffer.byteLength(f.content); total += n;
-        if (n > DEP_MAX || total > DEP_TOTAL) globalThis.fail_('The files are too big for one upload.', 'DEPLOY');
-        depCheckSyntax(f.path, f.content);
+        const buf = typeof f.b64 === 'string' ? Buffer.from(f.b64, 'base64') : Buffer.from(String(f.content || ''), 'utf8');
+        total += buf.length;
+        if (buf.length > DEP_MAX || total > DEP_TOTAL) globalThis.fail_('The files are too big for one upload (max ' + (DEP_MAX / 1048576) + ' MB each, ' + (DEP_TOTAL / 1048576) + ' MB together).', 'DEPLOY');
+        const w = depCheckSyntax(f.path, buf); if (w) warn.push(w);
+        bufs.push({ path: f.path, buf });
       }
-      if (files.some(f => DEP_BACKEND.test(depBase(f.path))) && req.confirmBackend !== true) globalThis.fail_('Confirm that you are changing the server itself.', 'CONFIRM');
-      const msg = String(req.message || '').trim().slice(0, 120) || ('Update ' + files.map(f => depBase(f.path)).join(', ') + ' (from the app)');
-      const r = await depCommit(files.map(f => ({ path: f.path, content: f.content })), msg);
+      const msg = String(req.message || '').trim().slice(0, 120) || ('Update ' + bufs.map(f => depBase(f.path)).slice(0, 6).join(', ') + ' (from the app)');
+      const r = await depCommit(bufs, msg);
       if (!r.unchanged) globalThis.logActivity_('deployUpload', ctx, { path: r.changed.map(x => x.path).join(', ') });
-      return Object.assign({ ok: true }, r);
+      return Object.assign({ ok: true, warnings: warn }, r);
     }
     if (a === 'deployRestore') {
       const path = String(req.path || ''), sha = String(req.sha || '');
       if (!depPathOk(path) || !/^[0-9a-f]{7,40}$/.test(sha)) globalThis.fail_('Invalid request.', 'DEPLOY');
-      if (DEP_BACKEND.test(depBase(path)) && req.confirmBackend !== true) globalThis.fail_('Confirm that you are changing the server itself.', 'CONFIRM');
       const old = await gh('GET', '/contents/' + ghPath(path) + '?ref=' + sha);
       if (!old || !old.content) globalThis.fail_('Could not read that version.', 'DEPLOY');
-      const text = Buffer.from(old.content, 'base64').toString('utf8');
-      const r = await depCommit([{ path, content: text }], 'Restore ' + depBase(path) + ' to ' + sha.slice(0, 7) + ' (from the app)');
+      const r = await depCommit([{ path, buf: Buffer.from(old.content, 'base64') }], 'Restore ' + depBase(path) + ' to ' + sha.slice(0, 7) + ' (from the app)');
       if (!r.unchanged) globalThis.logActivity_('deployRestore', ctx, { path });
       return Object.assign({ ok: true }, r);
+    }
+    if (a === 'deployDownload') {                  // one file of the website, sent back as base64 so the app can save it
+      const path = String(req.path || ''); if (!depPathOk(path)) globalThis.fail_('Invalid file.', 'DEPLOY');
+      const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
+      const hit = (t.tree || []).find(x => x.type === 'blob' && x.path === path);
+      if (!hit) globalThis.fail_('"' + path + '" is not in the repository.', 'DEPLOY');
+      const bl = await gh('GET', '/git/blobs/' + hit.sha);
+      return { ok: true, name: depBase(path), path, b64: String(bl.content || '').replace(/\s/g, '') };
+    }
+    if (a === 'deployZip') {                       // the whole website (current branch) as a ZIP
+      const r = await fetch('https://api.github.com/repos/' + GH.repo + '/zipball/' + encodeURIComponent(GH.branch), { redirect: 'follow',
+        headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } });
+      if (!r.ok) globalThis.fail_('GitHub could not make the ZIP (error ' + r.status + '). Check the token has Contents access.', 'GITHUB');
+      const buf = Buffer.from(await r.arrayBuffer());
+      return { ok: true, name: (GH.repo.split('/').pop() || 'website') + '-' + GH.branch + '.zip', b64: buf.toString('base64') };
     }
   }
 
@@ -1248,7 +1268,8 @@ function start(app, env) {
     }
     if (rq.method === 'GET') return send(200, { ok: true, app: 'Attendance & Expense Tracker API', time: new Date().toISOString() });
     let body = '';
-    rq.on('data', c => { body += c; if (body.length > 2e6) rq.destroy(); });
+    let lim = 2e6;
+    rq.on('data', c => { body += c; if (body.length < 800 && /"action"\s*:\s*"deployUpload"/.test(body)) lim = 90e6; if (body.length > lim) rq.destroy(); });
     rq.on('end', async () => { let out; try { out = await app.handle(body); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
   }));
 }

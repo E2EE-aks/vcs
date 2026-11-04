@@ -105,3 +105,21 @@
 @keyframes bbPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 @keyframes bbTile{from{opacity:0;transform:translateY(14px) scale(.9)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){#btmBar,#btmBar *,#btmSheet *{animation:none!important;transition:none!important}}
+
+/* v10: Manage menu (move / delete options) */
+#nav button.ks-del{display:none!important}
+#btmSheet .bs-hb{display:flex;gap:8px;align-items:center}
+#btmSheet .bs-sub{margin:14px 0 6px;font-weight:700;font-size:12.5px;color:var(--muted,#64748b);text-transform:uppercase;letter-spacing:.04em}
+#btmSheet .mg-none{padding:14px;text-align:center;color:var(--muted,#64748b);font-size:13px}
+#btmSheet .mg-l{display:flex;flex-direction:column;gap:8px}
+#btmSheet .mg-r{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--ink)}
+#btmSheet .mg-r .mg-i{font-size:20px;line-height:1;width:26px;text-align:center;flex:none}
+#btmSheet .mg-r>b{flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#btmSheet .mg-seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;flex:none}
+#btmSheet .mg-seg button{border:0;border-right:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-size:11.5px;font-weight:600;padding:6px 8px;cursor:pointer;width:auto;height:auto;border-radius:0}
+#btmSheet .mg-seg button:last-child{border-right:0}
+#btmSheet .mg-seg button.on{background:var(--brand,#4f46e5);color:#fff}
+#btmSheet .mg-lock{font-size:11px;color:var(--muted,#64748b);flex:none}
+#btmSheet .mg-d,#btmSheet .mg-rs{border:0;background:var(--soft,#f1f5f9);color:var(--ink);cursor:pointer;font:inherit;font-size:13px;border-radius:10px;padding:6px 9px;width:auto;height:auto;flex:none}
+#btmSheet .mg-d.arm{background:#dc2626;color:#fff;font-size:11.5px;font-weight:700}
+#btmSheet .mg-d0{width:34px;flex:none}

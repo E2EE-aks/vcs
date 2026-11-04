@@ -3,6 +3,7 @@
    - long-press Profile = switch user (accounts that signed in on this phone)
    - Profile › Bottom bar = size, font, colours, icons (saved on this phone)
    Pure add-on: reads the existing side menu (#nav) and S/go/render from app.js. */
+/* v10: Profile › Manage menu — move any option between Bottom bar / More / Profile, or delete (and restore) it. */
 (function(){
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
@@ -26,17 +27,39 @@
     [].forEach.call(b.childNodes, function(n){ if (n.nodeType === 3) txt += n.nodeValue; });
     return { id: b.dataset.v, ic: ic ? ic.textContent : '•', lb: txt.trim() || b.dataset.v };
   }
-  function usable(b){ return b && !b.classList.contains('hidden') && !b.classList.contains('th-off'); }
+  function usable(b){ return b && !b.classList.contains('hidden') && !b.classList.contains('th-off') && !b.classList.contains('ks-del'); }
 
   /* ---------- customisation (saved on this phone) ---------- */
-  var KEY = 'ks_bb_v1', DEF = { scale: 100, fs: 12, ic: 26, r: 30, bg: '', tx: '', on: '', labels: 1, pos: 'bottom', anim: 'pop', icons: {} };
+  var KEY = 'ks_bb_v1', DEF = { scale: 100, fs: 12, ic: 26, r: 30, bg: '', tx: '', on: '', labels: 1, pos: 'bottom', anim: 'pop', icons: {}, place: {} };
   function loadCfg(){
     var c = {}; try { c = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) {}
     var o = {}; Object.keys(DEF).forEach(function(k){ o[k] = c[k] !== undefined ? c[k] : DEF[k]; });
-    o.icons = (c.icons && typeof c.icons === 'object') ? c.icons : {}; return o;
+    o.icons = (c.icons && typeof c.icons === 'object') ? c.icons : {};
+    o.place = (c.place && typeof c.place === 'object') ? c.place : {}; return o;
   }
   var cfg = loadCfg();
   function saveCfg(){ try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) {} try { if (window.thPush) thPush(); } catch (e) {} }
+
+  /* ---------- where every option lives: bar | more | profile | deleted ---------- */
+  var LOCK = ['dashboard', 'profile'];                 // always on the bar
+  var NODEL = ['dashboard', 'profile', 'settings'];    // can't be deleted
+  var MAXBAR = 6;
+  var DEFPLACE = { dashboard: 'bar', profile: 'bar', chat: 'bar', telegram: 'bar', whatsapp: 'bar', mail: 'bar', settings: 'profile', vcs: 'profile', version: 'profile', logins: 'profile', deploy: 'profile', updates: 'profile' };
+  function place(id){
+    if (LOCK.indexOf(id) > -1) return 'bar';
+    var p = cfg.place[id];
+    if (p === 'deleted' && NODEL.indexOf(id) > -1) p = '';
+    if (p === 'bar' || p === 'more' || p === 'profile' || p === 'deleted') return p;
+    return DEFPLACE[id] || 'more';
+  }
+  window.bbPlace = place;
+  function barIds(){
+    var ids = [];
+    FIXED.forEach(function(f){ if (place(f[0]) === 'bar') ids.push(f[0]); });
+    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ var id = b.dataset.v; if (ids.indexOf(id) < 0 && place(id) === 'bar') ids.push(id); });
+    return ids;
+  }
+  function applyPlace(){ [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ b.classList.toggle('ks-del', place(b.dataset.v) === 'deleted'); }); }
 
   var bar = document.createElement('nav'); bar.id = 'btmBar'; bar.className = 'hidden'; bar.setAttribute('aria-label', 'Main');
   var sheet = document.createElement('div'); sheet.id = 'btmSheet'; sheet.className = 'hidden';
@@ -65,19 +88,21 @@
     try { me = S.me || {}; nm = (me.name || me.username || 'U').trim().charAt(0).toUpperCase() || 'U'; if (me.id && typeof avSrc === 'function') src = avSrc(me.id) || ''; } catch (e) {}
     return '<span class="bav"' + (src ? ' style="background-image:url(&quot;' + esc(src) + '&quot;)"' : '') + '>' + (src ? '' : esc(nm)) + '</span>';
   }
-  function iconFor(id){
+  function iconFor(id, emo){
     var o = (cfg.icons[id] || '').trim();
     if (o) return '<span class="bemo">' + esc(o) + '</span>';
-    return id === 'profile' ? avatarIcon() : ICON[id];
+    if (id === 'profile') return avatarIcon();
+    return ICON[id] || '<span class="bemo">' + esc(emo || '•') + '</span>';
   }
   var lastHtml = '';
   function draw(){
     var h = '';
-    FIXED.forEach(function(f){
-      var b = navBtn(f[0]); if (!usable(b)) return;
+    applyPlace();
+    barIds().forEach(function(id){
+      var b = navBtn(id); if (!usable(b)) return;
       var i = info(b), badge = '';
-      if (f[0] === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
-      h += '<button type="button" data-go="' + f[0] + '"><span class="bi">' + iconFor(f[0]) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
+      if (id === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
+      h += '<button type="button" data-go="' + id + '"><span class="bi">' + iconFor(id, i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
     h = '<i class="bb-ind"></i>' + h;
     h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + iconFor('all') + '</span><small>More</small></button>';
@@ -87,7 +112,7 @@
   }
   function mark(){
     var cur = ''; try { cur = S.view || ''; } catch (e) {}
-    var inFixed = FIXED.some(function(f){ return f[0] === cur; }), inProf = PROF.indexOf(cur) > -1;
+    var inFixed = barIds().indexOf(cur) > -1, inProf = cur === 'profile' || (!inFixed && place(cur) === 'profile');
     [].forEach.call(bar.querySelectorAll('[data-go]'), function(b){ b.classList.toggle('on', b.dataset.go === 'profile' ? inProf : b.dataset.go === cur); });
     var a = $('#btmAll'); if (a) a.classList.toggle('on', !!cur && !inFixed && !inProf);
   }
@@ -110,13 +135,47 @@
 
   var openedAt = 0;
   function drawSheet(){
-    var h = '<div class="bs-card"><div class="bs-h"><b>More</b><button type="button" data-x="1" aria-label="Close">✕</button></div><div class="bs-g">';
+    var h = '<div class="bs-card"><div class="bs-h"><b>More</b><span class="bs-hb"><button type="button" class="bs-ed" data-manage="1" aria-label="Manage menu" title="Manage menu">✎</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div><div class="bs-g">';
     var n = 0;
     [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
-      if (!usable(b) || EXC.indexOf(b.dataset.v) > -1) return; var i = info(b);
+      if (!usable(b) || place(b.dataset.v) !== 'more') return; var i = info(b);
       h += '<button type="button" style="--i:' + (n++) + '" data-go="' + esc(i.id) + '"><span>' + esc(i.ic) + '</span><small>' + esc(i.lb) + '</small></button>';
     });
+    if (!n) h += '<div class="mg-none" style="grid-column:1/-1">Nothing here. Tap ✎ to move options into More.</div>';
     sheet.innerHTML = h + '</div></div>';
+  }
+  function drawManage(){
+    var rows = '', del = '', nBar = 0;
+    var seg = function(id, p){ return [['bar', 'Bar'], ['more', 'More'], ['profile', 'Profile']].map(function(o){ return '<button type="button" class="' + (p === o[0] ? 'on' : '') + '" data-mv="' + esc(id) + '|' + o[0] + '">' + o[1] + '</button>'; }).join(''); };
+    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
+      if (b.classList.contains('hidden') || b.classList.contains('th-off')) return;
+      var i = info(b), p = place(i.id);
+      if (p === 'deleted'){ del += '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b><button type="button" class="mg-rs" data-res="' + esc(i.id) + '">↩ Restore</button></div>'; return; }
+      if (p === 'bar') nBar++;
+      rows += '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b>' +
+        (LOCK.indexOf(i.id) > -1 ? '<span class="mg-lock">always on bar</span>' : '<span class="mg-seg">' + seg(i.id, p) + '</span>') +
+        (NODEL.indexOf(i.id) > -1 ? '<span class="mg-d0"></span>' : '<button type="button" class="mg-d" data-del="' + esc(i.id) + '" aria-label="Delete">🗑</button>') + '</div>';
+    });
+    sheet.innerHTML = '<div class="bs-card"><div class="bs-h"><b>Manage menu</b><span class="bs-hb"><button type="button" data-back="1" aria-label="Back to More" title="Back">‹</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div>' +
+      '<p class="muted" style="font-size:12.5px;margin:0 0 10px">Choose where each option lives: <b>Bar</b> (bottom bar, max ' + MAXBAR + ' — now ' + nBar + '), <b>More</b>, or <b>Profile</b>. 🗑 deletes an option (you can restore it below).</p>' +
+      '<div class="mg-l">' + rows + '</div>' + (del ? '<div class="bs-sub">Deleted</div><div class="mg-l">' + del + '</div>' : '') + '</div>';
+  }
+  function redrawManage(){ var c = sheet.querySelector('.bs-card'), t = c ? c.scrollTop : 0; drawManage(); c = sheet.querySelector('.bs-card'); if (c) c.scrollTop = t; }
+  function say(m){ try { if (typeof toast === 'function') toast(m); } catch (e) {} }
+  function commit(){
+    saveCfg(); applyPlace(); lastHtml = ''; draw(); requestAnimationFrame(gap);
+    if (!sheet.classList.contains('hidden')) redrawManage();
+    try { if (typeof S !== 'undefined' && S.view === 'profile') refreshView(); } catch (e) {}
+  }
+  function setPlace(id, to){
+    var def = DEFPLACE[id] || 'more';
+    if (LOCK.indexOf(id) > -1) return;
+    if (to === 'bar' && place(id) !== 'bar'){
+      var n = barIds().filter(function(x){ return x !== id && usable(navBtn(x)); }).length;
+      if (n >= MAXBAR){ say('Bottom bar is full (max ' + MAXBAR + '). Move another option out of the bar first.'); return; }
+    }
+    if (to === def) delete cfg.place[id]; else cfg.place[id] = to;
+    commit();
   }
   function drawSwitch(){
     remember();
@@ -133,7 +192,7 @@
     sheet.innerHTML = h;
   }
   function openSheet(on, kind){
-    if (on){ openedAt = Date.now(); if (kind === 'switch') drawSwitch(); else drawSheet(); }
+    if (on){ openedAt = Date.now(); if (kind === 'switch') drawSwitch(); else if (kind === 'manage') drawManage(); else drawSheet(); }
     sheet.classList.toggle('hidden', !on); document.body.classList.toggle('btm-sheet', !!on);
   }
   function switchTo(id){
@@ -147,6 +206,14 @@
     var t = e.target;
     if (Date.now() - openedAt < 450 && t === sheet) return;
     if (t === sheet || t.closest('[data-x]')){ openSheet(false); return; }
+    var mv = t.closest('[data-mv]'); if (mv){ var q = mv.dataset.mv.split('|'); setPlace(q[0], q[1]); return; }
+    var dl = t.closest('[data-del]'); if (dl){
+      if (dl.dataset.arm !== '1'){ dl.dataset.arm = '1'; dl.textContent = 'Delete?'; dl.classList.add('arm'); setTimeout(function(){ if (dl.isConnected){ dl.dataset.arm = ''; dl.textContent = '🗑'; dl.classList.remove('arm'); } }, 2500); return; }
+      var did = dl.dataset.del; cfg.place[did] = 'deleted'; commit(); say('Option deleted — restore it from Manage menu › Deleted'); return;
+    }
+    var rs = t.closest('[data-res]'); if (rs){ delete cfg.place[rs.dataset.res]; commit(); return; }
+    if (t.closest('[data-manage]')){ openSheet(true, 'manage'); return; }
+    if (t.closest('[data-back]')){ openSheet(true); return; }
     var sw = t.closest('[data-sw]'); if (sw){ switchTo(sw.dataset.sw); return; }
     var ax = t.closest('[data-acx]'); if (ax){ saveAccts(accts().filter(function(x){ return x.id !== ax.dataset.acx; })); drawSwitch(); return; }
     if (t.closest('[data-addacc]')){ openSheet(false); if (typeof forceLogout === 'function') forceLogout(); return; }
@@ -195,6 +262,7 @@
     try { if (j) localStorage.setItem(KEY, j); else localStorage.removeItem(KEY); } catch (e) {}
     try { cfg = loadCfg(); applyCfg(); lastHtml = ''; draw(); } catch (e) {}
   };
+  window.bbManage = function(){ openSheet(true, 'manage'); };
   window.bbCard = function(){
     var c = cfg;
     var rng = function(k, l, min, max, unit){ return '<div class="bb-row"><label>' + l + ' <b id="bbv-' + k + '">' + c[k] + unit + '</b></label><input type="range" data-bb="' + k + '" min="' + min + '" max="' + max + '" value="' + c[k] + '"></div>'; };
@@ -209,7 +277,7 @@
       col('bg', 'Bar colour', cssHex('--card', '#ffffff')) + col('tx', 'Text &amp; icon colour', cssHex('--ink', '#1e293b')) + col('on', 'Selected colour', cssHex('--brand', '#4f46e5')) +
       '<div class="bb-sub">Icons <span class="muted">— type one emoji, leave blank for the default</span></div>' +
       ico('dashboard', 'Dashboard') + ico('profile', 'Profile') + ico('chat', 'Chat') + ico('all', 'More') +
-      '<div style="margin-top:12px"><button type="button" class="btn ghost" data-bbfull="1">↺ Reset bottom bar</button></div></div>';
+      '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" onclick="bbManage()">🧩 Manage menu (move / delete)</button><button type="button" class="btn ghost" data-bbfull="1">↺ Reset bottom bar</button></div></div>';
   };
   function refreshView(){ if (typeof render === 'function') { try { render(); } catch (e) {} } }
   function onSel(e){
