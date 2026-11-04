@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "238903065626",
+    "project_id": "aks-vcs",
+    "storage_bucket": "aks-vcs.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:238903065626:android:332bdb71bdaf1be13665a3",
+        "android_client_info": {
+          "package_name": "com.ks.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDGyxtXk0CBunpS8Qx0tfKZRzjoPPYyd1c"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
