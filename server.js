@@ -221,15 +221,34 @@ function makeApp(store, env) {
   }
 
   // ---------- Telegram (per-user account; see tg-server.js) ----------
-  const TG = require('./tg-server')({ env, enc, dec, sign, warn, withWb: fn => withWb(fn) });
+  const TG = require('./tg-server')({ env, enc, dec, sign, warn, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m) });   // notify = phone notification for a new Telegram message
 
   // ---------- WhatsApp (per-user account linked by QR code; see wa-server.js) ----------
-  const WA = require('./wa-server')({ env, warn, sign });
+  const WA = require('./wa-server')({ env, warn, sign, notify: (uid, m) => PUSH.send(uid, m) });   // notify = phone notification for a new WhatsApp message
 
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });
   const YT = require('./yt-server')({ env, warn });
   const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn) });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
+  // ---------- Gmail: a notification when a new unread mail arrives (the server looks every minute, only for users who have notifications on) ----------
+  const mailSeen = new Map();                                  // uid -> Set of mail ids already known
+  const mailFrom = f => { const m = /^\s*"?([^"<]*?)"?\s*<[^>]*>\s*$/.exec(String(f || '')); return (m && m[1].trim()) || String(f || '').replace(/[<>"]/g, '').trim() || 'New mail'; };
+  async function mailWatch() {
+    let props = {}; try { props = globalThis.PropertiesService.getScriptProperties().getProperties(); } catch (e) { return; }
+    for (const k of Object.keys(props)) {
+      if (k.indexOf('MAIL_TOK_') !== 0 || !props[k]) continue;
+      const uid = k.slice(9); if (!PUSH.has(uid)) continue;
+      try {
+        const list = await gmail(uid, 'messages?maxResults=8&labelIds=INBOX&labelIds=UNREAD'), ids = (list.messages || []).map(m => m.id), seen = mailSeen.get(uid);
+        mailSeen.set(uid, new Set(ids)); if (!seen) continue;                      // first look: just remember what is there
+        for (const id of ids.filter(x => !seen.has(x)).slice(0, 3)) {
+          const m = await gmail(uid, 'messages/' + id + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject').then(mailView).catch(() => null); if (!m) continue;
+          await PUSH.send(uid, { title: '📧 ' + mailFrom(m.from), body: m.subject || m.snippet || 'New mail', tag: 'mail-' + id, data: { kind: 'mail', view: 'mail' } });
+        }
+      } catch (e) { /* Gmail not reachable now: try again next minute */ }
+    }
+  }
+  { const t = setInterval(() => mailWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
 
   // ---------- Fingerprint / Face / screen-lock unlock (WebAuthn passkeys) ----------
   // The phone's own biometric check happens on the device; the server only stores a PUBLIC key per device
@@ -1108,6 +1127,12 @@ function makeApp(store, env) {
     if (!r || !YT.actions.has(r.action)) return null;
     return Promise.resolve().then(() => YT.route(r)).catch(errOut);
   };
+  const SITES = require('./sites-server')({ warn, withWb: fn => withWb(fn) });        // Websites tab list, saved per user in the Google Sheet
+  const fastSites = body => {
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !SITES.actions.has(r.action)) return null;
+    return Promise.resolve().then(() => SITES.route(r)).catch(errOut);
+  };
   const fastPush = body => {
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
     if (!r || !PUSH.actions.has(r.action)) return null;
@@ -1115,7 +1140,7 @@ function makeApp(store, env) {
   };
   const handle0 = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastTr(body));
+    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastTr(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);

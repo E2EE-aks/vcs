@@ -2610,12 +2610,29 @@ function vLinks(){
       <input class="input" id="lnq" style="width:220px" placeholder="Search name or link…" value="${esc(S.link.q)}" oninput="linkSearch(this.value)">
       <select class="select" style="width:auto" onchange="S.link.type=this.value;render()">${opts}</select>
       <span style="flex:1"></span>
+      <button class="btn soft" onclick="linksPdf()">⬇ PDF</button>
       <button class="btn" onclick="linkForm()">＋ Add link</button></div></div>
     <div class="card"><h3>Saved links <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
       ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Name</th><th>Type</th><th>Link</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
         : `<div class="empty-state">${total ? 'No links match your search.' : 'No links saved yet. Tap “Add link” to start.'}</div>`}
       <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 next to a link copies just the link. <b>Copy all</b> copies name, type and link together. Saved in the “Links” tab of your Google Sheet.</p>
     </div>`;
+}
+async function linksPdf(){
+  const list = filteredLinks(); if (!list.length) return toast('No links to export', true);
+  toast('Preparing your PDF file…');
+  try {
+    await needPdf();
+    const P = { doc:new window.jspdf.jsPDF({ orientation:'l', unit:'mm', format:'a4' }) };
+    const flt = [S.link.type !== 'all' ? 'Type: ' + S.link.type : '', (S.link.q || '').trim() ? 'Search: ' + S.link.q.trim() : ''].filter(Boolean).join('   |   ');
+    const y = pdfStart(P, 'Saved Links', `${flt ? flt + '   |   ' : ''}${list.length} link${list.length === 1 ? '' : 's'}   |   Generated ${STAMP()}`, 'l', true);
+    pdfTable(P, { startY:y, head:[['#', 'Name', 'Type', 'Link']],
+      body:list.map((x, i) => [String(i + 1), x.name || '', x.type || '', x.link || ''].map(PT)),
+      columnStyles:{ 0:{ cellWidth:12 }, 1:{ cellWidth:70 }, 2:{ cellWidth:30 } },
+      didParseCell:h => { if (h.section === 'head') h.cell.styles.halign = 'left'; },
+      didDrawCell:h => { if (h.section === 'body' && h.column.index === 3){ const u = pwHref(list[h.row.index].link); if (u) try { P.doc.link(h.cell.x, h.cell.y, h.cell.width, h.cell.height, { url:u }); } catch(e){} } } });
+    pdfFooter(P.doc); saveBlob('Links-' + new Date().toISOString().slice(0, 10) + '.pdf', P.doc.output('blob'));
+  } catch(e){ toast(e.message || 'Could not create the PDF', true); }
 }
 function linkSearch(v){
   S.link.q = v; clearTimeout(window._lnt);

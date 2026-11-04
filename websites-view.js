@@ -1,12 +1,39 @@
 /* KS · Websites tab (All Options › Websites): your own list of website shortcuts.
-   Tap a name to open the site; ＋ adds a link; ✏️ edits; 🗑 deletes.  The list is saved on this phone (browser storage). */
+   Tap a name to open the site; ＋ adds a link; ✏️ edits; 🗑 deletes.  The list is saved in your Google Sheet (per user) and kept on this phone for fast start. */
 (function(){
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var KEY = 'ks_sites_v1';
   var W = { list:[], form:null, q:'' };   // form: null | { i:-1|index, name, url, err }
   try { W.list = JSON.parse(localStorage.getItem(KEY) || '[]') || []; } catch(e){ W.list = []; }
-  function save(){ try { localStorage.setItem(KEY, JSON.stringify(W.list)); } catch(e){} }
+  /* The list lives in the Google Sheet (per user), so every phone shows the same websites. This phone keeps a copy for fast / offline start. */
+  var sv = { t:null, busy:false, again:false, loaded:false, loading:false, err:'' };
+  function cache(){ try { localStorage.setItem(KEY, JSON.stringify(W.list)); } catch(e){} }
+  function haveSession(){ try { return typeof S !== 'undefined' && !!S.token && typeof callServer === 'function'; } catch(e){ return false; } }
+  function flush(){
+    if (!haveSession()) return;
+    if (sv.busy){ sv.again = true; return; }
+    sv.busy = true; sv.again = false;
+    callServer({ action:'websitesSave', token:S.token, list:W.list }).then(function(j){
+      if (!j || !j.ok) throw new Error((j && j.error) || 'Could not save'); sv.err = '';
+    }).catch(function(e){ sv.err = (e && e.message) || 'Could not save to the server'; try { toast('Websites could not be saved to Google Sheet: ' + sv.err, true); } catch(x){} })
+      .then(function(){ sv.busy = false; if (sv.again) flush(); status(); });
+  }
+  function save(){ cache(); status(); clearTimeout(sv.t); sv.t = setTimeout(flush, 300); }
+  function status(){ var el = $('#wsSt'); if (!el) return; el.textContent = sv.err ? '⚠ Not saved to Google Sheet — ' + sv.err : (sv.busy || sv.t ? 'Saving…' : (sv.loaded ? '✓ Saved in your Google Sheet · same on every phone' : '')); el.style.color = sv.err ? '#c62828' : '#77778a'; }
+  function pull(){
+    if (!haveSession() || sv.loading) return; sv.loading = true;
+    callServer({ action:'websitesGet', token:S.token }).then(function(j){
+      sv.loading = false; if (!j || !j.ok) throw new Error((j && j.error) || 'Could not load');
+      sv.loaded = true; sv.err = '';
+      if (sv.t || sv.busy) return status();                                      // I just changed something: keep mine
+      var mig = ''; try { mig = localStorage.getItem(KEY + '_moved') || ''; } catch(e){}
+      if ((j.list || []).length || mig){ W.list = j.list || []; cache(); }
+      else if (W.list.length){ try { localStorage.setItem(KEY + '_moved', '1'); } catch(e){} flush(); }   // first time: this phone's old list moves to the Google Sheet
+      else { try { localStorage.setItem(KEY + '_moved', '1'); } catch(e){} }
+      if (!W.form) draw(); else status();
+    }).catch(function(e){ sv.loading = false; sv.err = (e && e.message) || 'Could not reach the server'; status(); });
+  }
   function esc(t){ return String(t == null ? '' : t).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
   try { TITLES.websites = ['Websites', 'Your saved website links']; } catch(e){}
   try { NAV_GRP.websites = 'Workspace'; } catch(e){}
@@ -46,7 +73,7 @@
     var q = W.q.trim().toLowerCase(), shown = W.list.map(function(s, i){ return { s:s, i:i }; }).filter(function(x){ return !q || (x.s.name + ' ' + x.s.url).toLowerCase().indexOf(q) >= 0; });
     var f = W.form;
     root.innerHTML =
-      '<div class="ws-top">' + (W.list.length > 4 ? '<input id="wsQ" placeholder="Search websites" value="' + esc(W.q) + '" autocomplete="off">' : '<div style="flex:1"></div>') + '<button class="ws-btn" id="wsAdd">＋ Add</button></div>' +
+      '<div id="wsSt" style="font-size:12px;margin:0 2px 8px"></div><div class="ws-top">' + (W.list.length > 4 ? '<input id="wsQ" placeholder="Search websites" value="' + esc(W.q) + '" autocomplete="off">' : '<div style="flex:1"></div>') + '<button class="ws-btn" id="wsAdd">＋ Add</button></div>' +
       (f ? '<div class="ws-box"><b>' + (f.i >= 0 ? 'Edit website' : 'Add website') + '</b>' +
         '<label>Website name</label><input id="wsN" value="' + esc(f.name) + '" placeholder="e.g. My Bank" autocomplete="off">' +
         '<label>Link</label><input id="wsU" value="' + esc(f.url) + '" placeholder="https://example.com" inputmode="url" autocapitalize="off" autocomplete="off">' +
@@ -57,6 +84,7 @@
           '<div class="ws-nm" data-o="' + x.i + '"><b>' + esc(x.s.name) + '</b><small>' + esc(host(x.s.url)) + '</small></div>' +
           '<button class="ws-ib" data-e="' + x.i + '" aria-label="Edit">✏️</button><button class="ws-ib" data-d="' + x.i + '" aria-label="Delete">🗑️</button></div>';
       }).join('') : '<div class="ws-empty">' + (W.list.length ? 'Kuch nahi mila.' : 'Abhi koi website nahi hai.<br>Upar <b>＋ Add</b> dabake pehla link jodo.') + '</div>');
+    status();
     var qi = $('#wsQ', root); if (qi && W.keepQ){ qi.focus(); try { qi.setSelectionRange(W.q.length, W.q.length); } catch(e){} }
   }
   function bind(){
@@ -80,7 +108,9 @@
     });
   }
   window.vWebsites = function(){ return '<div id="wsRoot"></div>'; };
-  window.websitesAfter = function(){ bind(); draw(); };
+  window.websitesAfter = function(){ bind(); draw(); pull(); };
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden && $('#wsRoot')) pull(); });
+  setInterval(function(){ if ($('#wsRoot') && !document.hidden && !W.form) pull(); }, 20000);   // another phone changed the list
 
   (function addTab(){
     var nav = $('#nav'), src = nav && nav.querySelector('[data-v="updates"]'); if (!src || nav.querySelector('[data-v="websites"]')) return;
