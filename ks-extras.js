@@ -14,8 +14,9 @@
   /* message / call sound + vibration: the app reads window.ksOpt(); the service worker (app closed) reads a copy kept in the Cache API */
   window.ksOpt = function(k){ return !!opts()[k]; };
   function syncSw(){
-    try { var o = opts(); if (window.caches) caches.open('ks-prefs').then(function(c){ return c.put('prefs', new Response(JSON.stringify({ msnd:o.msnd, mvib:o.mvib, csnd:o.csnd, cvib:o.cvib }))); }).catch(function(){}); } catch (e) {}
+    try { var o = opts(); if (window.caches) caches.open('ks-prefs').then(function(c){ var x = { msnd:o.msnd, mvib:o.mvib, csnd:o.csnd, cvib:o.cvib }; try { if (window.ksSndPrefs) Object.assign(x, window.ksSndPrefs()); } catch (e2) {} return c.put('prefs', new Response(JSON.stringify(x))); }).catch(function(){}); } catch (e) {}
   }
+  window.ksSyncSw = function(){ syncSw(); };
   applyOpts();
   var still = function(){ return (document.body && document.body.dataset.motion === 'off') || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); };
   var esc = function(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); };
@@ -307,9 +308,11 @@
       '<div class="sec-title" style="margin-top:14px">💬 Message alerts</div>' +
       row('msnd', '🔊', 'Message tone', 'Play a notification sound when a new message arrives', 1) +
       row('mvib', '📳', 'Message vibration', 'Vibrate when a new message arrives', 1) +
+      (window.ksSndUI ? window.ksSndUI('msg') : '') +
       '<div class="sec-title" style="margin-top:14px">📞 Call alerts</div>' +
       row('csnd', '🔊', 'Call ringtone', 'Ring when someone calls you (and while you are calling)', 1) +
       row('cvib', '📳', 'Call vibration', 'Vibrate while a call is ringing', 1) +
+      (window.ksSndUI ? window.ksSndUI('call') : '') +
       (adm ? '<div class="sec-title" style="margin-top:14px">🔔 Online / offline pop-ups</div>' +
         row('pa', '🔔', 'Show pop-ups', 'A card appears anywhere in the app when a user comes online or goes offline') +
         row('pon', '🟢', 'When someone comes online', 'Show a pop-up', 1) +
@@ -330,4 +333,189 @@
     var me = ''; try { me = (S.me && (S.me.name || S.me.username)) || 'Test user'; } catch (x) {}
     popAlert({ id:'test', name:me === 'Test user' ? me : 'Test user', username:'test' }, b.dataset.ksa === 't-on');
   });
+})();
+
+
+/* =====================================================================
+   5) CUSTOM TONES  -  message tone + call ringtone: pick a built-in sound or upload your own file, and choose the vibration.
+      Settings > Smart options. The uploaded file is kept on this phone (IndexedDB), never sent anywhere.
+   ===================================================================== */
+(function(){
+  'use strict';
+  var LS = 'ks_snd_v1', MAX = 8 * 1024 * 1024;
+  var esc = function(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); };
+  var note = function(m, bad){ try { toast(m, bad); } catch (e) {} };
+
+  /* built-in sounds: [frequency Hz, length s, start ms] */
+  var TONES = {
+    msg: {
+      default:{ n:'Default',  s:[[988,.18,0],[1319,.28,190]] },
+      chime:  { n:'Chime',    s:[[784,.25,0],[1047,.25,170],[1319,.4,340]] },
+      bell:   { n:'Bell',     s:[[1568,.6,0],[2093,.5,0]] },
+      pop:    { n:'Pop',      s:[[660,.08,0],[880,.12,90]] },
+      digital:{ n:'Digital',  s:[[1200,.09,0],[1200,.09,140],[1600,.16,280]] },
+      drop:   { n:'Water drop', s:[[1400,.07,0],[900,.14,70]] }
+    },
+    call: {
+      default:{ n:'Default',  s:[[880,.3,0],[660,.3,380],[880,.3,800],[660,.3,1180]] },
+      classic:{ n:'Classic phone', s:[[1000,.12,0],[1000,.12,160],[1000,.12,320],[1000,.12,480],[1000,.12,900],[1000,.12,1060],[1000,.12,1220],[1000,.12,1380]] },
+      melody: { n:'Melody',   s:[[523,.25,0],[659,.25,260],[784,.25,520],[1047,.4,780],[784,.25,1250],[659,.25,1510]] },
+      digital:{ n:'Digital',  s:[[1500,.15,0],[1100,.15,200],[1500,.15,400],[1100,.15,600],[1500,.15,1000],[1100,.15,1200]] },
+      gentle: { n:'Gentle',   s:[[523,.5,0],[659,.5,550],[784,.7,1100]] }
+    }
+  };
+  /* vibration patterns (ms: buzz, pause, buzz ...). Call patterns repeat every 2 seconds while ringing. */
+  var VIBS = {
+    msg: {
+      default:{ n:'Default (2 buzzes)', p:[250,150,250] },
+      short:  { n:'Short',     p:[120] },
+      long:   { n:'Long',      p:[700] },
+      double: { n:'Double tap',p:[100,100,100] },
+      triple: { n:'Triple',    p:[120,90,120,90,120] },
+      heart:  { n:'Heartbeat', p:[80,80,200,350,80,80,200] },
+      sos:    { n:'SOS',       p:[100,60,100,60,100,150,300,60,300,60,300,150,100,60,100,60,100] }
+    },
+    call: {
+      default:{ n:'Default (continuous)', p:[1900] },
+      pulse:  { n:'Pulse',     p:[500,250,500,250,300] },
+      fast:   { n:'Fast buzz', p:[150,100,150,100,150,100,150,100,150,100,150,100] },
+      heart:  { n:'Heartbeat', p:[200,100,200,600,200,100,200] },
+      wave:   { n:'Long wave', p:[900,300,600] },
+      sos:    { n:'SOS',       p:[150,80,150,80,150,200,500,80,500,80,500,200,150,80,150,80,150] }
+    }
+  };
+  var ID = { msg:{ tone:'mtone', vib:'mvp', title:'Message' }, call:{ tone:'ctone', vib:'cvp', title:'Call' } };
+
+  function cfg(){ var o = {}; try { o = JSON.parse(localStorage.getItem(LS) || '{}') || {}; } catch (e) {} return o; }
+  function put(k, v){ var o = cfg(); o[k] = v; try { localStorage.setItem(LS, JSON.stringify(o)); } catch (e) {} if (window.ksSyncSw) window.ksSyncSw(); }
+  function tone(kind){ var t = cfg()[ID[kind].tone] || 'default'; return (t === 'custom' || TONES[kind][t]) ? t : 'default'; }
+  function vib(kind){ var v = cfg()[ID[kind].vib] || 'default'; return VIBS[kind][v] ? v : 'default'; }
+  function vibArr(kind){ return VIBS[kind][vib(kind)].p; }
+
+  /* the service worker (app closed) uses these vibration patterns */
+  window.ksSndPrefs = function(){
+    var ring = [], p = vibArr('call'); for (var i = 0; i < 15; i++){ ring = ring.concat(p, [Math.max(100, 2000 - p.reduce(function(a, b){ return a + b; }, 0))]); }
+    return { mva: vibArr('msg'), cva: ring };
+  };
+
+  /* ---------- storage of the uploaded files (IndexedDB) ---------- */
+  var dbp = null;
+  function db(){
+    if (dbp) return dbp;
+    dbp = new Promise(function(res, rej){
+      try {
+        var r = indexedDB.open('ks-sounds', 1);
+        r.onupgradeneeded = function(){ r.result.createObjectStore('f'); };
+        r.onsuccess = function(){ res(r.result); }; r.onerror = function(){ rej(r.error); };
+      } catch (e) { rej(e); }
+    });
+    return dbp;
+  }
+  function idb(mode, fn){ return db().then(function(d){ return new Promise(function(res, rej){ var tx = d.transaction('f', mode), rq = fn(tx.objectStore('f')); tx.oncomplete = function(){ res(rq && rq.result); }; tx.onerror = function(){ rej(tx.error); }; }); }); }
+  var cache = {};   // kind -> { url, name }
+  function load(kind){
+    return idb('readonly', function(st){ return st.get(kind); }).then(function(rec){
+      if (cache[kind] && cache[kind].url) try { URL.revokeObjectURL(cache[kind].url); } catch (e) {}
+      cache[kind] = rec && rec.blob ? { url:URL.createObjectURL(rec.blob), name:rec.name || 'my sound' } : null;
+      return cache[kind];
+    }).catch(function(){ cache[kind] = null; return null; });
+  }
+  function save(kind, file){ return idb('readwrite', function(st){ return st.put({ blob:file, name:file.name }, kind); }).then(function(){ return load(kind); }); }
+  function drop(kind){ return idb('readwrite', function(st){ return st.delete(kind); }).then(function(){ return load(kind); }); }
+
+  /* ---------- playing ---------- */
+  var cur = { msg:null, call:null };
+  function stopAudio(kind){ var a = cur[kind]; if (a){ try { a.pause(); a.currentTime = 0; } catch (e) {} } cur[kind] = null; }
+  function beeps(kind, name){
+    var t = TONES[kind][name] || TONES[kind].default;
+    t.s.forEach(function(x){ setTimeout(function(){ try { vcBeep(x[0], x[1]); } catch (e) {} }, x[2]); });
+  }
+  function playFile(kind, loop, onFail){
+    var c = cache[kind]; if (!c) return false;
+    stopAudio(kind);
+    var a = new Audio(c.url); a.loop = !!loop; a.volume = 1; cur[kind] = a;
+    var pr; try { pr = a.play(); } catch (e) { if (onFail) onFail(); return true; }
+    if (pr && pr.catch) pr.catch(function(){ cur[kind] = null; if (onFail) onFail(); });
+    if (!loop) setTimeout(function(){ if (cur[kind] === a) stopAudio(kind); }, 15000);   // a long file stops after 15 s
+    return true;
+  }
+  /* used by the app: a new message */
+  window.ksPlayMsg = function(){
+    if (tone('msg') === 'custom' && cache.msg){ playFile('msg', false, function(){ beeps('msg', 'default'); }); return true; }
+    beeps('msg', tone('msg')); return true;
+  };
+  /* used by the app: an incoming call starts ringing / stops */
+  window.ksRingStart = function(){
+    if (tone('call') === 'custom' && cache.call) return playFile('call', true, function(){ beeps('call', 'default'); });
+    return false;
+  };
+  window.ksRingStop = function(){ stopAudio('call'); };
+  window.ksMsgVib  = function(){ return vibArr('msg'); };
+  window.ksCallVib = function(){ return vibArr('call'); };
+  window.ksCallBeep = function(){ beeps('call', tone('call') === 'custom' ? 'default' : tone('call')); };
+  window.ksCallCustom = function(){ return tone('call') === 'custom' && !!cache.call; };
+
+  /* ---------- settings UI ---------- */
+  window.ksSndUI = function(kind){
+    var t = tone(kind), v = vib(kind), c = cache[kind], T = TONES[kind], V = VIBS[kind], i = ID[kind];
+    var to = Object.keys(T).map(function(k){ return '<option value="' + k + '"' + (t === k ? ' selected' : '') + '>' + esc(T[k].n) + '</option>'; }).join('') +
+      (c ? '<option value="custom"' + (t === 'custom' ? ' selected' : '') + '>🎵 My file: ' + esc(c.name) + '</option>' : '');
+    var vo = Object.keys(V).map(function(k){ return '<option value="' + k + '"' + (v === k ? ' selected' : '') + '>' + esc(V[k].n) + '</option>'; }).join('');
+    return '<div class="ks-snd" data-snd="' + kind + '">' +
+      '<label>' + (kind === 'msg' ? 'Notification tone' : 'Ringtone') + '</label>' +
+      '<select class="select" data-sndsel="tone">' + to + '</select>' +
+      '<div class="ks-snd-btns">' +
+        '<button type="button" class="btn soft sm" data-sndact="pick">⬆️ Upload my ' + (kind === 'msg' ? 'tone' : 'ringtone') + '</button>' +
+        '<button type="button" class="btn soft sm" data-sndact="play">▶ Play</button>' +
+        '<button type="button" class="btn soft sm" data-sndact="stop">⏹ Stop</button>' +
+        (c ? '<button type="button" class="btn ghost sm" data-sndact="del">🗑 Remove my file</button>' : '') +
+      '</div>' +
+      '<input type="file" class="hidden" data-sndfile accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.opus,.amr">' +
+      '<label style="margin-top:10px">Vibration pattern</label>' +
+      '<select class="select" data-sndsel="vib">' + vo + '</select>' +
+      '<div class="ks-snd-btns"><button type="button" class="btn soft sm" data-sndact="vib">📳 Test vibration</button></div>' +
+      '</div>';
+  };
+  function refresh(kind){
+    var el = document.querySelector('.ks-snd[data-snd="' + kind + '"]'); if (!el) return;
+    var d = document.createElement('div'); d.innerHTML = window.ksSndUI(kind); el.replaceWith(d.firstChild);
+  }
+  function kindOf(e){ var b = e.closest && e.closest('.ks-snd'); return b ? b.dataset.snd : null; }
+
+  document.addEventListener('change', function(e){
+    var t = e.target; if (!t || !t.matches) return;
+    var kind = kindOf(t); if (!kind) return;
+    if (t.matches('[data-sndsel]')){
+      put(t.dataset.sndsel === 'tone' ? ID[kind].tone : ID[kind].vib, t.value);
+      if (t.dataset.sndsel === 'tone'){ stopAudio(kind); if (kind === 'msg') window.ksPlayMsg(); else { if (!window.ksRingStart()) window.ksCallBeep(); } }
+      else { try { navigator.vibrate && navigator.vibrate(vibArr(kind)); } catch (x) {} }
+      note('Saved');
+    }
+    if (t.matches('[data-sndfile]')){
+      var f = t.files && t.files[0]; t.value = ''; if (!f) return;
+      var okType = /^audio\//.test(f.type) || /\.(mp3|wav|ogg|m4a|aac|opus|amr|flac)$/i.test(f.name);
+      if (!okType){ note('Please choose an audio file (mp3, wav, ogg, m4a …)', true); return; }
+      if (f.size > MAX){ note('File is too big. Maximum 8 MB', true); return; }
+      save(kind, f).then(function(c){
+        if (!c){ note('Could not save this file', true); return; }
+        put(ID[kind].tone, 'custom'); refresh(kind); note('Your ' + (kind === 'msg' ? 'notification tone' : 'ringtone') + ' is set ✓');
+        if (kind === 'msg') window.ksPlayMsg(); else window.ksRingStart();
+      }).catch(function(){ note('Could not save this file', true); });
+    }
+  });
+  document.addEventListener('click', function(e){
+    var b = e.target.closest && e.target.closest('[data-sndact]'); if (!b) return;
+    var kind = kindOf(b); if (!kind) return;
+    try { if (typeof vcUnlock === 'function') vcUnlock(); } catch (x) {}
+    var a = b.dataset.sndact;
+    if (a === 'pick'){ var fi = b.closest('.ks-snd').querySelector('[data-sndfile]'); if (fi) fi.click(); }
+    else if (a === 'play'){ stopAudio(kind); if (kind === 'msg') window.ksPlayMsg(); else { if (!window.ksRingStart()) window.ksCallBeep(); } }
+    else if (a === 'stop'){ stopAudio(kind); }
+    else if (a === 'vib'){ try { if (navigator.vibrate) navigator.vibrate(vibArr(kind)); else note('This device does not support vibration', true); } catch (x) {} }
+    else if (a === 'del'){
+      stopAudio(kind);
+      drop(kind).then(function(){ if (cfg()[ID[kind].tone] === 'custom') put(ID[kind].tone, 'default'); refresh(kind); note('Removed. Default sound is back'); });
+    }
+  });
+  load('msg').then(function(){ return load('call'); }).then(function(){ ['msg','call'].forEach(refresh); if (window.ksSyncSw) window.ksSyncSw(); });
 })();

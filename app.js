@@ -6121,9 +6121,10 @@ async function ksNotify(title, body, tag, extra){
 }
 function chatAlert(){
   const snd = ksOn('msnd'), vib = ksOn('mvib');
-  if (snd){ vcBeep(988, .18); setTimeout(() => vcBeep(1319, .28), 190); }   // one short notification tone
-  if (vib) ksVib([250, 150, 250]);                                           // two vibrations
-  if (document.hidden && (snd || vib)) ksNotify('💬 New message', 'You have a new message', 'ks-msg', { silent: !snd && !vib, vibrate: vib ? [250, 150, 250] : [] });
+  const vp = (window.ksMsgVib && window.ksMsgVib()) || [250, 150, 250];       // vibration pattern chosen in Settings
+  if (snd){ if (window.ksPlayMsg) window.ksPlayMsg(); else { vcBeep(988, .18); setTimeout(() => vcBeep(1319, .28), 190); } }   // the chosen tone (or your own uploaded file)
+  if (vib) ksVib(vp);
+  if (document.hidden && (snd || vib)) ksNotify('💬 New message', 'You have a new message', 'ks-msg', { silent: !snd && !vib, vibrate: vib ? vp : [] });
 }
 /* ask once (on the first tap) so notifications can show; also lets the browser play sounds */
 (function(){
@@ -6152,14 +6153,17 @@ function vcRingStart(incoming){
   vcRingStop();
   const once = () => {
     if (incoming){
-      if (ksOn('csnd')){ vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); setTimeout(() => vcBeep(880, .3), 800); setTimeout(() => vcBeep(660, .3), 1180); }   // rings non-stop
-      if (ksOn('cvib')) ksVib([1900]);                                                                                                                              // and buzzes non-stop
+      if (ksOn('csnd')){
+        if (window.ksCallCustom && window.ksCallCustom()){ if (!VC.fileRing){ VC.fileRing = true; window.ksRingStart(); } }   // your own ringtone file loops until the call is answered / ended
+        else if (window.ksCallBeep) window.ksCallBeep(); else { vcBeep(880, .3); setTimeout(() => vcBeep(660, .3), 380); setTimeout(() => vcBeep(880, .3), 800); setTimeout(() => vcBeep(660, .3), 1180); }
+      }
+      if (ksOn('cvib')) ksVib((window.ksCallVib && window.ksCallVib()) || [1900]);                                          // vibration pattern chosen in Settings, repeated while ringing
     }
     else if (ksOn('csnd')) vcBeep(440, .7);
   };
   once(); VC.ring = setInterval(once, incoming ? 2000 : 3200);
 }
-function vcRingStop(){ clearInterval(VC.ring); VC.ring = null; try { navigator.vibrate && navigator.vibrate(0); } catch {} }
+function vcRingStop(){ clearInterval(VC.ring); VC.ring = null; VC.fileRing = false; try { window.ksRingStop && window.ksRingStop(); } catch {} try { navigator.vibrate && navigator.vibrate(0); } catch {} }
 
 /* ---------- full-screen call screen ---------- */
 /* a new chat message while a call is full screen: small card at the top, so you never have to minimise the call to see who wrote */

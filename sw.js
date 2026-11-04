@@ -1,6 +1,6 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v32';
+const CACHE = 'ks-shell-v33';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png'];
 
 self.addEventListener('install', e => {
@@ -65,7 +65,7 @@ self.addEventListener('push', e => {
       badge: 'badge-72.png',
       timestamp: d.ts || Date.now(),
       requireInteraction: call,                              // an incoming call stays on screen until you tap it
-      vibrate: !vib ? [] : call ? ring : msg ? [250, 120, 250] : [200, 100, 200],
+      vibrate: !vib ? [] : call ? (Array.isArray(pf.cva) && pf.cva.length ? pf.cva : ring) : msg ? (Array.isArray(pf.mva) && pf.mva.length ? pf.mva : [250, 120, 250]) : [200, 100, 200],
       data: { url: d.url || './', kind: d.kind || '', callId: d.callId || '' }
     });
     const cl = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
