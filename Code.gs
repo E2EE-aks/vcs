@@ -266,6 +266,7 @@ function route_(req) {
     if (!uid) fail_('Session expired. Please log in again.', 'AUTH');
     buildCtx_(uid, req.asUser);
     touchSeen_(CTX.uid);                       // every request counts as "online" (chat presence)
+    if (!CTX.viewing) expiredGate_(CTX.uid, a, req);   // 24 h trial over -> only login / reading / messaging an admin still work
     if (NEED[a]) need_(NEED[a]);
     if (ADMIN_ONLY[a]) needAdmin_();
     if (USER_MGR[a]) needUserMgr_();
@@ -503,6 +504,30 @@ function sysAccount_() {
 }
 function tempExpiry_(uid) { return Number(PropertiesService.getScriptProperties().getProperty('TMPX_' + uid) || 0); }
 function tempExpired_(uid) { var t = tempExpiry_(uid); return t > 0 && t < Date.now(); }
+
+// ---------- 24-HOUR TRIAL FOR USERS CREATED FROM THE SIGN-IN SCREEN ("Ask your admin"): actions are blocked after expiry, login still works ----------
+// ACCX_<id> = expiry time (ms). After it passes the person can still sign in, look around and message an admin,
+// but every other action answers code 'EXPIRED' and the app shows the "choose a plan" payment reminder.
+// An admin lifts it from Edit user > "Temporary account" (extend / make permanent).
+var ACC_HOURS = 24, ACC_MSG = 'Please choose any plan to continue this account';
+function accExpiry_(uid) { return Number(PropertiesService.getScriptProperties().getProperty('ACCX_' + uid) || 0); }
+function accExpired_(uid) { var t = accExpiry_(uid); return t > 0 && t < Date.now(); }
+// Actions that still work on an expired account: opening the app, reading, and chatting (chatSend only to an admin).
+var EXPIRED_OK = { getAll: 1, getTheme: 1, status: 1, logout: 1, loginImgs: 1,
+  chatUsers: 1, chatPhotos: 1, chatPhotoFull: 1, chatMediaTicket: 1, chatPing: 1, chatFetch: 1, chatLive: 1, chatTyping: 1, chatTranslate: 1,
+  chatSend: 1, chatEdit: 1, chatDelete: 1, chatReact: 1, archiveList: 1, archiveDay: 1,
+  getMyLocation: 1, getPhotoPrivacy: 1, pushRegister: 1, pushUnregister: 1, pushStatus: 1,
+  callConfig: 1, callPoll: 1, callAnswer: 1, callEnd: 1, ludoPoll: 1, updList: 1,
+  bioChallenge: 1, bioLogin: 1, bioList: 1, bioRegister: 1, bioRemove: 1 };
+// light = only the cheap check (used by server.js before the sheet is loaded); the chat recipient is then checked inside route_.
+function expiredGate_(uid, a, req, light) {
+  if (!uid || uid === 'ADMIN' || !accExpired_(uid)) return;
+  if (!EXPIRED_OK[a]) fail_(ACC_MSG, 'EXPIRED');
+  if (a === 'chatSend' && !light) {
+    var to = String((req && req.to) || '').trim(), acc = (to && !isChatGroupId_(to)) ? getAccount_(to, readSettings_().values) : null;
+    if (!acc || acc.role !== 'admin') fail_(ACC_MSG, 'EXPIRED');      // an expired account may only write to an admin
+  }
+}
 function sysChatSend_(toId, text) {
   var sh = getSheet_('CHAT'), row = sh.getLastRow() + 1, t = Date.now();
   chatEnsureCols_(sh);
@@ -544,12 +569,12 @@ function requestAccessRun_(req) {
   r2.setNumberFormat('@');
   r2.setValues([[nid, username, pw, 'user', name, '', 'Yes', JSON.stringify(normPerms_(perms, 'user')), 'No', nowStr_(), '', '', '', '', '']]);
   var until = Date.now() + TEMP_HOURS * 3600 * 1000;
-  PropertiesService.getScriptProperties().setProperty('TMPX_' + nid, String(until));
+  PropertiesService.getScriptProperties().setProperty('ACCX_' + nid, String(until));   // 24 h, then only actions are blocked (login + messaging admin still work)
   cache.put('reqacc_n', String(n + 1), 3600);
   var untilTxt = Utilities.formatDate(new Date(until), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
   sysChatSend_('ADMIN', '🆕 New user added\n\nName: ' + name + '\nUser ID: ' + username + '\nPassword: ' + pw +
     '\nAccess: Chat' + (names.length ? ', ' + names.join(', ') : '') +
-    '\nValid for: ' + TEMP_HOURS + ' hours (till ' + untilTxt + ')\n\nCreated from the sign-in screen (Ask your admin).');
+    '\nValid for: ' + TEMP_HOURS + ' hours (till ' + untilTxt + '). After that actions are blocked until a plan is chosen; the user can still message you here.\n\nCreated from the sign-in screen (Ask your admin).');
   return { ok: true, username: username, hours: TEMP_HOURS, until: untilTxt };
 }
 
@@ -616,7 +641,7 @@ function meOf_(values) {
     actLog: CTX.role === 'admin', actUsers: false,
     viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName, group: CTX.group ? groupInfo_(CTX.group) : null,
     sessHours: sessHours_(CTX.uid), birthday: String(PropertiesService.getScriptProperties().getProperty('BD_' + (CTX.uid || 'ADMIN')) || ''),
-    payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), tempUntilMs: tempExpiry_(CTX.uid) || 0, theme: String(PropertiesService.getScriptProperties().getProperty('GLOBAL_THEME') || ''), serverNow: Date.now() };
+    payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), tempUntilMs: tempExpiry_(CTX.uid) || 0, accUntilMs: accExpiry_(CTX.uid) || 0, accMsg: ACC_MSG, theme: String(PropertiesService.getScriptProperties().getProperty('GLOBAL_THEME') || ''), serverNow: Date.now() };
 }
 
 // ---------- LOGIN ----------
@@ -1039,7 +1064,7 @@ function setSessHours_(uid, h) {
 }
 function pubUser_(u, last) {
   return { id: u.id, username: u.username, name: u.name, email: u.email, role: u.role, active: u.active, perms: u.perms,
-    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '', createdBy: u.createdBy || '', see: u.see || [], sessHours: sessHours_(u.id), tempUntil: tempExpiry_(u.id) || 0 };
+    needLoc: u.needLoc, primary: u.id === 'ADMIN', created: u.created || '', lastLogin: last[u.id] || u.lastLogin || '', payDue: u.payDue || '', avatar: u.avatar || '', createdBy: u.createdBy || '', see: u.see || [], sessHours: sessHours_(u.id), tempUntil: tempExpiry_(u.id) || accExpiry_(u.id) || 0 };
 }
 function listUsers_() {
   var s = readSettings_().values, last = {};
@@ -1110,10 +1135,14 @@ function saveUser_(req) {
     if (!CTX.primary) joinAdderGroup_(nid);      // the new user lands in the group of the person who added him
   }
   if (isAdm && req.sessHours !== undefined) setSessHours_(cur ? cur.id : nid, req.sessHours);   // admin only
-  if (isAdm && cur && req.tempHours !== undefined) {            // admin: extend a temporary (24 h) account, or 0 = make it permanent
+  if (isAdm && cur && req.tempHours !== undefined) {            // admin: extend a temporary / trial account, or 0 = make it permanent
     var th = Number(req.tempHours) || 0, TP = PropertiesService.getScriptProperties();
-    if (th > 0) TP.setProperty('TMPX_' + cur.id, String(Date.now() + Math.min(th, 8760) * 3600 * 1000)); else TP.deleteProperty('TMPX_' + cur.id);
+    if (th > 0) {
+      var until = String(Date.now() + Math.min(th, 8760) * 3600 * 1000);
+      if (TP.getProperty('TMPX_' + cur.id) && !TP.getProperty('ACCX_' + cur.id)) TP.setProperty('TMPX_' + cur.id, until); else TP.setProperty('ACCX_' + cur.id, until);
+    } else { TP.deleteProperty('TMPX_' + cur.id); TP.deleteProperty('ACCX_' + cur.id); }
   }
+
   return listUsers_();
 }
 // Saves "who can this user see" for one user. The permission is two-way, so when an id is taken OFF this user's list

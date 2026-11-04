@@ -23,6 +23,7 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 let busyN = 0;
 function busy(on){ busyN += on ? 1 : -1; $('#bar').classList.toggle('on', busyN > 0); }
 function toast(msg, bad){
+  if (msg === EXP_MSG) return;                       // shown as the payment-reminder popup instead
   const t = document.createElement('div'); t.className = 'toast' + (bad ? ' bad' : ''); t.textContent = msg;
   $('#toasts').appendChild(t); setTimeout(() => t.classList.add('out'), 2350); setTimeout(() => t.remove(), 2650);
 }
@@ -69,7 +70,7 @@ async function api(action, payload = {}){
   busy(true);
   try{
     const j = await callServer({ action, token:S.token, asUser:S.as || undefined, ...payload });
-    if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
+    if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; if (j.code === 'EXPIRED') showExpired(); throw e; }
     return j;
   } finally { busy(false); }
 }
@@ -80,7 +81,36 @@ const store = {
   del(k){ try { localStorage.removeItem(k); sessionStorage.removeItem(k); } catch {} },
   isLocal(k){ try { return !!localStorage.getItem(k); } catch { return false; } }
 };
+/* ---------- 24-hour trial over: payment reminder (login still works, actions are blocked) ---------- */
+const EXP_MSG = 'Please choose any plan to continue this account';
+function expMsgAdmin(){
+  closeModals(); try { go('chat'); } catch(e){}
+  let n = 0;
+  const t = setInterval(() => {
+    n++;
+    const us = (S.chat && S.chat.users) || [];
+    const adm = us.find(u => u.id === 'ADMIN') || us.find(u => u.role === 'admin');
+    if (adm){ clearInterval(t); try { chatOpen(adm.id); } catch(e){} }
+    else if (n > 30) clearInterval(t);
+  }, 200);
+}
+function showExpired(){
+  if (document.getElementById('expBox')) return;
+  openModal(`<div id="expBox" style="text-align:center;padding:6px 2px">
+    <div style="font-size:calc(44px*var(--fs))">⏳</div>
+    <h3 style="margin:6px 0 4px">Payment reminder</h3>
+    <div style="font-weight:700;font-size:calc(16px*var(--fs));margin-bottom:6px">${esc(EXP_MSG)}</div>
+    <div class="muted" style="font-size:calc(13px*var(--fs));margin-bottom:14px">Your 24-hour trial has ended, so this action is blocked. You can still sign in and message your admin.</div>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+      <button class="btn" id="expMsg">💬 Message admin</button>
+      <button class="btn ghost" id="expClose">Close</button>
+    </div></div>`);
+  const m = document.getElementById('expMsg'), c = document.getElementById('expClose');
+  if (m) m.onclick = expMsgAdmin;
+  if (c) c.onclick = closeModals;
+}
 function handleErr(e){
+  if (e && e.code === 'EXPIRED'){ showExpired(); return; }
   if (e.code === 'AUTH'){ forceLogout('Session expired. Please sign in again.'); return; }
   if (e.code === 'PAYDUE'){ forceLogout(e.message || 'Payment pending. Please pay to continue using this account.'); return; }
   toast(e.message || 'Something went wrong', true);
@@ -1971,23 +2001,32 @@ $('#refreshBtn').onclick = async () => { try { S.bdays = null; await loadAll(); 
 let payTimer = null;
 const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock
 function tmpCountdownHtml(){
-  if (!S.me || !S.me.tempUntilMs) return '';
+  if (!S.me || !(S.me.tempUntilMs || S.me.accUntilMs)) return '';
+  const acc = !S.me.tempUntilMs;
   return `<div id="tmpCd" class="card" style="margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;border-left:5px solid #f59e0b">
     <div style="font-size:calc(26px*var(--fs))">🕒</div>
-    <div style="flex:1;min-width:200px"><div style="font-weight:700">Temporary account — expires on <span id="tmpCdDate"></span></div>
-      <div class="muted" style="font-size:calc(13px*var(--fs))">After this time you will be signed out automatically. Ask your admin to extend it.</div></div>
-    <div id="tmpCdTxt" style="font-weight:800;font-size:calc(20px*var(--fs));font-variant-numeric:tabular-nums"></div></div>`;
+    <div style="flex:1;min-width:200px"><div id="tmpCdTitle" style="font-weight:700">${acc ? 'Free trial — ends on' : 'Temporary account — expires on'} <span id="tmpCdDate"></span></div>
+      <div id="tmpCdSub" class="muted" style="font-size:calc(13px*var(--fs))">${acc ? 'After this time your actions will be blocked until you choose a plan. You can still message your admin.' : 'After this time you will be signed out automatically. Ask your admin to extend it.'}</div></div>
+    <div id="tmpCdTxt" style="font-weight:800;font-size:calc(20px*var(--fs));font-variant-numeric:tabular-nums"></div>
+    ${acc ? '<button class="btn soft sm" id="tmpCdMsg" onclick="expMsgAdmin()">💬 Message admin</button>' : ''}</div>`;
 }
 let tmpTimer = null;
 function tickTmp(){
   const box = document.getElementById('tmpCd');
-  if (!box || !S.me || !S.me.tempUntilMs){ clearInterval(tmpTimer); tmpTimer = null; return; }
-  const left = S.me.tempUntilMs - (Date.now() + payOff());
-  document.getElementById('tmpCdDate').textContent = new Date(S.me.tempUntilMs).toLocaleString('en-IN', { day:'numeric', month:'short', year:'numeric', hour:'numeric', minute:'2-digit' });
+  if (!box || !S.me || !(S.me.tempUntilMs || S.me.accUntilMs)){ clearInterval(tmpTimer); tmpTimer = null; return; }
+  const acc = !S.me.tempUntilMs, until = S.me.tempUntilMs || S.me.accUntilMs;
+  const left = until - (Date.now() + payOff());
+  document.getElementById('tmpCdDate').textContent = new Date(until).toLocaleString('en-IN', { day:'numeric', month:'short', year:'numeric', hour:'numeric', minute:'2-digit' });
   if (left <= 0){
     clearInterval(tmpTimer); tmpTimer = null;
     box.style.borderLeftColor = 'var(--bad,#dc2626)';
     document.getElementById('tmpCdTxt').textContent = 'Expired';
+    if (acc){                                        // trial over: stay signed in, only actions are blocked
+      const ti = document.getElementById('tmpCdTitle'), su = document.getElementById('tmpCdSub');
+      if (ti) ti.textContent = 'Your free trial has ended';
+      if (su) su.textContent = EXP_MSG;
+      return;
+    }
     loadAll().then(render).catch(handleErr);        // server now answers "temporary account expired" -> signs the user out
     return;
   }
@@ -4746,7 +4785,7 @@ function chatStart(){
 /* silent request (no top progress bar) — used for polling and sending */
 async function chatApi(action, payload = {}){
   const j = await callServer({ action, token:S.token, ...payload });
-  if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; throw e; }
+  if (!j.ok){ const e = new Error(j.error || 'Request failed'); e.code = j.code; if (j.code === 'EXPIRED') showExpired(); throw e; }
   return j;
 }
 function chatErr(e){ if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
