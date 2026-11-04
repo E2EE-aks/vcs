@@ -362,8 +362,10 @@ async function loadAll(){
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
   S.sig = sigOf(r.data); ingest(r.data);
-  if (canAddUsers()) await loadUsers(); else S.users = null;
-  if (isAdmin()) await loadGroups(); else S.groups = null;
+  const jobs = [];
+  if (canAddUsers()) jobs.push(loadUsers()); else S.users = null;
+  if (isAdmin()) jobs.push(loadGroups()); else S.groups = null;
+  await Promise.all(jobs);
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
@@ -579,8 +581,9 @@ function uaInfo(hi){
 }
 /* Location: the BEST real GPS fix wins. We keep listening for up to ~14 s and stop early once it is accurate (<= 25 m).
    Never a cached fix (maximumAge 0). The place name comes from the GPS point itself (reverse geocode), never from the IP address. */
-let _gpsP = null;
-function gpsStart(){ if (!_gpsP) _gpsP = getGps(); return _gpsP; }
+let _gpsP = null, _gpsAt = 0, _ipP = null;
+function gpsStart(){ if (!_gpsP || Date.now() - _gpsAt > 90000){ _gpsAt = Date.now(); _gpsP = getGps(); } return _gpsP; }
+function ipStart(){ if (!_ipP) _ipP = getIp(); return _ipP; }
 function getGps(){
   return new Promise(res => {
     if (!navigator.geolocation) return res({ err:'unsupported' });
@@ -589,18 +592,18 @@ function getGps(){
       res(best ? { lat:best.latitude, lng:best.longitude, acc:Math.round(best.accuracy) } : { err:err || 'timeout' }); };
     const t0 = Date.now();
     const iv = setInterval(() => { const sec = (Date.now() - t0) / 1000;             // good enough? stop early
-      if (best && ((best.accuracy <= 25) || (sec >= 6 && best.accuracy <= 60) || (sec >= 10 && best.accuracy <= 150))) fin(); }, 400);
-    const tt = setTimeout(fin, 14000);
+      if (best && ((best.accuracy <= 25) || (sec >= 2 && best.accuracy <= 100) || (sec >= 3.5 && best.accuracy <= 250) || (sec >= 5 && best.accuracy <= 500))) fin(); }, 250);
+    const tt = setTimeout(fin, 8000);
     try {
       wid = navigator.geolocation.watchPosition(
         p => { if (!best || p.coords.accuracy < best.accuracy) best = p.coords; },
         e => { err = e.code === 1 ? 'denied' : e.code === 2 ? 'unavailable' : 'timeout'; if (e.code === 1) fin(); },
-        { enableHighAccuracy:true, timeout:14000, maximumAge:0 });
+        { enableHighAccuracy:true, timeout:8000, maximumAge:0 });
     } catch { err = 'unsupported'; fin(); }
   });
 }
 async function placeOf(lat, lng){            // address of the GPS point (free OpenStreetMap, then BigDataCloud as backup)
-  const get = async (url, map) => { try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 4500);
+  const get = async (url, map) => { try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2500);
     const r = await fetch(url, { signal:ac.signal }); clearTimeout(t); return map(await r.json()); } catch { return ''; } };
   const uniq = arr => arr.filter((x, i) => x && arr.indexOf(x) === i).join(', ');
   return await get(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=en&lat=${lat}&lon=${lng}`, j => {
@@ -612,7 +615,7 @@ async function placeOf(lat, lng){            // address of the GPS point (free O
 }
 async function getIp(){
   const tryUrl = async (url, map) => {
-    try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 4500);
+    try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2500);
       const r = await fetch(url, { signal:ac.signal }); clearTimeout(t); return map(await r.json()); } catch { return null; }
   };
   const place = j => [j.city, j.region, j.country_code || j.country].filter(Boolean).join(', ');
@@ -623,15 +626,15 @@ async function getIp(){
 async function collectClient(){
   let c = { deviceId: deviceId() };
   try {
-    const [gps, ip, hi] = await Promise.all([gpsStart(), getIp(), highEntropy()]);
-    _gpsP = null;                                              // every sign-in takes a fresh fix
+    const [gps, ip, hi] = await Promise.all([gpsStart(), ipStart(), highEntropy()]);
+    _gpsP = null; _ipP = null;                                              // every sign-in takes a fresh fix
     const u = uaInfo(hi);
     c = { ...c, ...u, screen:`${screen.width}x${screen.height}@${window.devicePixelRatio || 1}`,
       tz:(Intl.DateTimeFormat().resolvedOptions().timeZone || ''), ip:ip.ip || '', city:ip.city ? ip.city + ' (by IP)' : '' };
     if (gps && gps.lat !== undefined){
       // device location: GPS when the fix is within 100 m, otherwise Wi-Fi/network based (less exact)
       Object.assign(c, { lat:gps.lat, lng:gps.lng, acc:gps.acc, src:gps.acc <= 100 ? 'GPS' : 'Network' });
-      const place = await placeOf(gps.lat, gps.lng);
+      const place = await Promise.race([placeOf(gps.lat, gps.lng), new Promise(r => setTimeout(() => r(''), 1800))]);   // never hold the sign-in for the street name
       if (place) c.city = place;                               // the real address of the GPS point
     } else {
       c.locErr = (gps && gps.err) || '';
@@ -641,7 +644,7 @@ async function collectClient(){
   return c;
 }
 
-{ const lu = document.getElementById('lu'); if (lu) lu.addEventListener('focus', () => { gpsStart(); }, { once:true }); }   // start finding the GPS fix while the user types the password
+{ const lu = document.getElementById('lu'); if (lu) lu.addEventListener('focus', () => { gpsStart(); ipStart(); }, { once:true }); }   // start finding the GPS fix while the user types the password
 /* ---------- users & access (admin) ---------- */
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
