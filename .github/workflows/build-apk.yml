@@ -1,0 +1,135 @@
+name: Build APK
+
+# Started from the app: Version tab > Build APK.  Builds an Android app (Capacitor) from the files you ticked,
+# then publishes it as a GitHub release "apk-<run number>" with the .apk attached.
+run-name: ${{ inputs.app_name }} ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: Comma separated list of repository files to put in the app
+        required: true
+      app_name:
+        description: App name
+        required: true
+        default: KS
+      app_id:
+        description: Package id (com.yourname.app)
+        required: true
+        default: com.ks.app
+      version:
+        description: Version
+        required: true
+        default: '1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FILES: ${{ inputs.files }}
+      APP_NAME: ${{ inputs.app_name }}
+      APP_ID: ${{ inputs.app_id }}
+      APP_VER: ${{ inputs.version }}
+      RUN_NO: ${{ github.run_number }}
+      GSJ: ${{ secrets.GOOGLE_SERVICES_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Collect the app files (server files are never put in the app)
+        run: |
+          mkdir -p www
+          IFS=',' read -ra LIST <<< "$FILES"
+          for f in "${LIST[@]}"; do
+            f="$(echo "$f" | xargs)"
+            case "$f" in
+              ""|/*|*..*|.*) continue ;;
+              server.js|Code.gs|gas-shim.js|google-store.js|live-monitor.js|fcm.js|package.json|package-lock.json|*-server.js|github/*|*.yml|*.md) continue ;;
+            esac
+            [ -f "$f" ] || { echo "Missing file: $f"; exit 1; }
+            mkdir -p "www/$(dirname "$f")"
+            cp "$f" "www/$f"
+          done
+          for f in native-push.js; do [ -f "$f" ] && cp "$f" "www/$f" || true; done
+          [ -f www/index.html ] || { echo "index.html must be part of the app"; exit 1; }
+          if [ -n "$GSJ" ]; then echo "window.KS_FCM = true;" > www/ks-native.js; else echo "window.KS_FCM = false;" > www/ks-native.js; fi
+          sed -i '0,/<head>/s//<head>\n<script src="ks-native.js"><\/script>/' www/index.html
+          ls -la www | head -60
+
+      - name: Create the Android project
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/push-notifications@6 @capacitor/local-notifications@6
+          node -e "require('fs').writeFileSync('capacitor.config.json', JSON.stringify({ appId: process.env.APP_ID, appName: process.env.APP_NAME, webDir: 'www', server: { androidScheme: 'https' }, android: { allowMixedContent: false }, plugins: { PushNotifications: { presentationOptions: ['badge','sound','alert'] } } }, null, 2))"
+          npx cap add android
+          npx cap sync android
+
+      - name: Firebase (notifications when the app is closed)
+        run: |
+          if [ -n "$GSJ" ]; then
+            printf '%s' "$GSJ" > android/app/google-services.json
+            echo "Firebase config added"
+          else
+            echo "::warning::Secret GOOGLE_SERVICES_JSON is not set - the app is built WITHOUT notifications while it is closed."
+          fi
+
+      - name: App icon, notification icon, permissions, version
+        run: |
+          set -e
+          M=android/app/src/main/AndroidManifest.xml
+          RES=android/app/src/main/res
+          # permissions
+          for p in POST_NOTIFICATIONS VIBRATE; do
+            grep -q "android.permission.$p" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
+          done
+          # notification channel + small icon used by Firebase when the app is closed
+          META='    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="messages" />'
+          if [ -f badge-72.png ]; then
+            mkdir -p $RES/drawable
+            cp badge-72.png $RES/drawable/ic_stat_notify.png
+            META="$META\n    <meta-data android:name=\"com.google.firebase.messaging.default_notification_icon\" android:resource=\"@drawable/ic_stat_notify\" />"
+          fi
+          sed -i "s#</application>#$META\n    </application>#" $M
+          # launcher icon from icon-512.png
+          if [ -f icon-512.png ]; then
+            command -v convert >/dev/null || sudo apt-get install -y imagemagick >/dev/null
+            rm -rf $RES/mipmap-anydpi-v26
+            for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+              n="${d%%:*}"; s="${d##*:}"
+              mkdir -p $RES/mipmap-$n
+              convert icon-512.png -resize ${s}x${s} $RES/mipmap-$n/ic_launcher.png
+              cp $RES/mipmap-$n/ic_launcher.png $RES/mipmap-$n/ic_launcher_round.png
+              rm -f $RES/mipmap-$n/ic_launcher_foreground.png
+            done
+          fi
+          # version
+          sed -i "s/versionCode [0-9]*/versionCode $RUN_NO/; s/versionName \".*\"/versionName \"$APP_VER\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
+      - name: Build the APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Publish the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SAFE="$(echo "$APP_NAME" | tr -c 'A-Za-z0-9._-' '_')"
+          OUT="${SAFE}-${APP_VER}.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$OUT"
+          gh release create "apk-${RUN_NO}" "$OUT" --title "$APP_NAME $APP_VER" --notes "Android app built from ${GITHUB_SHA::7}" --target "$GITHUB_SHA"
