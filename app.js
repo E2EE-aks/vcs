@@ -2035,14 +2035,14 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), browser:(typeof vBrowser === 'function' ? vBrowser : () => ''), settings:vSettings, profile:vProfile})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), nettools:(typeof vNettools === 'function' ? vNettools : () => ''), browser:(typeof vBrowser === 'function' ? vBrowser : () => ''), settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? tmpCountdownHtml() + payCountdownHtml() : '') + html;
   applyRO(v);
   startTmp(); startPay(); startLic();
   const setAfter = () => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); };
-  const after = ({settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion, telegram:() => { if (window.tgAfter) tgAfter(); }, whatsapp:() => { if (window.waAfter) waAfter(); }, music:() => { if (window.musicAfter) musicAfter(); }, youtube:() => { if (window.youtubeAfter) youtubeAfter(); }, websites:() => { if (window.websitesAfter) websitesAfter(); }, browser:() => { if (window.browserAfter) browserAfter(); }})[S.view]; if (after) after();
+  const after = ({settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion, telegram:() => { if (window.tgAfter) tgAfter(); }, whatsapp:() => { if (window.waAfter) waAfter(); }, music:() => { if (window.musicAfter) musicAfter(); }, youtube:() => { if (window.youtubeAfter) youtubeAfter(); }, websites:() => { if (window.websitesAfter) websitesAfter(); }, nettools:() => { if (window.nettoolsAfter) nettoolsAfter(); }, browser:() => { if (window.browserAfter) browserAfter(); }})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 
