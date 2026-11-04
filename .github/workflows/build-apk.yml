@@ -99,7 +99,7 @@ jobs:
           }
           EOF
           M=android/app/src/main/AndroidManifest.xml
-          ACT='    <activity android:name="ks.browser.KsBrowserActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />'
+          ACT='    <activity android:name="ks.browser.KsBrowserActivity" android:hardwareAccelerated="true" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />'
           sed -i "s#</application>#$ACT\n    </application>#" $M
           grep -n "KsBrowserActivity" $M
 
