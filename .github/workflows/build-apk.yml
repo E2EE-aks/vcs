@@ -77,6 +77,32 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: In-app Browser (AdGuard DNS) - native plugin
+        run: |
+          set -e
+          [ -f KsBrowserPlugin.java ] && [ -f KsBrowserActivity.java ] || { echo "::warning::KsBrowser*.java files missing - Browser tab will open links in a normal tab"; exit 0; }
+          JAVA_DIR=android/app/src/main/java
+          mkdir -p $JAVA_DIR/ks/browser
+          cp KsBrowserPlugin.java KsBrowserActivity.java $JAVA_DIR/ks/browser/
+          MA="$(find $JAVA_DIR -name MainActivity.java | head -1)"
+          PKG="$(grep -m1 '^package ' "$MA" | sed 's/package \(.*\);/\1/')"
+          cat > "$MA" <<EOF
+          package $PKG;
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+          import ks.browser.KsBrowserPlugin;
+          public class MainActivity extends BridgeActivity {
+            @Override public void onCreate(Bundle savedInstanceState) {
+              registerPlugin(KsBrowserPlugin.class);
+              super.onCreate(savedInstanceState);
+            }
+          }
+          EOF
+          M=android/app/src/main/AndroidManifest.xml
+          ACT='    <activity android:name="ks.browser.KsBrowserActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />'
+          sed -i "s#</application>#$ACT\n    </application>#" $M
+          grep -n "KsBrowserActivity" $M
+
       - name: Firebase (notifications when the app is closed)
         run: |
           if [ -n "$GSJ" ]; then
