@@ -12,7 +12,7 @@ module.exports = function makeTelegram(o) {
   const API_ID = Number(env.TG_API_ID || 0), API_HASH = String(env.TG_API_HASH || '');
   const configured = !!(API_ID && API_HASH);
   const MAX = 50 * 1048576;                                   // biggest photo / video / file we send or preview
-  const ACTIONS = new Set(['tgStatus', 'tgSendCode', 'tgSignIn', 'tgPassword', 'tgLogout', 'tgChats', 'tgHistory', 'tgSend', 'tgDelete', 'tgEdit', 'tgRead']);
+  const ACTIONS = new Set(['tgStatus', 'tgSendCode', 'tgSignIn', 'tgPassword', 'tgLogout', 'tgChats', 'tgHistory', 'tgSend', 'tgDelete', 'tgDeleteChats', 'tgEdit', 'tgRead']);
   const P = () => globalThis.PropertiesService.getScriptProperties();
   const fail = (m, c) => globalThis.fail_(m, c || 'TG');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -178,6 +178,24 @@ module.exports = function makeTelegram(o) {
       }
       const r = await getClient(uid);
       if (a === 'tgChats') { const ds = await warm(r.client, r.ents); return { ok: true, items: ds.map(d => dview(uid, d)) }; }
+      if (a === 'tgDeleteChats') {                           // remove whole chats from MY Telegram (other people keep theirs; groups/channels are left)
+        const ids = (Array.isArray(req.chats) ? req.chats : []).map(String).slice(0, 60), done = [], failed = [];
+        for (const id of ids) {
+          try {
+            const e = await entOf(r, id);
+            if (e.className === 'Channel') await r.client.invoke(new Api.channels.LeaveChannel({ channel: e }));
+            else {
+              if (e.className === 'Chat') { try { await r.client.invoke(new Api.messages.DeleteChatUser({ chatId: e.id, userId: 'me', revokeHistory: false })); } catch (x) {} }
+              for (let i = 0; i < 30; i++) {
+                const q = await r.client.invoke(new Api.messages.DeleteHistory({ peer: e, maxId: 0, revoke: false }));
+                if (!q || !q.offset) break;
+              }
+            }
+            r.ents.delete(id); done.push(id);
+          } catch (x) { failed.push(id); }
+        }
+        return { ok: true, done, failed };
+      }
       const ent = await entOf(r, req.chat), chat = String(req.chat);
       if (a === 'tgHistory') {
         const opts = { limit: Math.min(Math.max(Number(req.limit) || 40, 1), 60) };

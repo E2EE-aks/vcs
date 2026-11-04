@@ -5,7 +5,7 @@
 (function(){
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
-  var G = { st:null, chats:[], q:'', open:null, msgs:[], err:'', step:'phone', phone:'', reply:null, more:true, loaded:false, chatT:0, busy:false };
+  var G = { selMode:false, sel:{}, st:null, chats:[], q:'', open:null, msgs:[], err:'', step:'phone', phone:'', reply:null, more:true, loaded:false, chatT:0, busy:false };
   var POLL = null;
 
   try { TITLES.telegram = ['Telegram', 'Your Telegram chats — read, reply, send photos and videos']; } catch(e){}
@@ -15,6 +15,10 @@
   css.textContent = [
     '#tgRoot .tg-row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);cursor:pointer}',
     '#tgRoot .tg-row:active{background:rgba(127,127,127,.12)}',
+    '#tgRoot .tg-row.sel{background:rgba(42,171,238,.14)}',
+    '#tgRoot .tg-ck{flex:none;width:24px;height:24px;border-radius:50%;border:2px solid #9aa4b2;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;font-weight:800}',
+    '#tgRoot .tg-row.sel .tg-ck{background:#2aabee;border-color:#2aabee}',
+    '#tgRoot .tg-selbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--card,#fff);border-radius:16px 16px 0 0}',
     '#tgRoot .tg-av{position:relative;flex:none;width:46px;height:46px;border-radius:50%;background:#2aabee;color:#fff;font-weight:700;font-size:19px;display:flex;align-items:center;justify-content:center;overflow:hidden}',
     '#tgRoot .tg-av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}',
     '#tgRoot .tg-av.sm{width:38px;height:38px;font-size:16px}',
@@ -71,7 +75,7 @@
   /* ---------- entry points used by app.js ---------- */
   window.vTelegram = function(){ return '<div id="tgRoot"><div class="card"><div class="empty-state">Loading…</div></div></div>'; };
   window.tgAfter = function(){ draw(); };
-  window.tgReset = function(){ clearInterval(POLL); POLL = null; G = { st:null, chats:[], q:'', open:null, msgs:[], err:'', step:'phone', phone:'', reply:null, more:true, loaded:false, chatT:0, busy:false }; };
+  window.tgReset = function(){ clearInterval(POLL); POLL = null; G = { selMode:false, sel:{}, st:null, chats:[], q:'', open:null, msgs:[], err:'', step:'phone', phone:'', reply:null, more:true, loaded:false, chatT:0, busy:false }; };
   window.tgInit = async function(){
     if (!G.st){ try { G.st = await quiet('tgStatus'); } catch(e){ if (e.code === 'AUTH'){ return handleErr(e); } G.err = e.message || 'Could not reach the server'; G.st = { configured:true, connected:false }; } }
     if (S.view === 'telegram') draw();
@@ -101,18 +105,51 @@
   }
   function listHtml(){
     return '<div class="card" style="margin-bottom:12px"><div class="actions"><input class="input" id="tgSearch" style="flex:1;min-width:140px" placeholder="Search chats" value="' + esc(G.q) + '" oninput="tgFilter(this.value)">' +
-      '<button class="btn soft sm" onclick="tgRefresh()">↻</button><button class="btn ghost sm" onclick="tgLogout()">Disconnect</button></div>' +
+      '<button class="btn soft sm" onclick="tgRefresh()">↻</button><button class="btn ghost sm" onclick="tgSelMode(1)">☑ Select</button><button class="btn ghost sm" onclick="tgLogout()">Disconnect</button></div>' +
       (G.st.name ? '<div class="muted" style="font-size:12px;margin-top:6px">Signed in as ' + esc(G.st.name) + (G.st.username ? ' · @' + esc(G.st.username) : '') + '</div>' : '') +
       (G.err ? '<p style="color:var(--bad);margin-top:8px">' + esc(G.err) + '</p>' : '') + '</div><div class="card" style="padding:0" id="tgList"></div>';
   }
+  function selCount(){ return Object.keys(G.sel || {}).length; }
   function paintList(){
-    var el = $('#tgList'); if (!el) return; var q = G.q.toLowerCase();
-    var rows = G.chats.filter(function(c){ return !q || (c.name + ' ' + c.username).toLowerCase().indexOf(q) > -1; }).map(function(c){
-      return '<div class="tg-row" data-id="' + esc(c.id) + '" onclick="tgOpen(this.dataset.id)">' + avatar(c) +
+    var el = $('#tgList'); if (!el) return; var q = G.q.toLowerCase(), mode = !!G.selMode, sel = G.sel || {};
+    var list = G.chats.filter(function(c){ return !q || (c.name + ' ' + c.username).toLowerCase().indexOf(q) > -1; });
+    var bar = mode ? '<div class="tg-selbar"><b>' + selCount() + ' selected</b><span style="flex:1"></span>' +
+      '<button class="btn soft sm" onclick="tgSelAll()">Select all</button>' +
+      '<button class="btn sm" style="background:var(--bad,#dc2626);color:#fff" ' + (selCount() ? '' : 'disabled') + ' onclick="tgDelChats()">🗑 Delete</button>' +
+      '<button class="btn ghost sm" onclick="tgSelMode(0)">Cancel</button></div>' : '';
+    var rows = list.map(function(c){
+      var on = !!sel[c.id];
+      return '<div class="tg-row' + (on ? ' sel' : '') + '" data-id="' + esc(c.id) + '" onclick="tgRowTap(this.dataset.id)" ontouchstart="tgPress(this.dataset.id)" ontouchend="tgPressEnd()" ontouchmove="tgPressEnd()">' +
+        (mode ? '<span class="tg-ck">' + (on ? '✓' : '') + '</span>' : '') + avatar(c) +
         '<div class="tg-mid"><b>' + (c.pin ? '📌 ' : '') + esc(c.name) + '</b><small>' + (c.out ? 'You: ' : '') + esc(c.last) + '</small></div>' +
         '<div class="tg-end">' + esc(when(c.at)) + (c.unread ? '<br><em>' + c.unread + '</em>' : '') + '</div></div>'; }).join('');
-    el.innerHTML = rows || '<div class="empty-state">' + (G.loaded ? (G.q ? 'No chat matches.' : 'No chats yet.') : 'Loading chats…') + '</div>';
+    el.innerHTML = bar + (rows || '<div class="empty-state">' + (G.loaded ? (G.q ? 'No chat matches.' : 'No chats yet.') : 'Loading chats…') + '</div>');
   }
+  /* ---------- select & delete chats ---------- */
+  var PRESS = null, LONG = 0;
+  window.tgPress = function(id){ clearTimeout(PRESS); LONG = 0; if (G.selMode) return; PRESS = setTimeout(function(){ LONG = 1; G.selMode = true; G.sel = {}; G.sel[id] = 1; try { navigator.vibrate && navigator.vibrate(20); } catch(e){} paintList(); }, 550); };
+  window.tgPressEnd = function(){ clearTimeout(PRESS); };
+  window.tgRowTap = function(id){
+    if (LONG){ LONG = 0; return; }
+    if (!G.selMode) return tgOpen(id);
+    G.sel = G.sel || {}; if (G.sel[id]) delete G.sel[id]; else G.sel[id] = 1; paintList();
+  };
+  window.tgSelMode = function(on){ G.selMode = !!on; G.sel = {}; paintList(); };
+  window.tgSelAll = function(){
+    var q = G.q.toLowerCase(), vis = G.chats.filter(function(c){ return !q || (c.name + ' ' + c.username).toLowerCase().indexOf(q) > -1; });
+    G.sel = G.sel || {}; var all = vis.length && vis.every(function(c){ return G.sel[c.id]; });
+    vis.forEach(function(c){ if (all) delete G.sel[c.id]; else G.sel[c.id] = 1; }); paintList();
+  };
+  window.tgDelChats = async function(){
+    var ids = Object.keys(G.sel || {}); if (!ids.length) return;
+    if (!await confirmBox('Delete ' + ids.length + ' chat' + (ids.length > 1 ? 's' : '') + '?', 'They are removed from YOUR Telegram account only — the other people keep their copy. Groups and channels are left.', 'Delete', true)) return;
+    try {
+      var r = await api('tgDeleteChats', { chats: ids }), gone = {}; (r.done || []).forEach(function(i){ gone[i] = 1; });
+      G.chats = G.chats.filter(function(c){ return !gone[c.id]; }); G.sel = {}; G.selMode = false;
+      toast((r.done || []).length + ' chat' + ((r.done || []).length === 1 ? '' : 's') + ' deleted' + ((r.failed || []).length ? ' · ' + r.failed.length + ' failed' : ''), !!(r.failed || []).length);
+      draw();
+    } catch(e){ handleErr(e); }
+  };
   function convHtml(){
     var c = G.open, ph = c.userId ? 'tg://user?id=' + c.userId : (c.username ? 'https://t.me/' + c.username : '');
     return '<div class="tg-conv"><div class="tg-head"><button class="btn ghost sm" onclick="tgBack()">←</button>' + avatar(c, 'sm') +

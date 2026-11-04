@@ -1,5 +1,5 @@
-/* KS · Bottom bar (phones): Dashboard · Profile · Chat · All Options.
-   - All Options lists the remaining side-menu items (Profile/Settings/VCS/Version live inside Profile)
+/* KS · Bottom bar (phones): Dashboard · Profile · Chat · More.
+   - More lists the remaining side-menu items (Profile/Settings/VCS/Version live inside Profile)
    - long-press Profile = switch user (accounts that signed in on this phone)
    - Profile › Bottom bar = size, font, colours, icons (saved on this phone)
    Pure add-on: reads the existing side menu (#nav) and S/go/render from app.js. */
@@ -9,7 +9,7 @@
   var app = $('#app'), nav = $('#nav'); if (!app || !nav) return;
   var FIXED = [['dashboard', 'Dashboard'], ['profile', 'Profile'], ['chat', 'Chat'], ['telegram', 'Telegram'], ['whatsapp', 'WhatsApp'], ['mail', 'Mail']];
   var PROF = ['profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];                       // pages that belong to Profile
-  var EXC = ['dashboard', 'chat', 'telegram', 'whatsapp', 'mail', 'profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];   // not listed in All Options
+  var EXC = ['dashboard', 'chat', 'telegram', 'whatsapp', 'mail', 'profile', 'settings', 'vcs', 'version', 'logins', 'deploy', 'updates'];   // not listed in More
   var SV = function(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>'; };
   var ICON = {
     dashboard: SV('<rect x="3.5" y="3.5" width="7" height="8" rx="2"/><rect x="13.5" y="3.5" width="7" height="5" rx="2"/><rect x="13.5" y="11.5" width="7" height="9" rx="2"/><rect x="3.5" y="14.5" width="7" height="6" rx="2"/>'),
@@ -36,7 +36,7 @@
     o.icons = (c.icons && typeof c.icons === 'object') ? c.icons : {}; return o;
   }
   var cfg = loadCfg();
-  function saveCfg(){ try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) {} }
+  function saveCfg(){ try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) {} try { if (window.thPush) thPush(); } catch (e) {} }
 
   var bar = document.createElement('nav'); bar.id = 'btmBar'; bar.className = 'hidden'; bar.setAttribute('aria-label', 'Main');
   var sheet = document.createElement('div'); sheet.id = 'btmSheet'; sheet.className = 'hidden';
@@ -80,7 +80,7 @@
       h += '<button type="button" data-go="' + f[0] + '"><span class="bi">' + iconFor(f[0]) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
     h = '<i class="bb-ind"></i>' + h;
-    h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + iconFor('all') + '</span><small>All Options</small></button>';
+    h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + iconFor('all') + '</span><small>More</small></button>';
     var fresh = h !== lastHtml;
     if (fresh){ bar.innerHTML = h; lastHtml = h; }
     mark(); remember(); moveInd(fresh);
@@ -110,7 +110,7 @@
 
   var openedAt = 0;
   function drawSheet(){
-    var h = '<div class="bs-card"><div class="bs-h"><b>All Options</b><button type="button" data-x="1" aria-label="Close">✕</button></div><div class="bs-g">';
+    var h = '<div class="bs-card"><div class="bs-h"><b>More</b><button type="button" data-x="1" aria-label="Close">✕</button></div><div class="bs-g">';
     var n = 0;
     [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
       if (!usable(b) || EXC.indexOf(b.dataset.v) > -1) return; var i = info(b);
@@ -190,6 +190,11 @@
 
   /* ---------- Profile › Bottom bar card ---------- */
   function cssHex(name, fb){ var x = ''; try { x = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch (e) {} return /^#[0-9a-f]{6}$/i.test(x) ? x : fb; }
+  window.bbGet = function(){ try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } };
+  window.bbSet = function(j){                       // design sent by the admin
+    try { if (j) localStorage.setItem(KEY, j); else localStorage.removeItem(KEY); } catch (e) {}
+    try { cfg = loadCfg(); applyCfg(); lastHtml = ''; draw(); } catch (e) {}
+  };
   window.bbCard = function(){
     var c = cfg;
     var rng = function(k, l, min, max, unit){ return '<div class="bb-row"><label>' + l + ' <b id="bbv-' + k + '">' + c[k] + unit + '</b></label><input type="range" data-bb="' + k + '" min="' + min + '" max="' + max + '" value="' + c[k] + '"></div>'; };
@@ -203,7 +208,7 @@
       '<label class="tog" style="margin:6px 0 10px"><input type="checkbox" data-bb="labels" ' + (c.labels ? 'checked' : '') + '> Show names under icons</label>' +
       col('bg', 'Bar colour', cssHex('--card', '#ffffff')) + col('tx', 'Text &amp; icon colour', cssHex('--ink', '#1e293b')) + col('on', 'Selected colour', cssHex('--brand', '#4f46e5')) +
       '<div class="bb-sub">Icons <span class="muted">— type one emoji, leave blank for the default</span></div>' +
-      ico('dashboard', 'Dashboard') + ico('profile', 'Profile') + ico('chat', 'Chat') + ico('all', 'All Options') +
+      ico('dashboard', 'Dashboard') + ico('profile', 'Profile') + ico('chat', 'Chat') + ico('all', 'More') +
       '<div style="margin-top:12px"><button type="button" class="btn ghost" data-bbfull="1">↺ Reset bottom bar</button></div></div>';
   };
   function refreshView(){ if (typeof render === 'function') { try { render(); } catch (e) {} } }

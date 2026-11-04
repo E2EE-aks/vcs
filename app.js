@@ -370,6 +370,7 @@ function ingest(d){
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
+  try { thFromServer(S.me && S.me.theme); } catch(e){}
   pickEmp(S.emp || store.get(EK));
 }
 const sigOf = d => JSON.stringify({ ...d, me: null });
@@ -452,6 +453,7 @@ const DID = 'att_tracker_did';
 const isAdmin = () => !!(S.me && S.me.role === 'admin');
 const perms = () => (S.me && S.me.perms) || { att:'edit', exp:'edit', work:'edit', pw:'edit', link:'edit', lic:'edit', vcs:'edit', rack:'edit', tt:'edit', emp:true, creds:true };
 const can = sec => (sec === 'emp' || sec === 'creds') ? !!perms()[sec] : perms()[sec] === 'edit';
+const thCan = () => isAdmin() || !!perms().theme;   // may change the design that everybody gets
 const canAddUsers = () => isAdmin() || !!perms().addUser;   // admin, or a user the admin allowed to add users
 function deny(){ toast('You have view-only access to this section', true); }
 const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link', lic:'lic', vcs:'vcs', rack:'rack' };
@@ -701,7 +703,8 @@ function userForm(id){
         </div>
         <label class="tog"><input type="checkbox" name="p_emp" ${p.emp ? 'checked' : ''} ${(isAdmin() || can('emp')) ? '' : 'disabled'}> Can add / edit / delete employees</label>
         <label class="tog"><input type="checkbox" name="p_creds" ${p.creds ? 'checked' : ''}> Can change their own username & password</label>
-        ${isAdmin() ? `<label class="tog"><input type="checkbox" name="p_addUser" ${p.addUser ? 'checked' : ''}> Can add new users <span class="muted">(each user they add joins their group and sees only them in Chat)</span></label>` : ''}
+        ${isAdmin() ? `<label class="tog"><input type="checkbox" name="p_addUser" ${p.addUser ? 'checked' : ''}> Can add new users <span class="muted">(each user they add joins their group and sees only them in Chat)</span></label>
+        <label class="tog"><input type="checkbox" name="p_theme" ${p.theme ? 'checked' : ''}> Can change theme & customisation <span class="muted">(what they change is applied to every user)</span></label>` : ''}
       </fieldset>
       ${S.me.primary ? seeBox(x) : ''}
       <label class="tog"><input type="checkbox" name="active" ${(!x || x.active) ? 'checked' : ''}> Account active (untick to block sign-in)</label>
@@ -722,7 +725,7 @@ function userForm(id){
       const r = await api('saveUser', { id: x ? x.id : '', name:f.get('name'), username:f.get('username'), password:f.get('password'), email:f.get('email'),
         role:f.get('role') || 'user', active:!!f.get('active'), needLoc:!!f.get('needLoc'), payDue:f.get('payDue') || '', ...(isAdmin() ? { sessHours:Number(f.get('sessHours')) || 0 } : {}), ...(isAdmin() && f.get('tempHours') !== null && f.get('tempHours') !== '' ? { tempHours:Number(f.get('tempHours')) } : {}),
         ...(S.me.primary ? { see:f.getAll('see') } : {}),
-        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), vcs:f.get('p_vcs'), rack:f.get('p_rack'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser') } });
+        perms:{ att:f.get('p_att'), exp:f.get('p_exp'), work:f.get('p_work'), pw:f.get('p_pw'), link:f.get('p_link'), lic:f.get('p_lic'), vcs:f.get('p_vcs'), rack:f.get('p_rack'), tt:f.get('p_tt'), emp:!!f.get('p_emp'), creds:!!f.get('p_creds'), addUser:!!f.get('p_addUser'), theme:!!f.get('p_theme') } });
       S.users = r.users; w.remove(); if (!isAdmin()) await loadAll();   // a new user may have created / joined my group
       render(); toast(x ? 'User updated' : 'User added'); chatLoadUsers();
     } catch(e){ btn.disabled = false; handleErr(e); }
@@ -1388,7 +1391,36 @@ function thNorm(j){
   return o;
 }
 let T = (() => { try { return thNorm(JSON.parse(store.get(TH_KEY) || 'null')); } catch(e){ return thNorm(null); } })();
-const thSave = () => store.set(TH_KEY, JSON.stringify(T), true);
+const thSave = () => { store.set(TH_KEY, JSON.stringify(T), true); thPush(); };
+/* ---- ONE design for everybody: the admin (or a user the admin allowed) saves it on the server, all other users just receive it ---- */
+let thTimer = null;
+const thBundle = () => JSON.stringify({ v:1, t:T, bb:(window.bbGet ? bbGet() : '') });
+function thPush(now){
+  if (!S || !S.token || !thCan() || S.as) return;
+  clearTimeout(thTimer);
+  thTimer = setTimeout(async () => {
+    thTimer = null; const j = thBundle();
+    try {
+      const r = await callServer({ action:'saveTheme', token:S.token, theme:j });
+      if (!r.ok){ const e = new Error(r.error || 'Could not save the design'); e.code = r.code; throw e; }
+      S.themeApplied = j; if (S.me) S.me.theme = j; if (now) toast('Design applied to all users ✓');
+    } catch(e){ if (now) handleErr(e); }
+  }, now ? 0 : 1200);
+}
+function thFromServer(str){
+  if (!str || str === S.themeApplied || thTimer) return;
+  let b; try { b = JSON.parse(str); } catch(e){ return; }
+  if (!b || !b.t) return;
+  S.themeApplied = str;
+  T = thNorm(b.t); store.set(TH_KEY, JSON.stringify(T), true); thApply();
+  if (window.bbSet && typeof b.bb === 'string') bbSet(b.bb);
+}
+async function thPoll(){
+  if (document.hidden || !S.token || !S.d) return;
+  try { const j = await callServer({ action:'getTheme', token:S.token }); if (j && j.ok) thFromServer(j.theme || ''); } catch(e){}
+}
+setInterval(thPoll, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) thPoll(); });
 const thDark = () => T.mode === 'dark' || (T.mode === 'auto' && !!window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches);
 
 function thVars(dark){
@@ -1670,8 +1702,8 @@ function themeCard(){
   const col = (id, label) => `<label class="th-col"><input type="color" data-c="${id}" value="${thColor(id)}"><span>${label}</span></label>`;
   const dash = [['hello', 'Greeting'], ['today', 'Today quick-mark'], ['kpi', 'Number cards'], ['chart', 'Charts'], ['table', 'Tables']];
   const pres = TH_PRESETS.map(p => `<button type="button" class="th-pre ${T.brand === p.b && T.brand2 === p.b2 ? 'on' : ''}" data-pre="${p.id}" style="background:linear-gradient(135deg,${p.b},${p.b2})">${p.n}</button>`).join('');
-  return `<div class="card" id="thCard" style="grid-column:1/-1"><h3>🎨 Appearance & layout <button type="button" class="btn ghost sm" data-act="reset">↺ Reset all</button></h3>
-  <p class="th-note">Colours, text size, spacing, menu and layout — changes apply instantly and are saved on this device.</p>
+  return `<div class="card" id="thCard" style="grid-column:1/-1"><h3>🎨 Appearance & layout <button type="button" class="btn sm" data-act="publish">📢 Apply to all users</button> <button type="button" class="btn ghost sm" data-act="reset">↺ Reset all</button></h3>
+  <p class="th-note">Colours, text size, spacing, menu and layout — whatever you change here is saved for <b>ALL users</b> (they cannot change it themselves). Only you and the users you allow can see this page.</p>
 
   <details class="regbox th-grp" open><summary>🌗 Theme & colours</summary>
     ${blk('Mode', seg('mode', [['light', '☀️ Light'], ['dark', '🌙 Dark'], ['auto', '📱 Auto (phone)']]))}
@@ -1744,6 +1776,7 @@ function bindTheme(){
     if (t.dataset.mv){ thMove(t.dataset.mv, +t.dataset.d); return; }
     const a = t.dataset.act; if (!a) return;
     if (a === 'resetcol'){ T.brand = TH_DEF.brand; T.brand2 = TH_DEF.brand2; T.side = ''; T.cust = { light:{}, dark:{} }; done(true); syncColors(); toast('Colours reset'); }
+    else if (a === 'publish'){ thPush(true); }
     else if (a === 'resetmenu'){ T.menu = JSON.parse(JSON.stringify(TH_DEF.menu)); thSave(); thApply(); thRerenderMenuList(); toast('Menu reset'); }
     else if (a === 'reset'){ confirmBox('Reset appearance?', 'All colours, sizes, layout and menu changes on this device go back to the original design.', 'Reset', true).then(ok => { if (ok){ T = thNorm(null); thSave(); thApply(); render(); toast('Original design restored'); } }); }
     else if (a === 'export'){
@@ -3645,11 +3678,11 @@ function vSettingsGrid(){
   if (!can('exp')) drop('Expense categories');
   drop('Data & export');                       // moved: Attendance / Expenses / Work pages have their own Excel + PDF buttons
   if (canAddUsers()) grid.insertAdjacentHTML('afterbegin', usersCard() + (isAdmin() ? groupsCard() : ''));
-  grid.insertAdjacentHTML('afterbegin', themeCard());
+  if (thCan()) grid.insertAdjacentHTML('afterbegin', themeCard());
   grid.insertAdjacentHTML('afterbegin', photoCard());
   grid.insertAdjacentHTML('beforeend', bioCard());
   grid.insertAdjacentHTML('beforeend', window.ksOptCard ? ksOptCard() : '');
-  grid.insertAdjacentHTML('beforeend', window.bbCard ? bbCard() : '');
+  grid.insertAdjacentHTML('beforeend', (thCan() && window.bbCard) ? bbCard() : '');
   if (isAdmin() && window.lcCard) grid.insertAdjacentHTML('beforeend', lcCard());
   if (isAdmin()) grid.insertAdjacentHTML('beforeend', sessCard());
   if (S.me && S.me.primary) grid.insertAdjacentHTML('beforeend', liveCard());

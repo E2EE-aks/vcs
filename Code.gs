@@ -197,13 +197,13 @@ var USER_MGR = { listUsers: 1, saveUser: 1, deleteUser: 1, kickUser: 1, setAvata
 //   (owner differs from uid only when an admin uses "View as user")
 var CTX = { uid: 'ADMIN', owner: 'ADMIN', role: 'admin', primary: true, perms: null, name: '', username: '', viewing: false, viewName: '', payDue: '', group: null };
 
-function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', lic: 'edit', vcs: 'edit', rack: 'edit', tt: 'edit', emp: true, creds: true, addUser: true }; }
+function fullPerms_() { return { att: 'edit', exp: 'edit', work: 'edit', pw: 'edit', link: 'edit', lic: 'edit', vcs: 'edit', rack: 'edit', tt: 'edit', emp: true, creds: true, addUser: true, theme: true }; }
 function normPerms_(p, role) {
   if (role === 'admin') return fullPerms_();
   p = p || {};
   function lvl(v) { v = String(v || '').toLowerCase(); return (v === 'none' || v === 'view' || v === 'edit') ? v : 'edit'; }
   function bool(v, d) { return (v === undefined || v === null || v === '') ? d : (v === true || v === 'true' || v === 'yes' || v === 1 || v === '1'); }
-  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), lic: lvl(p.lic), vcs: lvl(p.vcs), rack: lvl(p.rack), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false) };
+  return { att: lvl(p.att), exp: lvl(p.exp), work: lvl(p.work), pw: lvl(p.pw), link: lvl(p.link), lic: lvl(p.lic), vcs: lvl(p.vcs), rack: lvl(p.rack), tt: lvl(p.tt), emp: bool(p.emp, false), creds: bool(p.creds, true), addUser: bool(p.addUser, false), theme: bool(p.theme, false) };
 }
 function need_(sec) {
   var p = CTX.perms || {};
@@ -286,6 +286,8 @@ function route_(req) {
       case 'setAttendance':     out = setAttendance_(req); break;
       case 'saveSettings':      out = saveSettings_(req); break;
       case 'saveLoginCfg':      out = saveLoginCfg_(req); break;
+      case 'saveTheme':         out = saveTheme_(req); break;
+      case 'getTheme':          out = { ok: true, theme: String(PropertiesService.getScriptProperties().getProperty('GLOBAL_THEME') || '') }; break;
       case 'saveStatuses':      out = saveStatuses_(req); break;
       case 'addStatus':         out = addStatus_(req); break;
       case 'deleteStatus':      out = deleteStatus_(req); break;
@@ -614,7 +616,7 @@ function meOf_(values) {
     actLog: CTX.role === 'admin', actUsers: false,
     viewing: CTX.viewing, viewId: CTX.owner, viewName: CTX.viewName, group: CTX.group ? groupInfo_(CTX.group) : null,
     sessHours: sessHours_(CTX.uid), birthday: String(PropertiesService.getScriptProperties().getProperty('BD_' + (CTX.uid || 'ADMIN')) || ''),
-    payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), tempUntilMs: tempExpiry_(CTX.uid) || 0, serverNow: Date.now() };
+    payDueMs: (function () { var t = parseDue_(CTX.payDue); return isNaN(t) ? 0 : t; })(), tempUntilMs: tempExpiry_(CTX.uid) || 0, theme: String(PropertiesService.getScriptProperties().getProperty('GLOBAL_THEME') || ''), serverNow: Date.now() };
 }
 
 // ---------- LOGIN ----------
@@ -1076,7 +1078,7 @@ function saveUser_(req) {
   var needLoc = isAdm ? (req.needLoc === true || req.needLoc === 'true') : (cur ? cur.needLoc : false);
   var payDue = isAdm ? String(req.payDue || '').trim() : (cur ? cur.payDue : '');   // e.g. "2026-11-17T10:30" from a datetime-local input, or '' to clear
   var permSrc = req.perms || (cur ? cur.perms : chatOnlyPerms_());      // new user = Chat only unless more is ticked
-  var permStr = JSON.stringify(isAdm ? normPerms_(permSrc, role) : capPerms_(permSrc, CTX.perms, cur ? cur.perms.addUser : false));
+  var permStr = JSON.stringify(isAdm ? normPerms_(permSrc, role) : capPerms_(permSrc, CTX.perms, cur ? cur.perms.addUser : false, cur ? cur.perms.theme : false));
   // Who this user may see in Chat / calls / Ludo: only the MAIN admin decides (an array of user ids)
   var seeNew = null;
   if (CTX.primary && Object.prototype.toString.call(req.see) === '[object Array]') {
@@ -1127,14 +1129,14 @@ function setSee_(cur, ids, users) {
   });
 }
 // Caps a new/edited user's permissions to what the person adding him has (a user can't hand out more than he owns).
-function capPerms_(p, mine, keepAdd) {
+function capPerms_(p, mine, keepAdd, keepTheme) {
   p = normPerms_(p, 'user'); mine = mine || {};
   var rank = { none: 0, view: 1, edit: 2 }, out = {};
   ['att', 'exp', 'work', 'pw', 'link', 'lic', 'vcs', 'rack', 'tt'].forEach(function (k) {
     var m = mine[k] || 'none';
     out[k] = rank[p[k]] <= rank[m] ? p[k] : m;
   });
-  out.emp = !!(p.emp && mine.emp); out.creds = p.creds; out.addUser = !!keepAdd;
+  out.emp = !!(p.emp && mine.emp); out.creds = p.creds; out.addUser = !!keepAdd; out.theme = !!keepTheme;
   return out;
 }
 // Puts a freshly added user into the adder's group. If the adder has no group yet, one is created for them
@@ -1551,6 +1553,16 @@ function saveLoginCfg_(req) {
   var ver = P.getProperty('LOGIN_IMGV') || '';
   if (changed) { ver = String(new Date().getTime()); P.setProperty('LOGIN_IMGV', ver); }
   return { ok: true, loginImgv: ver };
+}
+
+// The design (colours, layout, menu, bottom bar) is ONE for everybody. Only an admin, or a user the admin ticked "Can change theme & customisation", may change it.
+function saveTheme_(req) {
+  if (CTX.role !== 'admin' && !(CTX.perms && CTX.perms.theme)) fail_('You do not have permission to change the theme. Ask your admin.', 'PERM');
+  var j = String(req.theme || '');
+  if (j.length > 30000) fail_('The design is too large.');
+  try { var o = JSON.parse(j); if (!o || typeof o !== 'object') throw 0; } catch (e) { fail_('The design data is not valid.'); }
+  PropertiesService.getScriptProperties().setProperty('GLOBAL_THEME', j);
+  return { ok: true };
 }
 
 function saveSettings_(req) {
