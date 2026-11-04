@@ -1,6 +1,6 @@
 /* KS · Bottom bar (phones) — sizes/colours come from CSS variables set by Profile › Bottom bar */
 #btmBar,#btmSheet{display:none}
-@media (max-width:860px){
+@media all{
   #btmBar:not(.hidden){display:flex;position:fixed;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:125;
     background:var(--bb-bg,color-mix(in srgb,var(--card) 88%,transparent));-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
     border:1px solid var(--line);border-radius:var(--bb-r,30px);box-shadow:0 10px 30px rgba(15,23,42,.22);padding:6px;gap:4px;animation:rise .3s var(--ease,ease) both;
@@ -54,7 +54,7 @@
 }
 
 /* ===== sidebar removed on phones/tablets; bar position; animations ===== */
-@media (max-width:860px){
+@media all{
   .menu-toggle,.scrim,aside{display:none!important}
   body.menu-open{overflow:auto}
   html:not(.zz) body main{padding-left:14px}
@@ -123,3 +123,15 @@
 #btmSheet .mg-d,#btmSheet .mg-rs{border:0;background:var(--soft,#f1f5f9);color:var(--ink);cursor:pointer;font:inherit;font-size:13px;border-radius:10px;padding:6px 9px;width:auto;height:auto;flex:none}
 #btmSheet .mg-d.arm{background:#dc2626;color:#fff;font-size:11.5px;font-weight:700}
 #btmSheet .mg-d0{width:34px;flex:none}
+
+/* ===== v11: desktop = same as phone (no sidebar, bottom bar everywhere) ===== */
+@media (min-width:861px){
+  #app{display:block!important}
+  html:not(.zz) body main{padding-left:30px}
+  body[data-sb="right"] main{padding-left:30px;padding-right:30px}
+  #btmBar:not(.hidden):not([data-pos="left"]):not([data-pos="right"]){left:0;right:0;margin-left:auto;margin-right:auto;width:min(calc(100% - 24px),760px)}
+  body.has-btm[data-bbpos="left"] main{padding-left:calc(var(--bb-gap,90px) + 20px)}
+  body.has-btm[data-bbpos="right"] main{padding-right:calc(var(--bb-gap,90px) + 20px)}
+  #btmSheet .bs-card{max-width:640px;margin:0 auto}
+  #btmSheet:not(.hidden){align-items:flex-end;justify-content:center}
+}
