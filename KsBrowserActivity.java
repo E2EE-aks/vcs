@@ -2,6 +2,9 @@ package ks.browser;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -31,7 +34,15 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.IDN;
 import java.net.URL;
+import java.util.Map;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /* KS · In-app private browser.
@@ -48,7 +59,26 @@ public class KsBrowserActivity extends Activity {
   private Button back, fwd;
   private String dnsHost = "";
   private final AtomicInteger blockedCount = new AtomicInteger();
-  private final ConcurrentHashMap<String, Entry> cache = new ConcurrentHashMap<>();
+  /* Speed: results are kept for all browser screens (static) and saved on the phone, lookups run in parallel
+     on a small thread pool, and a page never waits long for a lookup (late answers are used for the next request). */
+  private static final ConcurrentHashMap<String, Entry> CACHE = new ConcurrentHashMap<>();
+  private static final ConcurrentHashMap<String, Future<Boolean>> INFLIGHT = new ConcurrentHashMap<>();
+  private static final long TTL = 12L * 60 * 60 * 1000;
+  private static boolean loaded = false;
+  private static final ExecutorService POOL = Executors.newFixedThreadPool(8, new ThreadFactory() {
+    @Override public Thread newThread(Runnable r) { Thread t = new Thread(r, "ks-dns"); t.setDaemon(true); return t; }
+  });
+  private final Handler ui = new Handler(Looper.getMainLooper());
+  private boolean saving = false;
+  /* The most common ad / tracker domains are blocked instantly, without waiting for DNS. */
+  private static final String[] ADS = {
+    "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com", "pagead2.googlesyndication.com",
+    "adnxs.com", "adsrvr.org", "taboola.com", "outbrain.com", "criteo.com", "criteo.net", "scorecardresearch.com",
+    "amazon-adsystem.com", "moatads.com", "adform.net", "rubiconproject.com", "pubmatic.com", "openx.net", "casalemedia.com",
+    "advertising.com", "smartadserver.com", "2mdn.net", "serving-sys.com", "popads.net", "propellerads.com", "mgid.com",
+    "revcontent.com", "yieldmo.com", "teads.tv", "ads.yahoo.com", "adcolony.com", "applovin.com", "unityads.unity3d.com",
+    "hotjar.com", "mouseflow.com", "quantserve.com", "bluekai.com", "demdex.net", "everesttech.net", "zedo.com"
+  };
 
   private int dp(int v) { return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()); }
 
@@ -108,6 +138,11 @@ public class KsBrowserActivity extends Activity {
     w.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
     w.setSupportZoom(true); w.setBuiltInZoomControls(true); w.setDisplayZoomControls(false);
     w.setLoadWithOverviewMode(true); w.setUseWideViewPort(true);
+    w.setCacheMode(WebSettings.LOAD_DEFAULT); w.setLoadsImagesAutomatically(true);
+    w.setMediaPlaybackRequiresUserGesture(true);
+    /* look like normal Chrome (the default WebView name makes some sites send slower / reduced pages) */
+    try { w.setUserAgentString(w.getUserAgentString().replace("; wv", "").replace("Version/4.0 ", "")); } catch (Exception e) { }
+    web.setLayerType(View.LAYER_TYPE_HARDWARE, null);
 
     web.setWebChromeClient(new WebChromeClient() {
       @Override public void onProgressChanged(WebView v, int p) {
@@ -123,7 +158,7 @@ public class KsBrowserActivity extends Activity {
       }
       @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
         String host = r.getUrl().getHost();
-        if (host != null && isBlocked(host)) {
+        if (host != null && isBlocked(host, r.isForMainFrame() ? 800 : 80)) {
           blockedCount.incrementAndGet();
           runOnUiThread(KsBrowserActivity.this::updateShield);
           if (r.isForMainFrame()) {
@@ -154,7 +189,37 @@ public class KsBrowserActivity extends Activity {
       }
       return false;
     });
+    loadCache();
+    try { String h0 = Uri.parse(target(start)).getHost(); if (h0 != null) isBlocked(h0, 0); } catch (Exception e) { }   // start the DNS lookup before the page starts
     web.loadUrl(target(start));
+  }
+
+  private void loadCache() {
+    synchronized (CACHE) {
+      if (loaded) return; loaded = true;
+      try {
+        String all = getSharedPreferences("ks_browser", MODE_PRIVATE).getString("dns", "");
+        long now = System.currentTimeMillis();
+        for (String line : all.split("\n")) {
+          String[] f = line.split("\t");
+          if (f.length == 3) { long exp = Long.parseLong(f[2]); if (exp > now) CACHE.put(f[0], new Entry(f[1].equals("1"), exp)); }
+        }
+      } catch (Exception e) { }
+    }
+  }
+
+  private void saveSoon() {
+    if (saving) return; saving = true;
+    ui.postDelayed(new Runnable() { @Override public void run() {
+      saving = false;
+      try {
+        StringBuilder sb = new StringBuilder(); long now = System.currentTimeMillis(); int n = 0;
+        for (Map.Entry<String, Entry> x : CACHE.entrySet()) {
+          if (x.getValue().exp > now && n++ < 4000) sb.append(x.getKey()).append('\t').append(x.getValue().blocked ? "1" : "0").append('\t').append(x.getValue().exp).append('\n');
+        }
+        getSharedPreferences("ks_browser", MODE_PRIVATE).edit().putString("dns", sb.toString()).apply();
+      } catch (Exception e) { }
+    } }, 4000);
   }
 
   private void nav() { back.setAlpha(web.canGoBack() ? 1f : .35f); fwd.setAlpha(web.canGoForward() ? 1f : .35f); }
@@ -175,20 +240,32 @@ public class KsBrowserActivity extends Activity {
   @Override protected void onDestroy() { try { web.destroy(); } catch (Exception e) { } super.onDestroy(); }
 
   /* ---------- AdGuard DNS over HTTPS (RFC 8484) ---------- */
-  private boolean isBlocked(String host) {
+  private boolean isBlocked(String host, long waitMs) {
     if (dnsHost.isEmpty()) return false;
     host = host.toLowerCase();
     if (host.equals("localhost") || host.equals(dnsHost) || host.contains(":") || host.matches("[0-9.]+")) return false;
-    long now = System.currentTimeMillis();
-    Entry e = cache.get(host);
-    if (e != null && e.exp > now) return e.blocked;
-    boolean b = false;
-    try { b = lookup(host); } catch (Exception ex) { b = false; }   // if the DNS server cannot be reached the page still loads
-    cache.put(host, new Entry(b, now + 10 * 60 * 1000L));
-    return b;
+    for (String d : ADS) if (host.equals(d) || host.endsWith("." + d)) return true;      // instant, no network
+    final String key = dnsHost + "|" + host, dh = dnsHost, h = host;
+    Entry e = CACHE.get(key);
+    if (e != null && e.exp > System.currentTimeMillis()) return e.blocked;
+    Future<Boolean> f = INFLIGHT.get(key);
+    if (f == null) {
+      FutureTask<Boolean> t = new FutureTask<>(new Callable<Boolean>() { @Override public Boolean call() {
+        try {
+          boolean b = lookup(dh, h);
+          CACHE.put(key, new Entry(b, System.currentTimeMillis() + TTL));
+          saveSoon();
+          return b;
+        } catch (Exception ex) { return false; }            // DNS server not reachable: page still loads, nothing is saved
+        finally { INFLIGHT.remove(key); }
+      } });
+      Future<Boolean> old = INFLIGHT.putIfAbsent(key, t);
+      if (old == null) { POOL.execute(t); f = t; } else f = old;
+    }
+    try { return f.get(waitMs, TimeUnit.MILLISECONDS); } catch (Exception ex) { return false; }   // too slow: let it load, the answer is used next time
   }
 
-  private boolean lookup(String host) throws Exception {
+  private static boolean lookup(String dnsHost, String host) throws Exception {
     ByteArrayOutputStream q = new ByteArrayOutputStream();
     q.write(0); q.write(0); q.write(1); q.write(0);          // id, flags (recursion desired)
     q.write(0); q.write(1); q.write(0); q.write(0); q.write(0); q.write(0); q.write(0); q.write(0);
@@ -196,7 +273,7 @@ public class KsBrowserActivity extends Activity {
     q.write(0); q.write(0); q.write(1); q.write(0); q.write(1);   // type A, class IN
     String b64 = Base64.encodeToString(q.toByteArray(), Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
     HttpURLConnection c = (HttpURLConnection) new URL("https://" + dnsHost + "/dns-query?dns=" + b64).openConnection();
-    c.setConnectTimeout(4000); c.setReadTimeout(4000);
+    c.setConnectTimeout(3000); c.setReadTimeout(3000); c.setUseCaches(false);
     c.setRequestProperty("Accept", "application/dns-message");
     if (c.getResponseCode() != 200) return false;
     InputStream in = c.getInputStream();
@@ -220,7 +297,7 @@ public class KsBrowserActivity extends Activity {
     return false;
   }
 
-  private int skip(byte[] r, int p) {
+  private static int skip(byte[] r, int p) {
     while (p < r.length) {
       int b = r[p] & 0xFF;
       if (b == 0) return p + 1;
