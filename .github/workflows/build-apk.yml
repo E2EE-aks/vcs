@@ -118,7 +118,7 @@ jobs:
           M=android/app/src/main/AndroidManifest.xml
           RES=android/app/src/main/res
           # permissions
-          for p in POST_NOTIFICATIONS VIBRATE; do
+          for p in POST_NOTIFICATIONS VIBRATE CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION; do
             grep -q "android.permission.$p" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
           done
           # notification channel + small icon used by Firebase when the app is closed
