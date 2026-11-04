@@ -100,6 +100,7 @@ function forceLogout(msg){
 }
 async function logout(){
   try { if (window.ksAcctDrop) ksAcctDrop(); } catch {}
+  try { if (window.ksPushOff) await ksPushOff(); } catch {}
   try { await api('logout'); } catch {}
   forceLogout();
 }
@@ -6111,6 +6112,7 @@ const ksVib = p => { try { navigator.vibrate && navigator.vibrate(p); } catch {}
 const ksOn = k => { try { return !window.ksOpt || window.ksOpt(k); } catch { return true; } };   // Settings > Smart options: message / call sound + vibration
 async function ksNotify(title, body, tag, extra){
   try {
+    if (window.ksNativeNotify) return window.ksNativeNotify(title, body, tag, extra);     // inside the Android app
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
     const o = Object.assign({ body, tag, renotify:true, silent:false, icon:'icon-192.png' }, extra || {});
     const reg = navigator.serviceWorker && (await navigator.serviceWorker.getRegistration());

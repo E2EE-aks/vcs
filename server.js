@@ -228,7 +228,8 @@ function makeApp(store, env) {
 
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });
-  const YT = require('./yt-server')({ env, warn });                       // YouTube tab (see yt-server.js)
+  const YT = require('./yt-server')({ env, warn });
+  const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn) });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
 
   // ---------- Fingerprint / Face / screen-lock unlock (WebAuthn passkeys) ----------
   // The phone's own biometric check happens on the device; the server only stores a PUBLIC key per device
@@ -373,6 +374,7 @@ function makeApp(store, env) {
       const c = { id, from: uid, to, fromName: (me && (me.name || me.username)) || 'Someone', kind, offer: vcSdp(req.offer), answer: null,
         state: 'ringing', t0: now, seen: { from: now, to: now }, endedBy: '', reason: '', endAt: 0 };
       vcalls.set(id, c); vbusy.set(uid, id); vbusy.set(to, id);
+      PUSH.call(to, c).catch(() => {});                       // phone rings even when the app is closed
       return { ok: true, id };
     }
     if (a === 'callPoll') {
@@ -1106,12 +1108,23 @@ function makeApp(store, env) {
     if (!r || !YT.actions.has(r.action)) return null;
     return Promise.resolve().then(() => YT.route(r)).catch(errOut);
   };
-  const handle = body => {
+  const fastPush = body => {
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !PUSH.actions.has(r.action)) return null;
+    return Promise.resolve().then(() => PUSH.route(r)).catch(errOut);
+  };
+  const handle0 = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastTr(body));
+    const fast = live.within(tr, () => fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastTr(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);
+  };
+  const handle = body => {                           // a new chat message also goes out as a phone notification
+    const p = handle0(body);
+    let r0 = null; try { r0 = JSON.parse(body); } catch (e) {}
+    if (r0 && r0.action === 'chatSend') p.then(res => { if (res && res.ok) PUSH.chat(r0, res).catch(e => warn('push', e && e.message)); }, () => {});
+    return p;
   };
   return { handle,
            waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r),
@@ -1130,9 +1143,15 @@ async function sendMail(m, env) {
 }
 
 function start(app, env) {
-  const origin = env.ALLOWED_ORIGIN || '*';
-  const cors = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' };
+  const origins = String(env.ALLOWED_ORIGIN || '*').split(',').map(x => x.trim().replace(/\/+$/, '')).filter(Boolean);
+  const anyOrigin = !origins.length || origins.includes('*');
+  const corsFor = rq => {                                      // the website address(es) in ALLOWED_ORIGIN, plus the Android app (it runs on https://localhost)
+    const ro = String((rq.headers && rq.headers.origin) || '');
+    const o = anyOrigin ? '*' : (ro && (origins.includes(ro) || /^(https?|capacitor|ionic):\/\/localhost(:\d+)?$/.test(ro))) ? ro : origins[0];
+    return { 'Access-Control-Allow-Origin': o, 'Access-Control-Allow-Methods': 'POST, GET, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization' };
+  };
   return http.createServer((rq, rs) => live.http(rq, rs, () => {
+    const cors = corsFor(rq);
     const send = (code, obj) => {
       const body = Buffer.from(JSON.stringify(obj)), h = Object.assign({ 'Content-Type': 'application/json', 'Vary': 'Accept-Encoding' }, cors);
       if (body.length > 1024 && /\bgzip\b/.test(String(rq.headers['accept-encoding'] || ''))){    // smaller replies = faster on mobile data
