@@ -100,14 +100,63 @@ function showExpired(){
     <div style="font-size:calc(44px*var(--fs))">⏳</div>
     <h3 style="margin:6px 0 4px">Payment reminder</h3>
     <div style="font-weight:700;font-size:calc(16px*var(--fs));margin-bottom:6px">${esc(EXP_MSG)}</div>
-    <div class="muted" style="font-size:calc(13px*var(--fs));margin-bottom:14px">Your 24-hour trial has ended, so this action is blocked. You can still sign in and message your admin.</div>
-    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-      <button class="btn" id="expMsg">💬 Message admin</button>
+    <div class="muted" style="font-size:calc(13px*var(--fs));margin-bottom:12px">You can still sign in and message your admin.</div>
+    <div id="expPay" style="text-align:left"></div>
+    <div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px">
+      <button class="btn soft" id="expMsg">💬 Message admin</button>
       <button class="btn ghost" id="expClose">Close</button>
     </div></div>`);
   const m = document.getElementById('expMsg'), c = document.getElementById('expClose');
   if (m) m.onclick = expMsgAdmin;
   if (c) c.onclick = closeModals;
+  expLoad();
+}
+async function expLoad(){                              // plans + QR chosen by the main admin
+  const box = document.getElementById('expPay'); if (!box) return;
+  box.innerHTML = '<div class="muted" style="text-align:center">Loading plans…</div>';
+  try { expRender(await api('payInfo')); } catch(e){ box.innerHTML = ''; }
+}
+function expRender(info){
+  const box = document.getElementById('expPay'); if (!box) return;
+  const plans = info.plans || [], mine = info.mine || [], last = mine[0], pending = last && last.status === 'pending';
+  const inr = n => '₹' + Number(n || 0).toLocaleString('en-IN');
+  if (!plans.length && !info.qr && !info.upi){ box.innerHTML = '<div class="muted" style="text-align:center">Ask your admin for the plans and how to pay.</div>'; return; }
+  let h = '';
+  if (pending){
+    h = `<div class="card" style="margin:0 0 8px;text-align:center">⏳ Your payment request is waiting for the admin's approval.<br><b>${esc(last.planName)} · ${inr(last.price)}</b><br><span class="muted">UTR: ${esc(last.utr)}</span></div>
+      <div style="text-align:center"><button class="btn soft sm" id="expChk">🔄 Check status</button></div>`;
+  } else {
+    if (last && last.status === 'rejected') h += `<div style="color:#b91c1c;font-weight:700;margin-bottom:8px;text-align:center">❌ Your last payment could not be verified. Please check the UTR number and send it again.</div>`;
+    if (plans.length) h += `<div style="font-weight:800;margin-bottom:4px">1. Choose a plan</div>` + plans.map((p, i) =>
+      `<label style="display:flex;gap:8px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:9px 11px;margin-bottom:6px;cursor:pointer"><input type="radio" name="expPlan" value="${esc(p.id)}" ${i === 0 ? 'checked' : ''}><span><b>${esc(p.name)}</b> — <b>${inr(p.price)}</b> <span class="muted">· ${p.days ? p.days + ' days' : 'Lifetime'}</span></span></label>`).join('');
+    if (info.qr || info.upi) h += `<div style="font-weight:800;margin:10px 0 4px">2. Pay</div><div style="text-align:center">`
+      + (info.qr ? `<img id="expQr" src="${info.qr}" alt="Payment QR" style="max-width:220px;width:100%;border-radius:12px;border:1px solid var(--line);background:#fff;cursor:pointer"><div class="muted" style="font-size:calc(12px*var(--fs))">Tap the QR to enlarge</div>` : '')
+      + (info.upi ? `<div style="margin-top:6px">UPI ID: <b>${esc(info.upi)}</b> <button class="btn ghost sm" id="expUpi">Copy</button></div>` : '') + `</div>`;
+    if (info.note) h += `<div class="muted" style="margin-top:6px;text-align:center">${esc(info.note)}</div>`;
+    h += `<div style="font-weight:800;margin:10px 0 4px">3. Tell the admin</div>
+      <input class="input" id="expUtr" placeholder="UTR / Transaction number" maxlength="40" autocomplete="off">
+      <button class="btn" id="expSend" style="margin-top:8px;width:100%">✅ I have paid</button>`;
+  }
+  box.innerHTML = h;
+  const q = document.getElementById('expQr'); if (q) q.onclick = () => picShow(info.qr);
+  const u = document.getElementById('expUpi'); if (u) u.onclick = async () => { try { await navigator.clipboard.writeText(info.upi); toast('UPI ID copied'); } catch(e){ toast(info.upi); } };
+  const chk = document.getElementById('expChk');
+  if (chk) chk.onclick = async () => {
+    try {
+      const r = await api('payInfo'), l = (r.mine || [])[0];
+      if (l && l.status === 'approved'){ closeModals(); toast('✅ Payment received. Your account is active.'); try { await loadAll(); } catch(e){} render(); }
+      else { expRender(r); toast(l && l.status === 'rejected' ? 'Payment was not verified' : 'Still waiting for the admin'); }
+    } catch(e){ handleErr(e); }
+  };
+  const sd = document.getElementById('expSend');
+  if (sd) sd.onclick = async () => {
+    const pl = document.querySelector('input[name="expPlan"]:checked'), utr = (document.getElementById('expUtr').value || '').trim();
+    if (plans.length && !pl) return toast('Choose a plan', true);
+    if (utr.length < 4) return toast('Enter the UTR / transaction number', true);
+    sd.disabled = true;
+    try { await api('payRequest', { planId: pl ? pl.value : '', utr }); toast('Sent to the admin ✅'); expRender(await api('payInfo')); }
+    catch(e){ sd.disabled = false; if (e.code !== 'EXPIRED') toast(e.message, true); }
+  };
 }
 function handleErr(e){
   if (e && e.code === 'EXPIRED'){ showExpired(); return; }
@@ -497,8 +546,8 @@ function applyAccess(){
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
   const chatOnly = ['att','exp','work','pw','link','lic','vcs','rack','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', !(S.me && S.me.primary));
-  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', !(S.me && S.me.primary)); hide('pay', !(S.me && S.me.primary));
+  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary)) || (S.view === 'pay' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
@@ -1458,6 +1507,7 @@ const TITLES = {
   vcs:['VCS Complaint Manage','Log complaints, assign them to a user and track Open / Pending / Closed'],
   rack:['Rack Mapping','Left 1–11 · Right 1–15 · Front 1–3, rows A–D — Carton, Inner, Box, Scheme, INS No. in every row (customizable)'],
   logins:['Login activity','Who signed in, when, from where and from which device'],
+  pay:['Plans & Payments','Set plans, prices and your payment QR, and approve payments'],
   deploy:['Deploy','Publish updated files to GitHub — the site goes live by itself'],
   updates:['Updates','Download the latest application files'],
   config:['Configuration','Add your devices and keep notes for each one'],
@@ -1621,7 +1671,7 @@ thApply();
 /* ---------- sidebar: neat section labels (Overview / Workspace / Tools / System) ---------- */
 const NAV_GRP = { dashboard:'Overview', attendance:'Overview', expenses:'Overview', work:'Overview', timetable:'Overview',
   chat:'Workspace', mail:'Workspace', telegram:'Workspace', whatsapp:'Workspace', vcs:'Workspace', rack:'Workspace', passwords:'Workspace', links:'Workspace', lic:'Workspace',
-  logins:'Tools', deploy:'Tools', updates:'Tools', version:'Tools', config:'Tools', settings:'System' };
+  logins:'Tools', pay:'Tools', deploy:'Tools', updates:'Tools', version:'Tools', config:'Tools', settings:'System' };
 function navGroups(){
   const nav = document.getElementById('nav'); if (!nav) return;
   let prev = '';
@@ -2008,7 +2058,7 @@ function tmpCountdownHtml(){
     <div style="flex:1;min-width:200px"><div id="tmpCdTitle" style="font-weight:700">${acc ? 'Free trial — ends on' : 'Temporary account — expires on'} <span id="tmpCdDate"></span></div>
       <div id="tmpCdSub" class="muted" style="font-size:calc(13px*var(--fs))">${acc ? 'After this time your actions will be blocked until you choose a plan. You can still message your admin.' : 'After this time you will be signed out automatically. Ask your admin to extend it.'}</div></div>
     <div id="tmpCdTxt" style="font-weight:800;font-size:calc(20px*var(--fs));font-variant-numeric:tabular-nums"></div>
-    ${acc ? '<button class="btn soft sm" id="tmpCdMsg" onclick="expMsgAdmin()">💬 Message admin</button>' : ''}</div>`;
+    ${acc ? '<button class="btn sm" onclick="showExpired()">💳 Choose plan</button> <button class="btn soft sm" id="tmpCdMsg" onclick="expMsgAdmin()">💬 Message admin</button>' : ''}</div>`;
 }
 let tmpTimer = null;
 function tickTmp(){
@@ -2074,7 +2124,7 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), nettools:(typeof vNettools === 'function' ? vNettools : () => ''), browser:(typeof vBrowser === 'function' ? vBrowser : () => ''), settings:vSettings, profile:vProfile})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, pay:vPay, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), nettools:(typeof vNettools === 'function' ? vNettools : () => ''), browser:(typeof vBrowser === 'function' ? vBrowser : () => ''), settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + (S.view === 'dashboard' ? tmpCountdownHtml() + payCountdownHtml() : '') + html;
@@ -4567,6 +4617,80 @@ async function doExport(kind, fmt){
 })();
 
 /* =====================================================================
+   VIEW: PLANS & PAYMENTS  (main admin)  —  plans + prices, payment QR, approve / reject payments
+   ===================================================================== */
+const PAYC = { data:null, draft:null, loading:false, failed:false };
+const payInr = n => '₹' + Number(n || 0).toLocaleString('en-IN');
+const payWhen = t => t ? new Date(t).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'numeric', minute:'2-digit' }) : '';
+function payDraftFrom(r){ return { plans:(r.plans || []).map(p => ({ ...p })), upi:r.upi || '', note:r.note || '', qr:'keep' }; }
+async function payLoad(keepDraft){
+  if (PAYC.loading) return; PAYC.loading = true;
+  try { const r = await api('payList'); PAYC.data = r; PAYC.failed = false; if (!PAYC.draft || !keepDraft) PAYC.draft = payDraftFrom(r); }
+  catch(e){ PAYC.failed = true; handleErr(e); }
+  finally { PAYC.loading = false; }
+  if (S.view === 'pay') render();
+}
+async function qrMake(file){                            // QR picture -> white-background JPEG that fits in the sheet
+  if (!file || !/^image\//.test(file.type || 'image/')) throw new Error('Please choose a picture');
+  const im = await picLoad(file);
+  for (const mx of [900, 760, 640, 520, 420]) for (const q of [.85, .72, .6]){ const d = picScale(im, mx, q); if (d.length <= 150000) return d; }
+  throw new Error('This picture is too big');
+}
+function payPlanSet(i, k, v){ if (PAYC.draft && PAYC.draft.plans[i]) PAYC.draft.plans[i][k] = v; }
+function payPlanAdd(){ PAYC.draft.plans.push({ id:'', name:'', price:'', days:30 }); render(); }
+function payPlanDel(i){ PAYC.draft.plans.splice(i, 1); render(); }
+async function payQrPick(el){
+  const f = el.files && el.files[0]; el.value = ''; if (!f) return;
+  try { toast('Preparing the QR…'); PAYC.draft.qr = await qrMake(f); render(); } catch(e){ toast(e.message || 'Could not use this picture', true); }
+}
+function payQrDrop(){ PAYC.draft.qr = 'clear'; render(); }
+async function paySaveAll(){
+  const d = PAYC.draft; if (!d) return;
+  const body = { plans:d.plans.map(p => ({ id:p.id, name:p.name, price:Number(p.price) || 0, days:Number(p.days) || 0 })), upi:d.upi, note:d.note };
+  if (d.qr === 'clear') body.qrClear = true; else if (d.qr !== 'keep') body.qr = d.qr;
+  try { await api('paySave', body); toast('Saved ✅'); PAYC.data = null; PAYC.draft = null; payLoad(false); render(); } catch(e){ handleErr(e); }
+}
+async function payDecideAsk(id, ok){
+  const r = (PAYC.data.reqs || []).find(x => x.id === id); if (!r) return;
+  if (!await confirmBox(ok ? 'Approve this payment?' : 'Reject this payment?', `${r.name || r.username} · ${r.planName} · ${payInr(r.price)} · UTR ${r.utr}` + (ok ? (r.days ? ` — the account gets ${r.days} more days.` : ' — the account becomes permanent.') : ''), ok ? 'Approve' : 'Reject', !ok)) return;
+  try { await api('payDecide', { id, approve:ok }); toast(ok ? 'Approved — the account is active' : 'Rejected'); await payLoad(true); } catch(e){ handleErr(e); }
+}
+function vPay(){
+  if (!(S.me && S.me.primary)) return '<div class="card"><div class="empty-state">Only the main admin can open this page.</div></div>';
+  if (!PAYC.data){
+    if (PAYC.failed) return '<div class="card"><div class="empty-state">Could not load. <button class="btn soft sm" onclick="PAYC.failed=false;render()">Try again</button></div></div>';
+    if (!PAYC.loading) payLoad(false);
+    return '<div class="card"><div class="empty-state">Loading…</div></div>';
+  }
+  const d = PAYC.draft, r = PAYC.data, pend = (r.reqs || []).filter(x => x.status === 'pending'), hist = (r.reqs || []).filter(x => x.status !== 'pending').slice(0, 20);
+  const qrSrc = d.qr === 'keep' ? (r.qr || '') : d.qr === 'clear' ? '' : d.qr;
+  const planRows = d.plans.map((p, i) => `<tr>
+      <td data-l="Plan name"><input class="in" value="${esc(p.name)}" maxlength="40" placeholder="e.g. 1 Month" oninput="payPlanSet(${i},'name',this.value)"></td>
+      <td data-l="Price (₹)"><input class="in" type="number" min="0" step="1" inputmode="decimal" value="${esc(p.price)}" placeholder="199" oninput="payPlanSet(${i},'price',this.value)"></td>
+      <td data-l="Days (0 = lifetime)"><input class="in" type="number" min="0" max="3650" step="1" inputmode="numeric" value="${esc(p.days)}" oninput="payPlanSet(${i},'days',this.value)"></td>
+      <td class="ac"><button class="btn ghost sm" onclick="payPlanDel(${i})">🗑 Remove</button></td></tr>`).join('');
+  const reqCard = (x, act) => `<div class="card" style="margin:0 0 10px"><div style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;justify-content:space-between">
+      <div><b>${esc(x.name || x.username)}</b> <span class="muted">(${esc(x.username)})</span><br>${esc(x.planName)} · <b>${payInr(x.price)}</b> · ${x.days ? x.days + ' days' : 'Lifetime'}<br><span class="muted">UTR: ${esc(x.utr)}${x.note ? ' · ' + esc(x.note) : ''} · ${payWhen(x.t)}</span></div>
+      <div>${act ? `<button class="btn sm" onclick="payDecideAsk('${esc(x.id)}',true)">✔ Approve</button> <button class="btn ghost sm" onclick="payDecideAsk('${esc(x.id)}',false)">✕ Reject</button>`
+        : `<span class="tag ${x.status === 'approved' ? 'main' : ''}">${x.status === 'approved' ? '✅ Approved' : '❌ Rejected'}</span> <span class="muted">${payWhen(x.at)}</span>`}</div></div></div>`;
+  return `<div class="card" style="margin-bottom:16px"><h3>💳 Payment requests ${pend.length ? `<span class="tag main">${pend.length} waiting</span>` : ''}</h3>
+      ${pend.length ? pend.map(x => reqCard(x, true)).join('') : '<div class="empty-state">No payment is waiting. When a user taps “I have paid”, it shows here and in your Chat.</div>'}
+      <p class="muted" style="font-size:calc(13px*var(--fs))">Check the money in your bank / UPI app first, then tap <b>Approve</b>. The account opens at once and the user gets a message in Chat. If the UTR is wrong, tap <b>Reject</b>.</p></div>
+    <div class="card" style="margin-bottom:16px"><h3>🧾 Plans &amp; prices</h3>
+      <div class="tbl-wrap"><table class="wk"><thead><tr><th>Plan name</th><th>Price (₹)</th><th>Days (0 = lifetime)</th><th>Actions</th></tr></thead><tbody>${planRows || `<tr><td colspan="4"><div class="empty-state">No plan yet. Tap “＋ Add plan”.</div></td></tr>`}</tbody></table></div>
+      <div class="actions" style="margin-top:10px"><button class="btn soft sm" onclick="payPlanAdd()">＋ Add plan</button></div></div>
+    <div class="card" style="margin-bottom:16px"><h3>📲 Payment QR</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+        <div style="text-align:center">${qrSrc ? `<img src="${qrSrc}" alt="QR" style="width:180px;max-width:100%;border-radius:12px;border:1px solid var(--line);background:#fff;cursor:pointer" onclick="picShow(this.src)">` : '<div class="empty-state" style="width:180px">No QR uploaded</div>'}
+          <div class="actions" style="justify-content:center;margin-top:8px"><label class="btn soft sm" style="cursor:pointer">⬆ ${qrSrc ? 'Change' : 'Upload'} QR<input type="file" accept="image/*" hidden onchange="payQrPick(this)"></label>${qrSrc ? ' <button class="btn ghost sm" onclick="payQrDrop()">✕ Remove</button>' : ''}</div></div>
+        <div style="flex:1;min-width:220px"><div class="field"><label>UPI ID <span class="muted">(shown under the QR, user can copy it)</span></label><input class="input" maxlength="80" placeholder="name@bank" value="${esc(d.upi)}" oninput="PAYC.draft.upi=this.value"></div>
+          <div class="field"><label>Message for the user <span class="muted">(optional)</span></label><input class="input" maxlength="300" placeholder="e.g. Pay, then send the UTR number" value="${esc(d.note)}" oninput="PAYC.draft.note=this.value"></div></div></div>
+      <div class="actions" style="margin-top:12px"><button class="btn" onclick="paySaveAll()">💾 Save plans &amp; QR</button></div>
+      <p class="muted" style="font-size:calc(13px*var(--fs))">Users see these plans and this QR in the “Please choose any plan to continue this account” pop-up.</p></div>
+    <div class="card"><h3>📜 Earlier payments</h3>${hist.length ? hist.map(x => reqCard(x, false)).join('') : '<div class="empty-state">Nothing yet.</div>'}</div>`;
+}
+
+/* =====================================================================
    VIEW: MAIL  (All Options > Mail)  —  the user's own Gmail, READ-ONLY
    Every user links THEIR OWN Gmail (Google asks for permission once). The server reads the mails from Google each time,
    nothing is copied into the sheet, and nobody else (not even an admin) can see your mail.
@@ -4662,6 +4786,17 @@ function vMail(){
       ${MAILV.busy ? '<div class="empty-state">Loading…</div>' : ''}
       ${MAILV.next && !MAILV.busy ? `<div style="text-align:center;margin-top:12px"><button class="btn soft" onclick="mailFetch(false)">Load more</button></div>` : ''}</div>`;
 }
+/* the “Plans & Payments” tab (main admin only), right below Logins */
+(function addPayTab(){
+  const nav = $('#nav'), src = nav && nav.querySelector('[data-v="logins"]');
+  if (!src || nav.querySelector('[data-v="pay"]')) return;
+  const b = src.cloneNode(true);
+  b.dataset.v = 'pay'; b.classList.remove('active'); b.classList.add('hidden');
+  const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT), tn = [];
+  while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
+  tn.forEach(n => { n.nodeValue = n.nodeValue.replace('🔐', '💳').replace('Logins', 'Plans & Payments'); });
+  src.after(b);
+})();
 /* the “Mail” tab in the menu (shows in the side menu and in All Options), right below Chat */
 (function addMailTab(){
   const nav = $('#nav'), src = nav && nav.querySelector('[data-v="updates"]'), chat = nav && nav.querySelector('[data-v="chat"]');

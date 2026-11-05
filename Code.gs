@@ -170,7 +170,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, setMyBirthday: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -302,6 +302,11 @@ function route_(req) {
       case 'updateCategory':    out = updateCategory_(req); break;
       case 'deleteCategory':    out = deleteCategory_(req); break;
       case 'picGet':            return picGet_(req);
+      case 'payInfo':           return payInfo_();
+      case 'payList':           return payList_();
+      case 'payRequest':        out = payRequest_(req); break;
+      case 'paySave':           out = paySave_(req); break;
+      case 'payDecide':         out = payDecide_(req); break;
       case 'addWork':           out = addWork_(req); break;
       case 'updateWork':        out = updateWork_(req); break;
       case 'deleteWork':        out = deleteWork_(req); break;
@@ -518,7 +523,7 @@ var ACC_HOURS = 24, ACC_MSG = 'Please choose any plan to continue this account';
 function accExpiry_(uid) { return Number(PropertiesService.getScriptProperties().getProperty('ACCX_' + uid) || 0); }
 function accExpired_(uid) { var t = accExpiry_(uid); return t > 0 && t < Date.now(); }
 // Actions that still work on an expired account: opening the app, reading, and chatting (chatSend only to an admin).
-var EXPIRED_OK = { getAll: 1, getTheme: 1, status: 1, logout: 1, loginImgs: 1,
+var EXPIRED_OK = { payInfo: 1, payRequest: 1, getAll: 1, getTheme: 1, status: 1, logout: 1, loginImgs: 1,
   chatUsers: 1, chatPhotos: 1, chatPhotoFull: 1, chatMediaTicket: 1, chatPing: 1, chatFetch: 1, chatLive: 1, chatTyping: 1, chatTranslate: 1,
   chatSend: 1, chatEdit: 1, chatDelete: 1, chatReact: 1, archiveList: 1, archiveDay: 1,
   getMyLocation: 1, getPhotoPrivacy: 1, pushRegister: 1, pushUnregister: 1, pushStatus: 1,
@@ -537,14 +542,14 @@ function expiredGate_(uid, a, req, light) {
     if (!acc || acc.role !== 'admin') fail_(ACC_MSG, 'EXPIRED');      // an expired account may only write to an admin
   }
 }
-function sysChatSend_(toId, text) {
+function sysChatSend_(toId, text, fromId) {                // fromId: who the message shows as coming from (default: VCS Management)
   var sh = getSheet_('CHAT'), row = sh.getLastRow() + 1, t = Date.now();
   chatEnsureCols_(sh);
   var tail = chatRows_().slice(-1), last = tail.length ? tail[0].t : 0;
   if (t <= last) t = last + 1;
   var rng = sh.getRange(row, 1, 1, 6);
   rng.setNumberFormat('@'); sh.getRange(row, 2).setNumberFormat('0');
-  rng.setValues([[Utilities.getUuid().replace(/-/g, '').slice(0, 12), t, SYS_ID, toId, text, nowStr_()]]);
+  rng.setValues([[Utilities.getUuid().replace(/-/g, '').slice(0, 12), t, fromId || SYS_ID, toId, text, nowStr_()]]);
 }
 function requestAccess_(req) {
   var lock = LockService.getScriptLock();
@@ -1962,6 +1967,99 @@ function deleteExpense_(req) {
   if (row < 0) fail_('Entry not found. Please refresh.');
   sh.deleteRow(row);
   return { ok: true };
+}
+
+// ---------- PLANS & PAYMENTS (the main admin sets plans + a payment QR; an expired user pays and sends the reference; the admin approves) ----------
+// PAY_CFG = {plans:[{id,name,price,days}], upi, note}   PAY_QR_0..3 = the QR picture   PAY_REQS = the requests (newest last)
+// days = 0 means a lifetime plan (no expiry).  Approving a request extends the account and tells the user in Chat.
+var PAY_QR_CHUNK = 40000, PAY_QR_PARTS = 4;
+function payProps_() { return PropertiesService.getScriptProperties(); }
+function payCfg_() {
+  var c = {}; try { c = JSON.parse(String(payProps_().getProperty('PAY_CFG') || '{}')) || {}; } catch (e) { c = {}; }
+  return { plans: Array.isArray(c.plans) ? c.plans : [], upi: String(c.upi || ''), note: String(c.note || '') };
+}
+function payQr_() { var P = payProps_(), s = '', i; for (i = 0; i < PAY_QR_PARTS; i++) s += String(P.getProperty('PAY_QR_' + i) || ''); return s; }
+function payReqs_() { var r = []; try { r = JSON.parse(String(payProps_().getProperty('PAY_REQS') || '[]')); } catch (e) { r = []; } return Array.isArray(r) ? r : []; }
+function paySaveReqs_(list) {
+  if (list.length > 300) { var keep = list.filter(function (x) { return x.status === 'pending'; }), rest = list.filter(function (x) { return x.status !== 'pending'; }).slice(-(300 - keep.length)); list = rest.concat(keep).sort(function (a, b) { return a.t - b.t; }); }
+  payProps_().setProperty('PAY_REQS', JSON.stringify(list));
+}
+function payNeedMain_() { if (!CTX.primary) fail_('Only the main admin can do this.', 'PERM'); }
+function payInfo_() {                                      // what a user sees in the payment pop-up
+  var c = payCfg_(), mine = payReqs_().filter(function (x) { return x.uid === CTX.uid; }).slice(-3).reverse()
+    .map(function (x) { return { id: x.id, planName: x.planName, price: x.price, utr: x.utr, status: x.status, t: x.t, at: x.at || 0 }; });
+  return { ok: true, plans: c.plans, upi: c.upi, note: c.note, qr: payQr_(), mine: mine, now: Date.now() };
+}
+function payList_() {                                      // main admin: settings + requests
+  payNeedMain_();
+  var c = payCfg_(), reqs = payReqs_().slice().reverse();
+  return { ok: true, plans: c.plans, upi: c.upi, note: c.note, qr: payQr_(), reqs: reqs, pending: reqs.filter(function (x) { return x.status === 'pending'; }).length };
+}
+function paySave_(req) {
+  payNeedMain_();
+  var inp = Array.isArray(req.plans) ? req.plans : [], plans = [], seen = {};
+  if (inp.length > 12) fail_('At most 12 plans are allowed.');
+  inp.forEach(function (x) {
+    var name = String((x && x.name) || '').trim().slice(0, 40), price = Number(x && x.price), days = Math.floor(Number(x && x.days));
+    if (!name) return;
+    if (!(price >= 0) || price > 10000000) fail_('Enter a valid price for "' + name + '".');
+    if (!(days >= 0) || days > 3650) fail_('Days for "' + name + '" must be 0 (lifetime) to 3650.');
+    var id = String((x && x.id) || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
+    if (!id || seen[id]) id = 'p' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
+    seen[id] = 1; plans.push({ id: id, name: name, price: Math.round(price * 100) / 100, days: days });
+  });
+  var P = payProps_(), i;
+  P.setProperty('PAY_CFG', JSON.stringify({ plans: plans, upi: String(req.upi || '').trim().slice(0, 80), note: String(req.note || '').trim().slice(0, 300) }));
+  if (req.qrClear === true || req.qrClear === 'true') { for (i = 0; i < PAY_QR_PARTS; i++) P.setProperty('PAY_QR_' + i, ''); }
+  else if (req.qr) {
+    var q = String(req.qr);
+    if (!PIC_RE.test(q) || q.length > PAY_QR_CHUNK * PAY_QR_PARTS) fail_('The QR picture is too big or not valid. Please choose another one.');
+    for (i = 0; i < PAY_QR_PARTS; i++) P.setProperty('PAY_QR_' + i, q.slice(i * PAY_QR_CHUNK, (i + 1) * PAY_QR_CHUNK));
+  }
+  return { ok: true };
+}
+function payRequest_(req) {                                // the user says "I have paid"
+  var c = payCfg_(), plan = null;
+  c.plans.forEach(function (p) { if (p.id === String(req.planId || '')) plan = p; });
+  if (!plan) fail_('Please choose a plan.');
+  var utr = String(req.utr || '').trim().slice(0, 40), note = String(req.note || '').trim().slice(0, 200);
+  if (utr.length < 4) fail_('Enter the UTR / transaction number of your payment.');
+  var list = payReqs_();
+  if (list.some(function (x) { return x.uid === CTX.uid && x.status === 'pending'; })) fail_('Your payment request is already waiting for the admin. Please wait.');
+  var r = { id: Utilities.getUuid().replace(/-/g, '').slice(0, 10), uid: CTX.uid, name: CTX.name || '', username: CTX.username || '', planId: plan.id, planName: plan.name,
+    price: plan.price, days: plan.days, utr: utr, note: note, t: Date.now(), status: 'pending' };
+  list.push(r); paySaveReqs_(list);
+  sysChatSend_('ADMIN', '💳 Payment request\n\nUser: ' + (r.name || r.username) + ' (' + r.username + ')\nPlan: ' + plan.name + ' · ₹' + plan.price + '\nUTR / Ref: ' + utr + (note ? '\nNote: ' + note : '') + '\n\nCheck the money in your bank / UPI app, then open 💳 Plans & Payments and tap Approve.', CTX.uid);   // shows as a message from the user, so the admin can reply
+  return { ok: true };
+}
+function payActivate_(uid, days) {                          // makes the account usable again; returns the new end time (0 = no expiry)
+  var P = payProps_(), acc = getAccount_(uid, readSettings_().values);
+  if (!acc) fail_('This user no longer exists.');
+  var due = parseDue_(acc.payDue), cur = Math.max(accExpiry_(uid), tempExpiry_(uid), isNaN(due) ? 0 : due), until = 0;
+  var pcell = function (v) { if (acc.row) { var c = getSheet_('USERS').getRange(acc.row, 12); c.setNumberFormat('@'); c.setValue(v); } };
+  if (!days) { P.deleteProperty('ACCX_' + uid); P.deleteProperty('TMPX_' + uid); if (acc.payDue) pcell(''); return 0; }
+  until = Math.max(Date.now(), cur) + days * 86400000;                // paying early adds to the time that is left
+  P.deleteProperty('TMPX_' + uid); P.setProperty('ACCX_' + uid, String(until));
+  if (acc.payDue) pcell(Utilities.formatDate(new Date(until), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm"));
+  return until;
+}
+function payDecide_(req) {
+  payNeedMain_();
+  var list = payReqs_(), r = null, i;
+  for (i = 0; i < list.length; i++) if (list[i].id === String(req.id || '')) r = list[i];
+  if (!r) fail_('Request not found. Please refresh.');
+  if (r.status !== 'pending') fail_('This request is already ' + r.status + '.');
+  var ok = req.approve === true || req.approve === 'true';
+  if (ok) {
+    var until = payActivate_(r.uid, Number(r.days) || 0);
+    r.status = 'approved'; r.at = Date.now();
+    sysChatSend_(r.uid, '✅ Payment received. Your plan "' + r.planName + '" is active' + (until ? ' until ' + Utilities.formatDate(new Date(until), Session.getScriptTimeZone(), 'dd MMM yyyy, hh:mm a') : ' (no expiry)') + '. Thank you!', 'ADMIN');
+  } else {
+    r.status = 'rejected'; r.at = Date.now();
+    sysChatSend_(r.uid, '❌ We could not verify your payment (UTR ' + r.utr + '). Please check the UTR number and send the request again, or message the admin here.', 'ADMIN');
+  }
+  r.by = CTX.uid; paySaveReqs_(list);
+  return { ok: true, status: r.status };
 }
 
 // ---------- PICTURES on Work entries and LIC policies ----------
