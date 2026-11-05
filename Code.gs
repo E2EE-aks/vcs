@@ -301,6 +301,7 @@ function route_(req) {
       case 'addCategory':       out = addCategory_(req); break;
       case 'updateCategory':    out = updateCategory_(req); break;
       case 'deleteCategory':    out = deleteCategory_(req); break;
+      case 'picGet':            return picGet_(req);
       case 'addWork':           out = addWork_(req); break;
       case 'updateWork':        out = updateWork_(req); break;
       case 'deleteWork':        out = deleteWork_(req); break;
@@ -481,7 +482,7 @@ function getAccount_(id, s) {
 function readUsers_() {
   var sh = getSheet_('USERS'), last = sh.getLastRow(), out = [];
   if (last < 2) return out;
-  if (sh.getMaxColumns() < 15) sh.insertColumnsAfter(sh.getMaxColumns(), 15 - sh.getMaxColumns());
+  if (sh.getMaxColumns() < 20) sh.insertColumnsAfter(sh.getMaxColumns(), 20 - sh.getMaxColumns());
   sh.getRange(2, 1, last - 1, 15).getValues().forEach(function (r, i) {
     var id = String(r[0]).trim(), un = String(r[1]).trim();
     if (!id || !un) return;
@@ -1963,12 +1964,52 @@ function deleteExpense_(req) {
   return { ok: true };
 }
 
+// ---------- PICTURES on Work entries and LIC policies ----------
+// The picture is made small in the browser (JPEG). A thumbnail sits in ONE cell (shown in the lists) and the bigger picture is cut
+// into 4 cells next to it, so it stays inside the same row of the sheet: Work = columns I..M, LIC = columns P..T.
+var PIC_THUMB_MAX = 9000, PIC_FULL_MAX = 45000, PIC_CHUNKS = 4, PIC_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/;
+function picIn_(req) {                                  // -> { clear:true } | { thumb, full } | null (leave the picture as it is)
+  if (req.picClear === true || req.picClear === 'true') return { clear: true };
+  var f = String(req.picFull || ''), t = String(req.picThumb || '');
+  if (!f) return null;
+  if (!PIC_RE.test(f) || f.length > PIC_FULL_MAX * PIC_CHUNKS || !PIC_RE.test(t) || t.length > PIC_THUMB_MAX) fail_('The picture is too big or not valid. Please choose another one.');
+  return { thumb: t, full: f };
+}
+function picEnsure_(sh, lastCol) { if (sh.getMaxColumns() < lastCol) sh.insertColumnsAfter(sh.getMaxColumns(), lastCol - sh.getMaxColumns()); }
+function picWrite_(sh, row, col, pic) {                 // col = the thumbnail column, the picture follows in the next PIC_CHUNKS cells
+  picEnsure_(sh, col + PIC_CHUNKS);
+  var vals = [pic.clear ? '' : pic.thumb], i;
+  for (i = 0; i < PIC_CHUNKS; i++) vals.push(pic.clear ? '' : pic.full.slice(i * PIC_FULL_MAX, (i + 1) * PIC_FULL_MAX));
+  var r = sh.getRange(row, col, 1, PIC_CHUNKS + 1); r.setNumberFormat('@'); r.setValues([vals]);
+}
+function picHead_(sh, col) {
+  picEnsure_(sh, col + PIC_CHUNKS);
+  var h = sh.getRange(1, col);
+  if (String(h.getValue()) !== 'Picture') { h.setNumberFormat('@'); h.setValue('Picture'); h.setFontWeight('bold'); sh.getRange(1, col + 1, 1, PIC_CHUNKS).setValues([['Picture 2', 'Picture 3', 'Picture 4', 'Picture 5']]); }
+}
+function picThumbOf_(sh, row, col) { return String(sh.getRange(row, col).getValue() || ''); }
+function picGet_(req) {                                 // the full pictures of up to 12 entries: { id: dataUrl }
+  var kind = req.kind === 'lic' ? 'lic' : 'work', p = CTX.perms || {};
+  if (!p[kind] || p[kind] === 'none') fail_('You do not have permission to do this.', 'PERM');
+  var ids = (Array.isArray(req.ids) ? req.ids : [req.id]).map(String).slice(0, 12), out = {};
+  var sh = kind === 'lic' ? licSheet_() : ownedSheet_('WORK', 8), col = kind === 'lic' ? 16 : 9;
+  picEnsure_(sh, col + PIC_CHUNKS);
+  ids.forEach(function (id) {
+    var row = kind === 'lic' ? findLicRow_(sh, id) : findWorkRow_(sh, id);
+    if (row < 0) return;
+    var full = sh.getRange(row, col + 1, 1, PIC_CHUNKS).getValues()[0].join('');
+    if (full) out[id] = full;
+  });
+  return { ok: true, pics: out };
+}
+
 // ---------- WORK (daily work record) ----------
 function readWork_() {
   var sh = ownedSheet_('WORK', 8);
+  picEnsure_(sh, 9);
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 8).getValues();
+  var vals = sh.getRange(2, 1, last - 1, 9).getValues();
   var out = [], dirty = false;
   vals.forEach(function (r) {
     if (r[0] === '' && r[1] === '' && r[2] === '' && r[3] === '' && r[4] === '' && r[5] === '') return;
@@ -1976,7 +2017,7 @@ function readWork_() {
     if (!id) { id = Utilities.getUuid().slice(0, 8); r[6] = id; dirty = true; }
     if (ownerOf_(r[7]) !== CTX.owner) return;
     out.push({ id: id, date: fmtDate_(r[0]), name: String(r[1]), product: String(r[2]),
-      number: String(r[3]), sticker: String(r[4]), desc: String(r[5]) });
+      number: String(r[3]), sticker: String(r[4]), desc: String(r[5]), pic: String(r[8] || '') });
   });
   if (dirty) sh.getRange(2, 7, vals.length, 1).setValues(vals.map(function (r) { return [r[6]]; }));
   return out;
@@ -2011,6 +2052,8 @@ function addWork_(req) {
   var rng = sh.getRange(row, 1, 1, 8);
   rng.setNumberFormat('@');
   rng.setValues([[w.date, w.name, w.product, w.number, w.sticker, w.desc, id, CTX.owner]]);
+  var pin = picIn_(req); w.pic = '';
+  if (pin && !pin.clear) { picHead_(sh, 9); picWrite_(sh, row, 9, pin); w.pic = pin.thumb; }
   w.id = id;
   return { ok: true, work: w };
 }
@@ -2023,6 +2066,9 @@ function updateWork_(req) {
   var rng = sh.getRange(row, 1, 1, 6);
   rng.setNumberFormat('@');
   rng.setValues([[w.date, w.name, w.product, w.number, w.sticker, w.desc]]);
+  var pin = picIn_(req);
+  if (pin) { picHead_(sh, 9); picWrite_(sh, row, 9, pin); w.pic = pin.clear ? '' : pin.thumb; }
+  else { picEnsure_(sh, 13); w.pic = picThumbOf_(sh, row, 9); }
   w.id = String(req.id);
   return { ok: true, work: w };
 }
@@ -2282,6 +2328,7 @@ function licSheet_() {
     hg.setNumberFormat('@'); hg.setValue('Group ID'); hg.setFontWeight('bold');
     sh.getRange('O:O').setNumberFormat('@');
   }
+  picHead_(sh, 16);
   return sh;
 }
 // names of the extra fields this owner added (stored in the "Rack Config" sheet under type "LicFields")
@@ -2322,7 +2369,7 @@ function readLic_() {
   var sh = licSheet_();
   var last = sh.getLastRow();
   if (last < 2) return [];
-  var vals = sh.getRange(2, 1, last - 1, 15).getValues();
+  var vals = sh.getRange(2, 1, last - 1, 16).getValues();
   var gids = {}; readLicGroups_().forEach(function (g) { gids[g.id] = 1; });
   var out = [], dirty = false;
   vals.forEach(function (r) {
@@ -2335,7 +2382,7 @@ function readLic_() {
     out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
       startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '',
       freq: LIC_FREQS[freq] ? freq : '', dueDate: LIC_DATE_RE.test(r[8]) ? String(r[8]) : '',
-      policyName: String(r[9] || ''), totalAmount: Number(r[10]) || 0, nominee: String(r[11] || ''), phone: String(r[12] || ''), extra: ex, group: gids[String(r[14] || '')] ? String(r[14]) : '' });
+      policyName: String(r[9] || ''), totalAmount: Number(r[10]) || 0, nominee: String(r[11] || ''), phone: String(r[12] || ''), extra: ex, group: gids[String(r[14] || '')] ? String(r[14]) : '', pic: String(r[15] || '') });
   });
   if (dirty) sh.getRange(2, 7, vals.length, 1).setValues(vals.map(function (r) { return [r[6]]; }));
   return out;
@@ -2378,6 +2425,8 @@ function addLic_(req) {
   rng.setNumberFormat('@');
   rng.setValues([[p.name, p.policyNo, p.amount, p.startDate, p.endDate, p.freq, id, CTX.owner, p.dueDate,
     p.policyName, p.totalAmount, p.nominee, p.phone, JSON.stringify(p.extra), p.group]]);
+  var pin = picIn_(req); p.pic = '';
+  if (pin && !pin.clear) { picWrite_(sh, row, 16, pin); p.pic = pin.thumb; }
   p.id = id;
   return { ok: true, lic: p };
 }
@@ -2398,6 +2447,9 @@ function updateLic_(req) {
   var rg = sh.getRange(row, 15);
   rg.setNumberFormat('@');
   rg.setValue(p.group);
+  var pin = picIn_(req);
+  if (pin) { picWrite_(sh, row, 16, pin); p.pic = pin.clear ? '' : pin.thumb; }
+  else p.pic = picThumbOf_(sh, row, 16);
   p.id = String(req.id);
   return { ok: true, lic: p };
 }

@@ -2514,6 +2514,48 @@ function workPicker(){
   w.querySelector('[data-x]').onclick = () => w.remove();
   draw();
 }
+/* ---------- PICTURES on Work entries and LIC policies ----------
+   The photo is shrunk on the phone (JPEG): a small thumbnail for the lists + a bigger picture that is fetched only when opened / exported. */
+const PICD = {}, PICF = {};                       // PICD: pictures picked but not saved yet (key -> {full, thumb} | 'clear'), PICF: full pictures already fetched ('work:id' -> dataUrl)
+(function(){ const st = document.createElement('style'); st.textContent = '.pthumb{width:36px;height:36px;object-fit:cover;border-radius:8px;border:1px solid var(--line);vertical-align:middle;cursor:pointer;background:#fff}.pc{white-space:nowrap}.pc .btn{margin-left:4px}.picbox{display:flex;align-items:center;gap:6px}.picbox .pthumb{width:42px;height:42px}'; document.head.appendChild(st); })();
+function picLoad(file){ return new Promise((ok, no) => { const u = URL.createObjectURL(file), im = new Image(); im.onload = () => { URL.revokeObjectURL(u); ok(im); }; im.onerror = () => { URL.revokeObjectURL(u); no(new Error('Could not read this picture')); }; im.src = u; }); }
+function picScale(im, max, q){ const r = Math.min(1, max / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.width * r)); c.height = Math.max(1, Math.round(im.height * r));
+  const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height); return c.toDataURL('image/jpeg', q); }
+async function picMake(file){
+  if (!file || !/^image\//.test(file.type || 'image/')) throw new Error('Please choose a picture');
+  const im = await picLoad(file); let full = '', max = 1100, q = .72;
+  for (let i = 0; i < 9; i++){ full = picScale(im, max, q); if (full.length <= 175000) break; if (q > .5) q -= .07; else max = Math.round(max * .82); }
+  if (full.length > 175000) throw new Error('This picture is too big');
+  let thumb = '', m = 72, q2 = .5;
+  for (let i = 0; i < 12; i++){ thumb = picScale(im, m, q2); if (thumb.length <= 8500) break; if (q2 > .3) q2 -= .07; else m -= 8; }
+  return { full, thumb };
+}
+function picShow(src){
+  const w = openModal(`<div style="text-align:center"><img src="${src}" alt="" style="max-width:100%;max-height:70vh;border-radius:10px"></div><div class="foot"><button class="btn ghost" data-sv>⬇ Save</button><button class="btn" data-x>Close</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-sv]').onclick = async () => { try { saveBlob('picture-' + Date.now() + '.jpg', await (await fetch(src)).blob()); } catch(e){ toast('Could not save the picture', true); } };
+}
+async function picOpen(kind, id, key){
+  let src = '', d = key && PICD[key];
+  if (d && d !== 'clear') src = d.full;
+  else {
+    const ck = kind + ':' + id;
+    if (!PICF[ck]){ try { const r = await api('picGet', { kind, ids:[id] }); if (r.pics && r.pics[id]) PICF[ck] = r.pics[id]; } catch(e){ handleErr(e); return; } }
+    src = PICF[ck] || '';
+  }
+  if (!src) return toast('Picture not found', true);
+  picShow(src);
+}
+async function picPrefetch(kind, list){                  // for the PDF: fetch the full pictures (8 at a time)
+  const ids = list.filter(x => x.pic && !PICF[kind + ':' + x.id]).map(x => x.id);
+  for (let i = 0; i < ids.length; i += 8){ const r = await api('picGet', { kind, ids:ids.slice(i, i + 8) }); Object.keys(r.pics || {}).forEach(k => { PICF[kind + ':' + k] = r.pics[k]; }); }
+}
+async function picPicked(el, key){
+  const f = el.files && el.files[0]; el.value = ''; if (!f) return;
+  try { toast('Preparing the picture…'); PICD[key] = await picMake(f); render(); } catch(e){ toast(e.message || 'Could not use this picture', true); }
+}
+function picDrop(key){ PICD[key] = 'clear'; render(); }
+
 function vWork(){
   const y = S.wy, f = S.wf, q = f.q.trim().toLowerCase(), tIso = todayISO();
   const yearList = S.d.work.filter(x => x.date.startsWith(y + '-'));
@@ -2528,10 +2570,13 @@ function vWork(){
     <td data-l="Product name">${inp(key,'product','Product name',dv(key,e,'product'))}</td>
     <td data-l="Product no.">${inp(key,'number','Product no.',dv(key,e,'number'))}</td>
     <td data-l="Sticker">${inp(key,'sticker','Sticker',dv(key,e,'sticker'))}</td>
-    <td class="ds" data-l="Description">${inp(key,'desc','Description',dv(key,e,'desc'))}</td>`;
+    <td class="ds" data-l="Description">${inp(key,'desc','Description',dv(key,e,'desc'))}</td>${picCell(key, e)}`;
+  const picCell = (key, e) => { const d = PICD[key], cur = d ? (d === 'clear' ? '' : d.thumb) : (e ? e.pic : '');
+    return `<td class="pc" data-l="Photo">${cur ? `<img class="pthumb" alt="Photo" src="${cur}" onclick="picOpen('work','${e ? esc(e.id) : ''}','${esc(key)}')">` : ''}<label class="btn ghost sm" style="cursor:pointer;margin:0">📷<input type="file" accept="image/*" hidden onchange="picPicked(this,'${esc(key)}')"></label>${cur ? `<button type="button" class="btn ghost sm" title="Remove photo" onclick="picDrop('${esc(key)}')">✕</button>` : ''}</td>`; };
   const SHOWL = { name:'Name', product:'Product name', number:'Product no.', sticker:'Sticker' };
   const showCells = e => ['name','product','number','sticker'].map(k => e[k] ? `<td data-l="${SHOWL[k]}">${esc(e[k])}</td>` : `<td class="emptyc"><span class="dim">—</span></td>`).join('')
-    + (e.desc ? `<td class="ds" data-l="Description">${esc(e.desc)}</td>` : `<td class="emptyc"><span class="dim">—</span></td>`);
+    + (e.desc ? `<td class="ds" data-l="Description">${esc(e.desc)}</td>` : `<td class="emptyc"><span class="dim">—</span></td>`)
+    + (e.pic ? `<td class="pc" data-l="Photo"><img class="pthumb" alt="Photo" src="${e.pic}" onclick="picOpen('work','${esc(e.id)}')"></td>` : `<td class="emptyc"><span class="dim">—</span></td>`);
 
   let rows = '';
   for (let m = 1; m <= 12; m++){
@@ -2569,7 +2614,7 @@ function vWork(){
         mr += `<tr class="${cls}">${dc}${ln.body}<td class="ac">${ln.act}</td></tr>`;
       });
     }
-    if (mr) rows += `<tr class="mh"><td colspan="7">${MONTHS[m-1]} ${y} <span style="font-weight:500;color:var(--muted);font-size:calc(12.5px*var(--fs))">· ${perMonth[m]} entries</span></td></tr>` + mr;
+    if (mr) rows += `<tr class="mh"><td colspan="8">${MONTHS[m-1]} ${y} <span style="font-weight:500;color:var(--muted);font-size:calc(12.5px*var(--fs))">· ${perMonth[m]} entries</span></td></tr>` + mr;
   }
 
   const yrs = []; for (let i = new Date().getFullYear() - 3; i <= new Date().getFullYear() + 1; i++) yrs.push(i);
@@ -2600,7 +2645,7 @@ function vWork(){
       <div class="actions" style="margin-top:14px"><button class="btn soft sm" onclick="doExport('work','xlsx')">⬇ Excel</button><button class="btn soft sm" onclick="doExport('work','pdf')">⬇ PDF</button></div>
     </div></div></div>
   <div class="card" id="wTable"><h3>Work record — ${y}${f.date ? ' · ' + esc(fmtDateNice(f.date)) : ''}</h3>
-    ${rows ? `<div class="tbl-wrap"><table class="wk"><thead><tr><th class="d">Date</th><th>Name</th><th>Product name</th><th>Product no.</th><th>Sticker</th><th>Description</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`
+    ${rows ? `<div class="tbl-wrap"><table class="wk"><thead><tr><th class="d">Date</th><th>Name</th><th>Product name</th><th>Product no.</th><th>Sticker</th><th>Description</th><th>Photo</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`
            : '<div class="empty-state">No entries match these filters.</div>'}
     <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">Type in the boxes of a date and press <b>Save</b> (or Enter). Use <b>＋</b> next to a date for more than one entry. Use <b>Edit</b> / <b>Delete</b> to fix mistakes. Saved to the “Work” tab of your Google Sheet.</p>
   </div>`;
@@ -2609,7 +2654,7 @@ function wDraft(el){ const k = el.dataset.k; (S.wDraft[k] = S.wDraft[k] || {})[e
 function workAddMore(iso){ if (!can('work')) return deny(); S.wAdd[iso] = true; render(); }
 function workEdit(id){ if (!can('work')) return deny(); S.wEdit = id; render(); }
 function workCancel(key){
-  delete S.wDraft[key];
+  delete S.wDraft[key]; delete PICD[key];
   if (key[0] === 'e') S.wEdit = null; else delete S.wAdd[key.slice(2)];
   render();
 }
@@ -2618,14 +2663,15 @@ async function workSave(key){ if (!can('work')) return deny();
   const isNew = key[0] === 'n', ref = key.slice(2), v = {};
   document.querySelectorAll(`[data-k="${key}"]`).forEach(el => v[el.dataset.f] = el.value);
   if (!WF.some(f => (v[f] || '').trim())) return toast('Write something in at least one box', true);
+  const pd = PICD[key]; if (pd === 'clear') v.picClear = true; else if (pd){ v.picFull = pd.full; v.picThumb = pd.thumb; }
   S.wBusy = true;
   try{
     if (isNew){ const r = await api('addWork', { ...v, date: ref }); S.d.work.push(r.work); delete S.wAdd[ref]; }
     else {
       const x = S.d.work.find(e => e.id === ref);
-      const r = await api('updateWork', { ...v, id: ref, date: v.date || x.date }); Object.assign(x, r.work); S.wEdit = null;
+      const r = await api('updateWork', { ...v, id: ref, date: v.date || x.date }); Object.assign(x, r.work); S.wEdit = null; delete PICF['work:' + ref];
     }
-    delete S.wDraft[key]; render(); toast('Saved');
+    delete S.wDraft[key]; delete PICD[key]; render(); toast('Saved');
   }catch(e){ handleErr(e); }
   finally{ S.wBusy = false; }
 }
@@ -3294,7 +3340,7 @@ function vLic(){
   const remind = all.map(x => ({ x, rn: licRenewInfo(x) })).filter(o => o.rn.due && o.rn.days <= 30).sort((a, b) => a.rn.days - b.rn.days);
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
       <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><div class="lic-name"><b>${esc(x.name) || '<span class="dim">—</span>'}</b><span class="lic-name-tags">${licStatusTag(x.endDate)}${licGroupTag(x)}</span></div></td>
-      <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}</td>
+      <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}${x.pic ? ` <img class="pthumb" alt="Policy photo" src="${x.pic}" onclick="picOpen('lic','${esc(x.id)}')">` : ''}</td>
       <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
       <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>
       <td data-l="Sum Assured" class="n">${licAmt(x.totalAmount)}</td>
@@ -3463,10 +3509,11 @@ function dateTypeable(root){
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
   const freqOpts = Object.keys(LIC_FREQ).map(k => `<option value="${k}" ${(x ? x.freq : '') === k ? 'selected' : ''}>${LIC_FREQ[k]}</option>`).join('');
+  let licPic = null;                                   // null = keep as it is, 'clear' = remove, {full, thumb} = new picture
   const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer, policy name, premium and sum assured, nominee, mobile number, premium mode, dates and the renewal (premium due) date.</p>
     <form id="licf" autocomplete="off">
       <div class="row2"><div class="field"><label>Customer Name</label><input class="input" name="name" maxlength="200" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
-        <div class="field"><label>Policy Number</label><input class="input" name="policyNo" maxlength="80" autocomplete="off" value="${esc(x ? x.policyNo : '')}"></div></div>
+        <div class="field"><label>Policy Number</label><div class="picbox"><input class="input" name="policyNo" maxlength="80" autocomplete="off" style="flex:1;min-width:0" value="${esc(x ? x.policyNo : '')}"><span id="licPicBox" class="picbox"></span></div></div></div>
       <div class="row2"><div class="field"><label>Policy Name</label><input class="input" name="policyName" maxlength="200" autocomplete="off" placeholder="e.g. Jeevan Anand" value="${esc(x ? x.policyName : '')}"></div>
         <div class="field"><label>Sum Assured</label><input class="input" name="totalAmount" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Sum assured of the policy" value="${x && x.totalAmount ? x.totalAmount : ''}"></div></div>
       <div class="row2"><div class="field"><label>Nominee</label><input class="input" name="nominee" maxlength="200" autocomplete="off" value="${esc(x ? x.nominee : '')}"></div>
@@ -3488,13 +3535,22 @@ function licForm(id){ if (!can('lic')) return deny();
   w.querySelector('[data-fields]').onclick = () => {          // keep what is already typed, open the fields editor, then come back
     const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {};
     fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; });
-    S.licDraft = { id:x ? x.id : '', vals, ex }; w.remove(); licFieldsEdit(x ? x.id : '');
+    S.licDraft = { id:x ? x.id : '', vals, ex, pic:licPic }; w.remove(); licFieldsEdit(x ? x.id : '');
   };
-  const keepDraft = () => { const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {}; fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; }); S.licDraft = { id:x ? x.id : '', vals, ex }; };
+  const keepDraft = () => { const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {}; fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; }); S.licDraft = { id:x ? x.id : '', vals, ex, pic:licPic }; };
   w.querySelector('[data-fadd]').onclick = () => { keepDraft(); w.remove(); licFieldQuick('add', -1, x ? x.id : ''); };
   w.querySelectorAll('[data-fren]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('ren', +b.dataset.fren, x ? x.id : ''); });
   w.querySelectorAll('[data-frem]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('rem', +b.dataset.frem, x ? x.id : ''); });
   const dr = S.licDraft && S.licDraft.id === (x ? x.id : '') ? S.licDraft : null; S.licDraft = null;
+  if (dr && dr.pic !== undefined) licPic = dr.pic;
+  const drawPic = () => {                              // the small photo button next to the policy number
+    const cur = licPic === 'clear' ? '' : (licPic ? licPic.thumb : (x ? x.pic : '')), box = w.querySelector('#licPicBox');
+    box.innerHTML = (cur ? `<img class="pthumb" alt="Policy photo" src="${cur}" data-pv>` : '') + `<label class="btn ghost sm" style="cursor:pointer;margin:0" title="Add a photo of the policy">📷<input type="file" accept="image/*" hidden data-pf></label>` + (cur ? `<button type="button" class="btn ghost sm" data-pd title="Remove photo">✕</button>` : '');
+    const im = box.querySelector('[data-pv]'); if (im) im.onclick = () => { if (licPic && licPic !== 'clear') picShow(licPic.full); else picOpen('lic', x.id); };
+    box.querySelector('[data-pf]').onchange = async ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (!f) return; try { toast('Preparing the picture…'); licPic = await picMake(f); drawPic(); } catch(e){ toast(e.message || 'Could not use this picture', true); } };
+    const d = box.querySelector('[data-pd]'); if (d) d.onclick = () => { licPic = 'clear'; drawPic(); };
+  };
+  drawPic();
   if (dr){
     const fm = w.querySelector('#licf');
     Object.keys(dr.vals).forEach(k => { if (fm.elements[k] && !fm.elements[k].length) fm.elements[k].value = dr.vals[k]; });
@@ -3509,8 +3565,9 @@ function licForm(id){ if (!can('lic')) return deny();
   w.querySelector('#licf').onsubmit = async ev => {
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
     f.extra = {}; ev.target.querySelectorAll('[data-ex]').forEach(i => { if (i.value.trim()) f.extra[i.dataset.ex] = i.value.trim(); });
+    if (licPic === 'clear') f.picClear = true; else if (licPic){ f.picFull = licPic.full; f.picThumb = licPic.thumb; }
     try{
-      if (x){ const r = await api('updateLic', { id:x.id, ...f }); Object.assign(x, r.lic); }
+      if (x){ const r = await api('updateLic', { id:x.id, ...f }); Object.assign(x, r.lic); delete PICF['lic:' + x.id]; }
       else { const r = await api('addLic', f); S.d.lic.push(r.lic); }
       w.remove(); render(); toast('Saved');
     }catch(e){ btn.disabled = false; handleErr(e); }
@@ -4394,9 +4451,15 @@ function pdfLedger(P, d, first){
 function pdfWork(P, d, first){
   let y = pdfStart(P, 'Daily Work Record', `${d.work.length} entries   |   Generated ${STAMP()}`, 'l', first);
   y = pdfBoxes(P, y, [{ label:'Total entries', value:String(d.work.length) }, { label:'Days with work', value:String(d.wDays) }, { label:'Different products', value:String(d.wProdList.length) }]);
-  pdfTable(P, { startY:y, head:[['Date', 'Day', 'Name', 'Product Name', 'Product No.', 'Sticker', 'Description']],
-    body:d.work.map(x => [fmtDateNice(x.date), dayName(x.date), x.name, x.product, x.number, x.sticker, x.desc].map(PT)),
-    styles:{ fontSize:8 }, columnStyles:{ 0:{ cellWidth:25 }, 1:{ cellWidth:12, halign:'center' }, 2:{ cellWidth:34 }, 3:{ cellWidth:40 }, 4:{ cellWidth:28 }, 5:{ cellWidth:22 } } });
+  const withPic = d.work.some(x => x.pic && PICF['work:' + x.id]);
+  const PH = 30;                                                           // height of a row that has a photo (mm)
+  pdfTable(P, { startY:y, head:[['Date', 'Day', 'Name', 'Product Name', 'Product No.', 'Sticker', 'Description'].concat(withPic ? ['Photo'] : [])],
+    body:d.work.map(x => [fmtDateNice(x.date), dayName(x.date), x.name, x.product, x.number, x.sticker, x.desc].map(PT).concat(withPic ? [''] : [])),
+    styles:{ fontSize:8 }, columnStyles:Object.assign({ 0:{ cellWidth:25 }, 1:{ cellWidth:12, halign:'center' }, 2:{ cellWidth:34 }, 3:{ cellWidth:40 }, 4:{ cellWidth:28 }, 5:{ cellWidth:22 } }, withPic ? { 7:{ cellWidth:36 } } : {}),
+    didParseCell: withPic ? (h => { if (h.section === 'body' && h.column.index === 7){ const x = d.work[h.row.index]; if (x && PICF['work:' + x.id]) h.cell.styles.minCellHeight = PH; } }) : undefined,
+    didDrawCell: withPic ? (h => { if (h.section === 'body' && h.column.index === 7){ const x = d.work[h.row.index], src = x && PICF['work:' + x.id]; if (!src) return;
+      try { const ip = P.doc.getImageProperties(src), bw = h.cell.width - 3, bh = h.cell.height - 3, r = Math.min(bw / ip.width, bh / ip.height), w = ip.width * r, hh = ip.height * r;
+        P.doc.addImage(src, 'JPEG', h.cell.x + (h.cell.width - w) / 2, h.cell.y + (h.cell.height - hh) / 2, w, hh); } catch(e){} } }) : undefined });
 }
 
 /* ---------- EXCEL + PDF: passwords ---------- */
@@ -4460,6 +4523,7 @@ async function doExport(kind, fmt){
     if (!inc.att && !inc.exp && !inc.work && kind !== 'pw' && kind !== 'lic'){ toast('Nothing to export for your account', true); return; }
     if (fmt === 'pdf'){
       await needPdf();
+      if (inc.work) { try { await picPrefetch('work', d.work); } catch(e){} }          // the photos of the work entries go into the PDF
       const P = { doc:new window.jspdf.jsPDF({ orientation:(inc.att ? 'l' : inc.exp ? 'p' : 'l'), unit:'mm', format:'a4' }) };
       let first = true;
       if (inc.att){ pdfAtt(P, d, first); first = false; }
