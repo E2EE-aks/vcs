@@ -170,7 +170,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, setMyBirthday: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -218,8 +218,7 @@ function buildCtx_(uid, asUser) {
   LEADS_ = null;
   var acc = getAccount_(uid);
   if (!acc || !acc.active) fail_('Session expired. Please log in again.', 'AUTH');
-  if (tempExpired_(acc.id)) fail_('Your temporary account (24 hours) has expired. Please ask your admin.', 'AUTH');
-  if (payExpired_(acc.payDue)) fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
+  // temporary-account expiry and "payment due" no longer sign anybody out: expiredGate_ blocks only the actions (login + messaging an admin keep working)
   // Members of a group all read / write the group's rows (owner = group id), so they always see the same data.
   var g = groupOf_(acc.id);
   CTX = { uid: acc.id, owner: g ? g.id : acc.id, role: acc.role, primary: acc.id === 'ADMIN', perms: acc.perms,
@@ -357,6 +356,8 @@ function route_(req) {
       case 'chatEdit':          out = chatEdit_(req); break;
       case 'chatReact':         out = chatReact_(req); break;
       case 'chatUsers':         return chatUsers_();
+      case 'chatKeyGet':        return chatKeyGet_(req);
+      case 'chatKeyUse':        out = chatKeyUse_(req); break;
       case 'chatPhotos':        return chatPhotos_(req);
       case 'chatPhotoFull':     return chatPhotoFull_(req);
       case 'setMyPhoto':        out = setMyPhoto_(req); break;
@@ -451,10 +452,13 @@ function parseDue_(v) {
   if (m) return new Date(+m[3], +m[2] - 1, +m[1], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0)).getTime();
   return new Date(s).getTime();
 }
-function payExpired_(v) {
+function payPast_(v) {                // the "payment due until" date has passed
   var t = parseDue_(v);
   return !isNaN(t) && t < Date.now();
 }
+// Kept only because older copies of server.js call it at sign-in: a passed payment date must NEVER stop anybody from signing in.
+// It only blocks actions, through expiredGate_.
+function payExpired_(v) { return false; }
 function nowStr_() { return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss'); }
 function tsStr_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
@@ -520,8 +524,12 @@ var EXPIRED_OK = { getAll: 1, getTheme: 1, status: 1, logout: 1, loginImgs: 1,
   callConfig: 1, callPoll: 1, callAnswer: 1, callEnd: 1, ludoPoll: 1, updList: 1,
   bioChallenge: 1, bioLogin: 1, bioList: 1, bioRegister: 1, bioRemove: 1 };
 // light = only the cheap check (used by server.js before the sheet is loaded); the chat recipient is then checked inside route_.
+// A "payment due" date that has passed counts the same way as an expired trial.
+function payDueExpired_(uid) { try { var acc = getAccount_(uid, readSettings_().values); return !!acc && payPast_(acc.payDue); } catch (e) { return false; } }
+// light: true = no sheet loaded yet (only the cheap property checks); 'sheet' = sheet available but the chat recipient is checked later inside route_.
 function expiredGate_(uid, a, req, light) {
-  if (!uid || uid === 'ADMIN' || !accExpired_(uid)) return;
+  if (!uid || uid === 'ADMIN') return;
+  if (!(accExpired_(uid) || tempExpired_(uid) || (light !== true && payDueExpired_(uid)))) return;
   if (!EXPIRED_OK[a]) fail_(ACC_MSG, 'EXPIRED');
   if (a === 'chatSend' && !light) {
     var to = String((req && req.to) || '').trim(), acc = (to && !isChatGroupId_(to)) ? getAccount_(to, readSettings_().values) : null;
@@ -679,14 +687,6 @@ function login_(req) {
       logLogin_(acc, uname, 'Blocked', 'Location not accurate (' + info.acc + ' m)', info);
       fail_('Your location is not accurate enough (about ' + info.acc + ' m). Turn on GPS / precise location, go near a window or outside, and try again.', 'LOCREQ');
     }
-  }
-  if (tempExpired_(acc.id)) {
-    logLogin_(acc, uname, 'Blocked', 'Temporary account expired', info);
-    fail_('This temporary account (24 hours) has expired. Please ask your admin.', 'DISABLED');
-  }
-  if (payExpired_(acc.payDue)) {
-    logLogin_(acc, uname, 'Blocked', 'Payment pending', info);
-    fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
   }
   cache.remove(fkey);
   if (acc.row) { var c = getSheet_('USERS').getRange(acc.row, 11); c.setNumberFormat('@'); c.setValue(nowStr_()); }
@@ -3025,6 +3025,39 @@ function chatRows_() {
     if (r[8]) { try { rx = JSON.parse(String(r[8])); } catch (e) { rx = null; } }
     return { id: String(r[0]), t: Number(r[1]) || 0, from: String(r[2]), to: String(r[3]), text: String(r[4]), reply: rep, edited: Number(r[7]) || 0, rx: rx, rxAt: Number(r[9]) || 0 };
   });
+}
+// ---------- SECRET KEY: two users connect their chat by sharing a key ----------
+// CHATKEY_<userId> = this user's current key, CKI_<key> = which user owns it (so a key is found in one lookup).
+// Whoever types the other's key gets that person added to his chat list; the link works both ways (chatSee_ is two-way).
+function chatKeyNorm_(k) { return String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function chatKeyFmt_(k) { return k.slice(0, 4) + '-' + k.slice(4); }
+function chatKeyGet_(req) {
+  var P = PropertiesService.getScriptProperties(), k = String(P.getProperty('CHATKEY_' + CTX.uid) || '');
+  if (!k || (req && req.regen)) {
+    if (k) P.deleteProperty('CKI_' + k);
+    var al = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    do { k = ''; for (var i = 0; i < 8; i++) k += al.charAt(Math.floor(Math.random() * al.length)); } while (P.getProperty('CKI_' + k));
+    P.setProperty('CHATKEY_' + CTX.uid, k); P.setProperty('CKI_' + k, CTX.uid);
+  }
+  return { ok: true, key: chatKeyFmt_(k) };
+}
+function chatKeyUse_(req) {
+  var P = PropertiesService.getScriptProperties(), fk = 'CKF_' + CTX.uid, now = Date.now();
+  var f = String(P.getProperty(fk) || '').split('|'), cnt = Number(f[0]) || 0, ts = Number(f[1]) || now;
+  if (now - ts > 600000) { cnt = 0; ts = now; }
+  if (cnt >= 8) fail_('Too many wrong keys. Please try again after 10 minutes.');
+  var k = chatKeyNorm_(req.key), ownerId = k.length === 8 ? String(P.getProperty('CKI_' + k) || '') : '';
+  var s = readSettings_().values, owner = ownerId ? getAccount_(ownerId, s) : null;
+  if (!owner || !owner.active) { P.setProperty(fk, (cnt + 1) + '|' + ts); fail_('Invalid secret key. Check it and try again.'); }
+  if (owner.id === CTX.uid) fail_('That is your own key. Give it to the person you want to chat with.');
+  var me = getAccount_(CTX.uid, s), name = owner.name || owner.username;
+  if (chatSee_(me, owner)) return { ok: true, already: true, name: name };
+  var holder = me.row ? me : owner, other = me.row ? owner : me;       // the link is kept in a user's own "can see" cell (the main admin has no row)
+  if (!holder.row) fail_('Could not connect these two accounts.');
+  var ids = (holder.see || []).concat([other.id]);
+  var c = getSheet_('USERS').getRange(holder.row, 15); c.setNumberFormat('@'); c.setValue(ids.join(','));
+  P.deleteProperty(fk);
+  return { ok: true, already: false, name: name };
 }
 function chatPeers_() {
   var s = readSettings_().values;

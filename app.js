@@ -112,7 +112,7 @@ function showExpired(){
 function handleErr(e){
   if (e && e.code === 'EXPIRED'){ showExpired(); return; }
   if (e.code === 'AUTH'){ forceLogout('Session expired. Please sign in again.'); return; }
-  if (e.code === 'PAYDUE'){ forceLogout(e.message || 'Payment pending. Please pay to continue using this account.'); return; }
+  if (e.code === 'PAYDUE'){ showExpired(); return; }          // never sign out: only the action is blocked
   toast(e.message || 'Something went wrong', true);
 }
 
@@ -2002,7 +2002,7 @@ let payTimer = null;
 const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock
 function tmpCountdownHtml(){
   if (!S.me || !(S.me.tempUntilMs || S.me.accUntilMs)) return '';
-  const acc = !S.me.tempUntilMs;
+  const acc = true;
   return `<div id="tmpCd" class="card" style="margin-bottom:16px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;border-left:5px solid #f59e0b">
     <div style="font-size:calc(26px*var(--fs))">🕒</div>
     <div style="flex:1;min-width:200px"><div id="tmpCdTitle" style="font-weight:700">${acc ? 'Free trial — ends on' : 'Temporary account — expires on'} <span id="tmpCdDate"></span></div>
@@ -2014,7 +2014,7 @@ let tmpTimer = null;
 function tickTmp(){
   const box = document.getElementById('tmpCd');
   if (!box || !S.me || !(S.me.tempUntilMs || S.me.accUntilMs)){ clearInterval(tmpTimer); tmpTimer = null; return; }
-  const acc = !S.me.tempUntilMs, until = S.me.tempUntilMs || S.me.accUntilMs;
+  const acc = true, until = S.me.tempUntilMs || S.me.accUntilMs;
   const left = until - (Date.now() + payOff());
   document.getElementById('tmpCdDate').textContent = new Date(until).toLocaleString('en-IN', { day:'numeric', month:'short', year:'numeric', hour:'numeric', minute:'2-digit' });
   if (left <= 0){
@@ -5121,10 +5121,45 @@ function chListTime(t){
   return chDayLabel(t) === 'Today' ? chClock(t) : chDayLabel(t) === 'Yesterday' ? 'Yesterday' : new Date(t).toLocaleDateString('en-IN', { day:'numeric', month:'short' });
 }
 
+/* ---------- Secret key: connect two users' chats ---------- */
+async function chatKeyForm(){
+  openModal(`<h3 style="margin:0 0 4px">🔑 Secret key</h3>
+    <div class="muted" style="font-size:calc(13px*var(--fs));margin-bottom:12px">Give your key to the person you want to chat with, or type their key. Either one is enough — both of you get connected.</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <div class="card" style="flex:1;min-width:210px;margin:0">
+        <div style="font-weight:700;margin-bottom:6px">My secret key</div>
+        <div id="ckMine" style="font-family:monospace;font-size:calc(24px*var(--fs));font-weight:800;letter-spacing:2px;margin:6px 0">…</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn soft sm" id="ckCopy">Copy</button><button class="btn ghost sm" id="ckNew">New key</button></div>
+        <div class="muted" style="font-size:calc(12px*var(--fs));margin-top:6px">A new key makes the old one stop working. People already connected stay connected.</div>
+      </div>
+      <div class="card" style="flex:1;min-width:210px;margin:0">
+        <div style="font-weight:700;margin-bottom:6px">Enter their key</div>
+        <input class="input" id="ckIn" maxlength="9" placeholder="XXXX-XXXX" autocomplete="off" autocapitalize="characters" style="font-family:monospace;letter-spacing:2px;text-transform:uppercase">
+        <button class="btn" id="ckGo" style="margin-top:8px">Connect</button>
+        <div id="ckMsg" style="font-size:calc(13px*var(--fs));margin-top:6px"></div>
+      </div>
+    </div>`);
+  const mine = document.getElementById('ckMine'), msg = document.getElementById('ckMsg'), inp = document.getElementById('ckIn');
+  const load = async regen => { try { const r = await chatApi('chatKeyGet', { regen: !!regen }); if (mine) mine.textContent = r.key; } catch(e){ if (mine) mine.textContent = '—'; chatErr(e); if (e.code !== 'EXPIRED') toast(e.message, true); } };
+  load(false);
+  document.getElementById('ckCopy').onclick = async () => { try { await navigator.clipboard.writeText(mine.textContent); toast('Key copied'); } catch(e){ toast(mine.textContent); } };
+  document.getElementById('ckNew').onclick = () => { if (confirm('Make a new key? The old key will stop working.')) load(true); };
+  const go = async () => {
+    const k = (inp.value || '').trim(); if (!k){ inp.focus(); return; }
+    msg.style.color = ''; msg.textContent = 'Connecting…';
+    try {
+      const r = await chatApi('chatKeyUse', { key: k });
+      msg.style.color = '#15803d'; msg.textContent = r.already ? 'Already connected with ' + r.name + '.' : '✅ Connected with ' + r.name + '!';
+      inp.value = ''; await chatLoadUsers();
+    } catch(e){ chatErr(e); if (e.code !== 'EXPIRED'){ msg.style.color = '#b91c1c'; msg.textContent = e.message; } else msg.textContent = ''; }
+  };
+  document.getElementById('ckGo').onclick = go;
+  inp.onkeydown = e => { if (e.key === 'Enter') go(); };
+}
 function vChat(){
   return `<div class="chat ${S.chat.with ? 'in-conv' : ''}" id="chatRoot">
     <div class="card ch-side">
-      <div class="ch-top"><h3>💬 Chats <button class="btn sm" style="float:right" onclick="groupChatForm()">＋ New group</button></h3><input class="input" id="chSearch" placeholder="Search user…" autocomplete="off" value="${esc(S.chat.q)}"></div>
+      <div class="ch-top"><h3>💬 Chats <button class="btn sm" style="float:right" onclick="groupChatForm()">＋ New group</button><button class="btn soft sm" style="float:right;margin-right:6px" onclick="chatKeyForm()">🔑 Secret key</button></h3><input class="input" id="chSearch" placeholder="Search user…" autocomplete="off" value="${esc(S.chat.q)}"></div>
       <div class="ch-list" id="chList"></div>
     </div>
     <div class="card ch-pane" id="chPane"></div>
@@ -5146,7 +5181,7 @@ function chatRenderList(){
     el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">Could not load users</b><div style="margin:6px 0 12px;word-break:break-word">${esc(S.chat.err)}</div><button class="btn sm" onclick="S.chat.err='';chatRenderList();chatLoadUsers()">↻ Try again</button></div>`; return;
   }
   if (!S.chat.loaded){ el.innerHTML = '<div class="empty-state">Loading users…</div>'; return; }
-  if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No users to chat with yet. The main admin decides who you can see.'}</div>`; return; }
+  if (!list.length){ el.innerHTML = `<div class="empty-state">${S.chat.users.length ? 'No user found' : 'No users to chat with yet. Tap “🔑 Secret key” to connect with someone.'}</div>`; return; }
   el.innerHTML = list.map(u => {
     const st = chatStatus(u);
     const prev = u.lastText ? `<div class="ch-prev">${u.lastMine ? 'You: ' : (u.lastFrom ? esc(u.lastFrom) + ': ' : '')}${esc(u.lastText)}</div>` : '';

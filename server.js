@@ -341,7 +341,6 @@ function makeApp(store, env) {
     if (!acc) bad('account removed');
     if (!acc.active) { globalThis.logLogin_(acc, acc.username, 'Blocked', 'Account disabled', info); globalThis.fail_('This account is disabled. Please contact the admin.', 'DISABLED'); }
     if (acc.needLoc && info.lat === '') { globalThis.logLogin_(acc, acc.username, 'Blocked', 'Location not shared', info); globalThis.fail_('Your admin requires location to sign in. Allow location access for this site and try again.', 'LOCREQ'); }
-    if (globalThis.payExpired_(acc.payDue)) { globalThis.logLogin_(acc, acc.username, 'Blocked', 'Payment pending', info); globalThis.fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE'); }
     rec.last = new Date().toISOString(); bioWrite(uid, list);
     if (acc.row) { const c = globalThis.getSheet_('USERS').getRange(acc.row, 11); c.setNumberFormat('@'); c.setValue(globalThis.nowStr_()); }
     globalThis.logLogin_(acc, acc.username, 'Success', 'Biometric', info);
@@ -855,7 +854,6 @@ function makeApp(store, env) {
     const uid = globalThis.checkToken_(token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
     const acc = globalThis.getAccount_(uid, globalThis.readSettings_().values);
     if (!acc || !acc.active) globalThis.fail_('This account is disabled. Please contact the admin.', 'DISABLED');
-    if (globalThis.payExpired_(acc.payDue)) globalThis.fail_('Payment pending. Please pay to continue using this account.', 'PAYDUE');
     return uid;
   }
   const updAdmin = token => { const uid = updWho(token); if (uid !== 'ADMIN') globalThis.fail_('Only the main admin can change updates.', 'PERM'); return uid; };
@@ -1194,7 +1192,7 @@ function makeApp(store, env) {
   const fastExp = body => {                         // a user whose 24 h trial is over: every action except reading / chat to an admin answers "choose a plan"
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
     if (!r || !r.token || typeof globalThis.expiredGate_ !== 'function') return null;
-    try { const uid = globalThis.checkToken_(r.token); if (uid) globalThis.expiredGate_(uid, r.action, r, true); }
+    try { const uid = globalThis.checkToken_(r.token); if (uid) globalThis.expiredGate_(uid, r.action, r, wb.loadedAt ? 'sheet' : true); }
     catch (err) { return Promise.resolve({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }); }
     return null;
   };
