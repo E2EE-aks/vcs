@@ -107,6 +107,10 @@ jobs:
         run: |
           if [ -n "$GSJ" ]; then
             printf '%s' "$GSJ" > android/app/google-services.json
+            # Clones use a different package id than the one registered in Firebase: add a matching client entry so the build does not fail
+            if ! grep -q "\"package_name\": *\"$APP_ID\"" android/app/google-services.json; then
+              node -e "const fs=require('fs');const p='android/app/google-services.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));const c=JSON.parse(JSON.stringify(j.client[0]));c.client_info.android_client_info.package_name=process.env.APP_ID;j.client.push(c);fs.writeFileSync(p,JSON.stringify(j,null,2));"
+            fi
             echo "Firebase config added"
           else
             echo "::warning::Secret GOOGLE_SERVICES_JSON is not set - the app is built WITHOUT notifications while it is closed."
