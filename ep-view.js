@@ -15,11 +15,11 @@
     hum :{ ne:'humne', aux:'hain', fut:'e', pl:true,  p:1, ng:true },
     ve  :{ ne:'unhone',aux:'hain', fut:'e', pl:true,  p:3, ng:true }
   };
-  var ALIAS = { main:'main', mai:'main', mein:'main', mei:'main', maine:'main', mene:'main', mainey:'main',
+  var ALIAS = { mne:'main', tmne:'tum', tm:'tum', tmhe:'tum', hmne:'hum', hm:'hum', mujhe_:'main', main:'main', mai:'main', mein:'main', mei:'main', maine:'main', mene:'main', mainey:'main',
     tum:'tum', tumne:'tum', tu:'tu', tune:'tu', aap:'aap', aapne:'aap', ap:'aap',
     wo:'wo', woh:'wo', vo:'wo', vah:'wo', usne:'wo', yeh:'yeh', ye:'yeh', yah:'yeh', isne:'yeh',
     hum:'hum', ham:'hum', humne:'hum', hamne:'hum', ve:'ve', unhone:'ve', we:'ve' };
-  var NE_FORM = { maine:1, mene:1, mainey:1, tumne:1, tune:1, aapne:1, usne:1, isne:1, humne:1, hamne:1, unhone:1 };
+  var NE_FORM = { mne:1, tmne:1, hmne:1, maine:1, mene:1, mainey:1, tumne:1, tune:1, aapne:1, usne:1, isne:1, humne:1, hamne:1, unhone:1 };
   var AUXN = { hoon:'hoon', hu:'hoon', hun:'hoon', hai:'hai', he:'hai', hain:'hain', hein:'hain', ho:'ho', tha:'tha', thaa:'tha', thi:'thi', the:'the', hoga:'hoga', hogi:'hogi', honge:'honge', hounga:'hounga', hoonga:'hounga', hoongi:'hoongi', hoge:'hoge' };
   var ADV = ['aaj','kal','roz','abhi','subah','shaam','raat','hamesha','kabhi','har','pehle','phir','ab','tab','jab','kya','kyun','kaise','kab','kahan','parso','roj','dopahar','savere','din','hafte','mahine','saal','bahut','aksar'];
   var FEM_NOUN = ['roti','chai','kitab','gaadi','gadi','movie','film','chitthi','baat','cheez','bottle','photo','tasveer','kahani','dawai','dawa','sabzi','daal','lassi','pani','paani','coffee','cake','pizza','maggi','biryani','mithai','game','ladai','shopping','padhai','call','video','khabar','kapde'];
@@ -78,6 +78,7 @@
     achha:'good', accha:'good', acha:'good', bura:'bad', bada:'big', badi:'big', chhota:'small', chhoti:'small', naya:'new', nayi:'new', purana:'old', khush:'happy', udaas:'sad', bimar:'sick', thaka:'tired', thaki:'tired', mazedaar:'fun', tez:'fast', pyaara:'lovely', sundar:'beautiful', garam:'hot', thanda:'cold', busy:'busy', free:'free', ready:'ready', late:'late', theek:'fine', sahi:'right', galat:'wrong', mushkil:'difficult', aasaan:'easy',
     mera:'my', meri:'my', mere:'my', tumhara:'your', tumhari:'your', tumhare:'your', tera:'your', teri:'your', aapka:'your', aapki:'your', aapke:'your', uska:'his', uski:'his', uske:'his', hamara:'our', hamari:'our', hamare:'our', unka:'their', unki:'their', unke:'their', apna:'own', apni:'own', apne:'own',
     mujhe:'me', mujhko:'me', tumhe:'you', tumko:'you', aapko:'you', usko:'him', use:'him', unko:'them', humko:'us', hume:'us', hamein:'us', usse:'him', mujhse:'me', tumse:'you', isko:'this', yeh_:'this' };
+  EW.payment = 'payment'; EW.cash = 'cash'; EW.online = 'online'; EW.card = 'card'; EW.fir = 'again'; EW.ya = 'or'; EW.aur = 'and'; EW.paisa = 'money'; EW.bill = 'bill'; EW.order = 'order'; EW.call = 'call'; EW.message = 'message';
   EW['par'] = 'on'; EW['do'] = 'two'; 
   var PREP = { mein:'in', me:'in', par:'on', se:'from', tak:'until', ko:'' };
   var COMPOUND = { saath:'with', liye:'for', baad:'after', pehle:'before', upar:'above', neeche:'below', andar:'inside', bahar:'outside', paas:'near', beech:'between', bina:'without' };
@@ -107,7 +108,7 @@
     if (c.stem === 'sun' && /\b(gaana|gaane|song|songs|music|radio)\b/.test(ctx)) { base = 'listen to'; past = 'listened to'; }
     if (c.stem === 'padh' && /\b(padhai)\b/.test(ctx)) { base = 'study'; past = 'studied'; }
     if (c.stem === 'bol' && /\b(english|hindi|angrezi)\b/.test(ctx)) { base = 'speak'; past = 'spoke'; }
-    if (c.stem === 'kar' && /\b(padhai)\b/.test(ctx)) { base = 'do'; }
+    if (c.stem === 'kar' && /\b(payment|call|order|booking|decision)\b/.test(ctx)) { base = 'make'; past = 'made'; }
     var ing = vb && vb[2] ? vb[2] : enIng(base);
     var POSS = { main:'my', tum:'your', tu:'your', aap:'your', hum:'our', ve:'their', wo:(c.fem ? 'her' : 'his'), yeh:(c.fem ? 'her' : 'his'), name:(c.fem ? 'her' : 'his') }[c.skey] || 'his';
     var tr = function(wd){
@@ -149,7 +150,7 @@
     }
     var PRE_RE = /^(in|on|at|from|to|with|for|after|before|until|near|inside|outside|between|without|above|below) /;
     var DET = ['my','your','his','her','our','their','a','an','the','this','that','every','two','three','some'];
-    var COUNT = ['movie','film','book','song','car','picture','photo','story','pen','notebook','road','friend','letter','game','match','shop','bike','bus','train','phone','mobile','laptop','question','room','door','window','boy','girl','man','woman','child','doctor','teacher','student','city','village'];
+    var COUNT = ['payment','bill','order','call','message','movie','film','book','song','car','picture','photo','story','pen','notebook','road','friend','letter','game','match','shop','bike','bus','train','phone','mobile','laptop','question','room','door','window','boy','girl','man','woman','child','doctor','teacher','student','city','village'];
     var art = function(str){
       var m = PRE_RE.exec(str), pre = m ? m[0] : '', np = str.slice(pre.length), ws = np.split(' ');
       var lastW = ws[ws.length - 1].replace(/'s$/, '');
@@ -213,8 +214,8 @@
     return { present:build('present'), past:build('past'), future:build('future'), unknown:uniq };
   }
 
-  function parse(raw, genderPick){
-    var q = /\?\s*$/.test(raw) ? '?' : '', excl = /!\s*$/.test(raw) ? '!' : '';
+  function parseCore(raw, genderPick){
+    var q = (/\?\s*$/.test(raw) || /(^|\s)(kya|kab|kahan|kaha|kyun|kyu|kaise|kitna|kitne|kitni|kaun)(\s|$)/i.test(raw)) ? '?' : '', excl = /!\s*$/.test(raw) ? '!' : '';
     var toks = raw.toLowerCase().replace(/[.,!?;:()"“”]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean);
     if (!toks.length) return { err:'Pehle sentence likho.' };
     var t = toks.map(function(w){ return AUXN[w] ? AUXN[w] : (w === 'nhi' || w === 'nahin' || w === 'nahi' ? 'nahi' : w); });
@@ -259,6 +260,7 @@
         var mm = /^(.+?)(ya|yi|ye|a|i|e)$/.exec(w);
         if (mm && w.length > 2) lut = { stem:mm[1], g:/i$/.test(mm[2]) ? 'f' : 'm', pl:/e$/.test(mm[2]) };
       }
+      if (lut && (lut.stem === 'le' || lut.stem === 'de' || lut.stem === 'ja') && pi >= 1 && (EV[t[pi - 1]] || IRR_PAST[t[pi - 1]]) && !isAux(t[pi - 1]) && !(lut.stem === 'ja' && t[pi - 1] === 'ja')) { lut = { stem:t[pi - 1], g:lut.g, pl:lut.pl }; pi = pi - 1; }
       if (lut) { vi = pi; kind = 'past'; stem = lut.stem; aux = pa; t.__pg = lut.g; t.__ppl = !!lut.pl; end = pa ? pi + 2 : pi + 1; }
     }
     var STEMN = { pee:'pi', jaa:'ja', khaa:'kha', soo:'so', roo:'ro', lee:'le', dee:'de', aa:'aa', laa:'la', paa:'pa', gaa:'gaa', karr:'kar', reh:'reh' };
@@ -307,7 +309,7 @@
     var join = function(a){ return a.filter(Boolean).join(' '); };
     var subjPlain = skey === 'name' ? sname : (si >= 0 ? cap0(skey, toks[si]) : (skey === 'main' ? 'main' : skey === 'tum' ? 'tum' : skey === 'wo' ? 'wo' : skey === 'hum' ? 'hum' : skey));
     function cap0(k, orig){ return k === 'main' ? 'main' : (NE_FORM[orig] ? (k === 'wo' ? 'wo' : k === 'yeh' ? 'yeh' : k === 'tu' ? 'tu' : k === 'aap' ? 'aap' : k === 'hum' ? 'hum' : k === 'tum' ? 'tum' : k === 've' ? 've' : 'main') : orig); }
-    if (si >= 0 && !NE_FORM[toks[si]]) subjPlain = ({ mai:'main', mein:'main', mei:'main', ap:'aap', woh:'wo', vo:'wo', vah:'wo', ye:'yeh', yah:'yeh', ham:'hum', we:'ve' })[toks[si]] || toks[si];
+    if (si >= 0 && !NE_FORM[toks[si]]) subjPlain = ({ tm:'tum', hm:'hum', mai:'main', mein:'main', mei:'main', ap:'aap', woh:'wo', vo:'wo', vah:'wo', ye:'yeh', yah:'yeh', ham:'hum', we:'ve' })[toks[si]] || toks[si];
     if (skey === 've' && t[si + 1] === 'log') subjPlain = toks[si] + ' log';
     var pastSubj = (P.ne && skey === 'name') ? sname + ' ne' : P.ne;
     var tr = INTRANS.indexOf(stem) < 0;      // takes "ne" in the simple past
@@ -349,6 +351,34 @@
     out.subject = skey === 'name' ? sname : fkey;
     out.verb = stem;
     return out;
+  }
+  var CONJ = ['ya', 'aur', 'lekin', 'ki'];
+  function parse(raw, genderPick){
+    var clean = raw.replace(/[.,!?;:()"“”]/g, ' ').replace(/\s+/g, ' ').trim(), words = clean.split(' ');
+    var isQ = /\?\s*$/.test(raw) || /(^|\s)(kya|kab|kahan|kaha|kyun|kyu|kaise|kitna|kitne|kitni|kaun)(\s|$)/i.test(raw);
+    var mark = /\?\s*$/.test(raw) ? '?' : (/!\s*$/.test(raw) ? '!' : '');
+    for (var ci = 2; ci < words.length; ci++) {
+      if (CONJ.indexOf(words[ci].toLowerCase()) < 0) continue;
+      var head = words.slice(0, ci).join(' ') + mark, tail = words.slice(ci);
+      var r; try { r = parseCore(head, genderPick); } catch(e){ r = { err:'x' }; }
+      if (r.err) continue;
+      var add = function(str, extra){ return str.replace(/([.?!])$/, ' ' + extra + '$1'); };
+      var tailH = tail.join(' ');
+      r.present = add(r.present, tailH); r.past = add(r.past, tailH); r.future = add(r.future, tailH);
+      if (r.en) {
+        var ew = [], skipFir = false;
+        tail.forEach(function(w, k){
+          var l = w.toLowerCase();
+          if ((l === 'fir' || l === 'phir') && ew.length && /^(or|and|but)$/.test(ew[ew.length - 1])) return;
+          var m = { ya:'or', aur:'and', lekin:'but', ki:'that' }[l];
+          if (m) ew.push(m); else if (EW[l] !== undefined) ew.push(EW[l]); else { ew.push(w); if (LOAN.indexOf(l) < 0 && r.en.unknown.indexOf(w) < 0) r.en.unknown.push(w); }
+        });
+        var ets = ew.join(' ');
+        r.en.present = add(r.en.present, ets); r.en.past = add(r.en.past, ets); r.en.future = add(r.en.future, ets);
+      }
+      return r;
+    }
+    return parseCore(raw, genderPick);
   }
   window.epConvert = parse;   // for testing
 
