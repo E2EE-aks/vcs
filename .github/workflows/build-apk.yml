@@ -190,7 +190,7 @@ jobs:
   repack:
     if: ${{ inputs.apk != '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       APK: ${{ inputs.apk }}
       APP_NAME: ${{ inputs.app_name }}
