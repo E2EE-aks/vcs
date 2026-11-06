@@ -2745,7 +2745,7 @@ function vWork(){
         ${f.date ? `<span class="chip" style="background:var(--brand-soft);color:var(--brand)">📅 ${esc(fmtDateNice(f.date))}</span>` : ''}
         ${filtered ? `<button class="chip mchip" onclick="wClear()">✕ Clear filters</button>` : ''}
       </div>
-      <div class="actions" style="margin-top:14px"><button class="btn soft sm" onclick="doExport('work','xlsx')">⬇ Excel</button><button class="btn soft sm" onclick="doExport('work','pdf')">⬇ PDF</button></div>
+      <div class="actions" style="margin-top:14px"><button class="btn soft sm" onclick="doExport('work','xlsx')">⬇ Excel</button><button class="btn soft sm" onclick="workPdf()">⬇ PDF</button></div>
     </div></div></div>
   <div class="card" id="wTable"><h3>Work record — ${y}${f.date ? ' · ' + esc(fmtDateNice(f.date)) : ''}</h3>
     ${rows ? `<div class="tbl-wrap"><table class="wk"><thead><tr><th class="d">Date</th><th>Name</th><th>Product name</th><th>Product no.</th><th>Sticker</th><th>Description</th><th>Photo</th><th>Actions</th></tr></thead><tbody>${rows}</tbody></table></div>`
@@ -4551,18 +4551,89 @@ function pdfLedger(P, d, first){
     body:d.monList.map(x => [monLabel(x.k), PM(x.inc), PM(x.exp), PM(x.net), PM(x.cum)]),
     columnStyles:{ 1:{ halign:'right' }, 2:{ halign:'right' }, 3:{ halign:'right' }, 4:{ halign:'right', fontStyle:'bold' } } });
 }
+/* ---------- PDF: Work record as an INS photo register  (# | INS No. | Rack location | Details | Photo 1, 2, 3 …) ----------
+   The INS number is read from one of the Work fields (auto-detected: the one that matches the INS numbers saved in Rack Mapping; can be changed in the PDF window).
+   Entries with the same INS number are put in ONE row, their photos side by side. The rack comes from Rack Mapping (rows whose “INS No.” field holds that number). */
+const insNorm = s => String(s == null ? '' : s).trim().toLowerCase().replace(/^ins[\s.\-:#_]*/, '').replace(/[^a-z0-9]/g, '');
+function rackIndex(){
+  const out = {};
+  try {
+    const fields = rackCfg().fields, insF = fields.filter(f => /\bins\b/i.test(f));
+    if (!insF.length) return out;
+    RACK_LIST.forEach(n => { const v = rackVals(n);
+      Object.keys(v).forEach(r => { const o = v[r] || {};
+        const bits = fields.filter(f => !insF.includes(f) && String(o[f] || '').trim()).map(f => f + ': ' + String(o[f]).trim()).join('  |  ');
+        const loc = rackName(n) + ' - Row ' + String(r).toUpperCase();
+        insF.forEach(f => String(o[f] || '').split(/[,;\/&\n]+/).forEach(tok => { const k = insNorm(tok); if (!k) return;
+          const arr = out[k] = out[k] || []; if (!arr.some(z => z.loc === loc)) arr.push({ loc, bits }); })); }); });
+  } catch(e){}
+  return out;
+}
+function insAutoField(list, idx){
+  let best = 'number', top = 0;
+  ['number', 'sticker', 'name', 'product'].forEach(f => { const c = list.filter(x => idx[insNorm(x[f])]).length; if (c > top){ top = c; best = f; } });
+  return best;
+}
+function workPdfModel(d, idx, opt){
+  const f = opt.field || insAutoField(d.work, idx), uniq = arr => [...new Set(arr.filter(Boolean))], map = new Map();
+  d.work.forEach(x => { const raw = String(x[f] || '').trim(), k = (opt.group !== false && insNorm(raw)) ? 'k:' + insNorm(raw) : 'e:' + x.id;
+    if (!map.has(k)) map.set(k, { label:raw, key:insNorm(raw), items:[] }); map.get(k).items.push(x); });
+  const groups = [...map.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric:true, sensitivity:'base' }));
+  const NAMES = [['product', 'Product'], ['name', 'Name'], ['number', 'Product no.'], ['sticker', 'Sticker']].filter(p => p[0] !== f);
+  groups.forEach(g => {
+    g.items.sort((a, b) => a.date.localeCompare(b.date));
+    g.photos = g.items.filter(x => PICF['work:' + x.id]).map(x => ({ src:PICF['work:' + x.id], date:x.date }));
+    g.racks = g.key ? (idx[g.key] || []) : [];
+    const dates = uniq(g.items.map(x => x.date)).map(fmtDateNice), lines = NAMES.map(p => [p[1], uniq(g.items.map(x => String(x[p[0]] || '').trim()))]);
+    lines.push(['Date', dates.length > 3 ? [dates.slice(0, 3).join(', ') + ' +' + (dates.length - 3) + ' more'] : [dates.join(', ')]]);
+    lines.push(['Note', uniq(g.items.map(x => String(x.desc || '').trim()))]);
+    g.detail = lines.filter(p => p[1].length && p[1][0]).map(p => p[0] + ': ' + p[1].join(', ')).join('\n');
+  });
+  const maxP = Math.max(0, ...groups.map(g => g.photos.length));
+  return { groups, field:f, K:maxP ? Math.min(4, maxP) : 0 };
+}
 function pdfWork(P, d, first){
-  let y = pdfStart(P, 'Daily Work Record', `${d.work.length} entries   |   Generated ${STAMP()}`, 'l', first);
-  y = pdfBoxes(P, y, [{ label:'Total entries', value:String(d.work.length) }, { label:'Days with work', value:String(d.wDays) }, { label:'Different products', value:String(d.wProdList.length) }]);
-  const withPic = d.work.some(x => x.pic && PICF['work:' + x.id]);
-  const PH = 30;                                                           // height of a row that has a photo (mm)
-  pdfTable(P, { startY:y, head:[['Date', 'Day', 'Name', 'Product Name', 'Product No.', 'Sticker', 'Description'].concat(withPic ? ['Photo'] : [])],
-    body:d.work.map(x => [fmtDateNice(x.date), dayName(x.date), x.name, x.product, x.number, x.sticker, x.desc].map(PT).concat(withPic ? [''] : [])),
-    styles:{ fontSize:8 }, columnStyles:Object.assign({ 0:{ cellWidth:25 }, 1:{ cellWidth:12, halign:'center' }, 2:{ cellWidth:34 }, 3:{ cellWidth:40 }, 4:{ cellWidth:28 }, 5:{ cellWidth:22 } }, withPic ? { 7:{ cellWidth:36 } } : {}),
-    didParseCell: withPic ? (h => { if (h.section === 'body' && h.column.index === 7){ const x = d.work[h.row.index]; if (x && PICF['work:' + x.id]) h.cell.styles.minCellHeight = PH; } }) : undefined,
-    didDrawCell: withPic ? (h => { if (h.section === 'body' && h.column.index === 7){ const x = d.work[h.row.index], src = x && PICF['work:' + x.id]; if (!src) return;
-      try { const ip = P.doc.getImageProperties(src), bw = h.cell.width - 3, bh = h.cell.height - 3, r = Math.min(bw / ip.width, bh / ip.height), w = ip.width * r, hh = ip.height * r;
-        P.doc.addImage(src, 'JPEG', h.cell.x + (h.cell.width - w) / 2, h.cell.y + (h.cell.height - hh) / 2, w, hh); } catch(e){} } }) : undefined });
+  const opt = S.wpdf || {}, idx = rackIndex(), M = workPdfModel(d, idx, opt), G = M.groups, K = M.K;
+  const withRack = G.filter(g => g.racks.length).length, nPh = G.reduce((s, g) => s + g.photos.length, 0);
+  let y = pdfStart(P, 'Work Record - INS Photo Register', `${G.length} INS / items   |   ${d.work.length} work entries   |   Generated ${STAMP()}`, 'l', first);
+  y = pdfBoxes(P, y, [{ label:'INS numbers', value:String(G.length) }, { label:'Photos', value:String(nPh) }, { label:'Found in a rack', value:String(withRack), color:[22, 163, 74] }, { label:'Not in any rack', value:String(G.length - withRack), color:[220, 38, 38] }]);
+  const PH = 36, pw = K >= 4 ? 36 : 45, W = P.doc.internal.pageSize.getWidth() - 20, dw = Math.max(40, W - 82 - pw * K);
+  const body = [], meta = []; let n = 0;
+  G.forEach(g => {
+    n++; const per = K || 1, chunks = []; for (let i = 0; i < g.photos.length; i += per) chunks.push(g.photos.slice(i, i + per));
+    if (!chunks.length) chunks.push([]);
+    const rackTxt = g.racks.length ? g.racks.map(r => r.loc + (r.bits ? '\n' + r.bits : '')).join('\n\n') : 'Not in rack';
+    chunks.forEach((ch, ci) => {
+      const row = ci === 0 ? [String(n), g.label || '-', rackTxt, g.detail] : ['', (g.label || '-') + ' (cont.)', '', ''];
+      for (let j = 0; j < K; j++) row.push(!ch.length && j === 0 && ci === 0 ? 'No photo' : '');
+      body.push(row.map(PT)); meta.push({ photos:ch, base:ci * K, found:g.racks.length > 0, first:ci === 0, tall:ch.length > 0 });
+    });
+  });
+  const cs = { 0:{ cellWidth:10, halign:'center' }, 1:{ cellWidth:26 }, 2:{ cellWidth:46 }, 3:{ cellWidth:dw } };
+  for (let j = 0; j < K; j++) cs[4 + j] = { cellWidth:pw };
+  pdfTable(P, { startY:y, head:[['#', 'INS No.', 'Rack location', 'Details'].concat(Array.from({ length:K }, (_, j) => 'Photo ' + (j + 1)))], body, rowPageBreak:'avoid',
+    styles:{ fontSize:8, cellPadding:2, valign:'middle' }, columnStyles:cs,
+    didParseCell: h => { if (h.section !== 'body') return; const m = meta[h.row.index]; if (!m) return; const c = h.column.index;
+      if (c === 0 && m.tall) h.cell.styles.minCellHeight = PH;
+      if (c === 1){ h.cell.styles.fontStyle = 'bold'; h.cell.styles.halign = 'center'; h.cell.styles.fontSize = m.first ? 11 : 8; if (!m.first) h.cell.styles.textColor = [100, 116, 139]; }
+      if (c === 2 && m.first){ h.cell.styles.textColor = m.found ? [21, 128, 61] : [180, 83, 9]; if (!m.found) h.cell.styles.fontStyle = 'bold'; }
+      if (c >= 4){ h.cell.styles.textColor = [148, 163, 184]; h.cell.styles.halign = 'center'; } },
+    didDrawCell: h => { if (h.section !== 'body' || h.column.index < 4) return; const m = meta[h.row.index], ph = m && m.photos[h.column.index - 4]; if (!ph) return;
+      try { const ip = P.doc.getImageProperties(ph.src), bw = h.cell.width - 3, bh = h.cell.height - 8, r = Math.min(bw / ip.width, bh / ip.height), w = ip.width * r, hh = ip.height * r;
+        P.doc.addImage(ph.src, 'JPEG', h.cell.x + (h.cell.width - w) / 2, h.cell.y + 1.5 + (bh - hh) / 2, w, hh);
+        P.doc.setFont('helvetica', 'normal'); P.doc.setFontSize(6.5); P.doc.setTextColor(100, 116, 139);
+        P.doc.text(PT('Photo ' + (m.base + h.column.index - 3) + '  |  ' + fmtDateNice(ph.date)), h.cell.x + h.cell.width / 2, h.cell.y + h.cell.height - 2, { align:'center' });
+        P.doc.setTextColor(0, 0, 0); } catch(e){} } });
+}
+/* the small window that opens before the Work PDF is made */
+function workPdf(){
+  const lbl = { number:'Product no.', name:'Name', product:'Product name', sticker:'Sticker' }, best = insAutoField(S.d.work, rackIndex()), cur = (S.wpdf && S.wpdf.field) || best;
+  const w = openModal(`<h3>📄 Work PDF — INS photo table</h3><p class="sub">Every INS number in one row: its photos side by side (Photo 1, Photo 2 …) and the rack where it is kept.</p>
+    <div class="field"><label>INS number is written in the field</label><select class="select" id="wpf">${Object.keys(lbl).map(k => `<option value="${k}" ${k === cur ? 'selected' : ''}>${lbl[k]}${k === best ? ' (auto-detected)' : ''}</option>`).join('')}</select></div>
+    <label class="check" style="margin:8px 0"><input type="checkbox" id="wpg" ${!S.wpdf || S.wpdf.group !== false ? 'checked' : ''}> Same INS number = one row (all its photos together)</label>
+    <div class="foot"><button class="btn ghost" data-x>Cancel</button><button class="btn" data-go>⬇ Download PDF</button></div>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('[data-go]').onclick = () => { S.wpdf = { field:w.querySelector('#wpf').value, group:w.querySelector('#wpg').checked }; w.remove(); doExport('work', 'pdf'); };
 }
 
 /* ---------- EXCEL + PDF: passwords ---------- */
