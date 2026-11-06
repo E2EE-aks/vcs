@@ -22,12 +22,21 @@ on:
         description: Version
         required: true
         default: '1.0'
+      apk:
+        description: Optional - path of an uploaded .apk in the repo to re-package with a new name and package id (used by Cloner)
+        required: false
+        default: ''
+      zip:
+        description: Optional - path of an uploaded .zip in the repo to use as the app instead of the file list (used by Cloner)
+        required: false
+        default: ''
 
 permissions:
   contents: write
 
 jobs:
   build:
+    if: ${{ inputs.apk == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
@@ -35,6 +44,7 @@ jobs:
       APP_NAME: ${{ inputs.app_name }}
       APP_ID: ${{ inputs.app_id }}
       APP_VER: ${{ inputs.version }}
+      ZIP: ${{ inputs.zip }}
       RUN_NO: ${{ github.run_number }}
       GSJ: ${{ secrets.GOOGLE_SERVICES_JSON }}
     steps:
@@ -52,6 +62,17 @@ jobs:
       - name: Collect the app files (server files are never put in the app)
         run: |
           mkdir -p www
+          if [ -n "$ZIP" ]; then
+            case "$ZIP" in /*|*..*) echo "Bad zip path"; exit 1 ;; esac
+            [ -f "$ZIP" ] || { echo "Missing zip: $ZIP"; exit 1; }
+            rm -rf /tmp/src && mkdir -p /tmp/src && unzip -q -o "$ZIP" -d /tmp/src
+            rm -rf /tmp/src/__MACOSX
+            SRC=/tmp/src
+            while [ "$(ls -A "$SRC" | wc -l)" = "1" ] && [ -d "$SRC/$(ls -A "$SRC")" ]; do SRC="$SRC/$(ls -A "$SRC")"; done
+            cp -r "$SRC"/. www/
+            rm -rf www/.git www/.github www/node_modules
+            find www -type f \( -name 'server.js' -o -name 'Code.gs' -o -name 'gas-shim.js' -o -name 'google-store.js' -o -name 'live-monitor.js' -o -name 'fcm.js' -o -name 'package.json' -o -name 'package-lock.json' -o -name '*-server.js' -o -name '*.yml' -o -name '*.md' -o -name '*.java' -o -name 'google-services.json' \) -delete
+          else
           IFS=',' read -ra LIST <<< "$FILES"
           for f in "${LIST[@]}"; do
             f="$(echo "$f" | xargs)"
@@ -63,6 +84,7 @@ jobs:
             mkdir -p "www/$(dirname "$f")"
             cp "$f" "www/$f"
           done
+          fi
           for f in native-push.js; do [ -f "$f" ] && cp "$f" "www/$f" || true; done
           [ -f www/index.html ] || { echo "index.html must be part of the app"; exit 1; }
           if [ -n "$GSJ" ]; then echo "window.KS_FCM = true;" > www/ks-native.js; else echo "window.KS_FCM = false;" > www/ks-native.js; fi
@@ -163,3 +185,80 @@ jobs:
           OUT="${SAFE}-${APP_VER}.apk"
           cp android/app/build/outputs/apk/debug/app-debug.apk "$OUT"
           gh release create "apk-${RUN_NO}" "$OUT" --title "$APP_NAME $APP_VER" --notes "Android app built from ${GITHUB_SHA::7}" --target "$GITHUB_SHA"
+
+  # Cloner with an uploaded .apk: unpack it, give it a new package id + name, rebuild and sign it again
+  repack:
+    if: ${{ inputs.apk != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      APK: ${{ inputs.apk }}
+      APP_NAME: ${{ inputs.app_name }}
+      APP_ID: ${{ inputs.app_id }}
+      APP_VER: ${{ inputs.version }}
+      RUN_NO: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Re-package the APK (new name + package id)
+        run: |
+          set -e
+          case "$APK" in /*|*..*) echo "Bad apk path"; exit 1 ;; esac
+          [ -f "$APK" ] || { echo "Missing apk: $APK"; exit 1; }
+          curl -sSL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+          java -jar apktool.jar d -f -o dec "$APK"
+          python3 - <<'PY'
+          import os, re, glob
+          D = 'dec'
+          new, name, ver = os.environ['APP_ID'], os.environ['APP_NAME'], os.environ['APP_VER']
+          mp = D + '/AndroidManifest.xml'
+          m = open(mp, encoding='utf-8').read()
+          old = re.search(r'<manifest\b[^>]*?\spackage="([^"]+)"', m).group(1)
+          TOK = '@@OLD@@'
+          def fix_tag(t):                       # class names stay in the OLD package (the code is not renamed)
+              def nm(x):
+                  v = x.group(2)
+                  if v.startswith('.'): v = TOK + v
+                  elif v.startswith(old + '.'): v = TOK + v[len(old):]
+                  elif '.' not in v: v = TOK + '.' + v
+                  return x.group(1) + '="' + v + '"'
+              return re.sub(r'(android:(?:name|targetActivity))="([^"]*)"', nm, t.group(0))
+          m = re.sub(r'<(?:activity|activity-alias|service|receiver|provider)\b[^>]*>', fix_tag, m)
+          m = m.replace(old, new).replace(TOK, old)       # package, provider authorities, permission names -> new id
+          def lab(t):
+              return re.sub(r'android:label="(?!@)[^"]*"', 'android:label="' + name.replace('&', '&amp;') + '"', t.group(0))
+          m = re.sub(r'<(?:application|activity)\b[^>]*>', lab, m)
+          open(mp, 'w', encoding='utf-8').write(m)
+          esc = lambda s: s.replace('&', '&amp;').replace('<', '&lt;')
+          for p in glob.glob(D + '/res/values*/strings.xml'):
+              s = open(p, encoding='utf-8').read()
+              for k, v in (('app_name', name), ('title_activity_main', name), ('package_name', new), ('custom_url_scheme', new)):
+                  s = re.sub(r'(<string name="' + k + r'"[^>]*>)[^<]*(</string>)', lambda x: x.group(1) + esc(v) + x.group(2), s)
+              open(p, 'w', encoding='utf-8').write(s)
+          yp = D + '/apktool.yml'
+          y = open(yp, encoding='utf-8').read()
+          y = re.sub(r"versionCode: .*", "versionCode: '" + os.environ['RUN_NO'] + "'", y)
+          y = re.sub(r"versionName: .*", "versionName: '" + ver + "'", y)
+          open(yp, 'w', encoding='utf-8').write(y)
+          print('package', old, '->', new)
+          PY
+          java -jar apktool.jar b -o unsigned.apk dec
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
+          keytool -genkeypair -keystore ks.jks -storepass android -keypass android -alias key -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Clone" >/dev/null 2>&1
+          "$BT/apksigner" sign --ks ks.jks --ks-pass pass:android --key-pass pass:android --out signed.apk aligned.apk
+          "$BT/apksigner" verify signed.apk && echo "signed OK"
+
+      - name: Publish the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SAFE="$(echo "$APP_NAME" | tr -c 'A-Za-z0-9._-' '_')"
+          OUT="${SAFE}-${APP_VER}.apk"
+          cp signed.apk "$OUT"
+          gh release create "apk-${RUN_NO}" "$OUT" --title "$APP_NAME $APP_VER" --notes "Cloned APK ${APP_ID}" --target "$GITHUB_SHA"
