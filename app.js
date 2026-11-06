@@ -1395,12 +1395,12 @@ async function verClone(){
   if (zip && apk) return toast('Choose either the APK or the zip, not both', true);
   if (apk){
     if (!/\.apk$/i.test(apk.name)) return toast('Please choose an .apk file', true);
-    if (apk.size > 24 * 1024 * 1024) return toast('The APK is too big (max 24 MB)', true);
+    if (apk.size > 95 * 1024 * 1024) return toast('The APK is too big (max 95 MB — GitHub does not accept bigger files)', true);
   } else if (!zip){
     if (!files.length) return toast('Upload a zip or choose the files first', true);
     if (!files.includes('index.html')) return toast('index.html must be ticked — it is the first screen of the app', true);
   } else if (!/\.zip$/i.test(zip.name)) return toast('Please choose a .zip file', true);
-  else if (zip.size > 24 * 1024 * 1024) return toast('The zip is too big (max 24 MB)', true);
+  else if (zip.size > 95 * 1024 * 1024) return toast('The zip is too big (max 95 MB — GitHub does not accept bigger files)', true);
   const items = VER.cloneNames.split('\n').map(x => x.trim()).filter(Boolean);
   if (!items.length) return toast('Add at least one clone name', true);
   if (items.length > 20) return toast('Maximum 20 clones at a time', true);

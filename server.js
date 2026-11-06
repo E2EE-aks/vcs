@@ -622,7 +622,7 @@ function makeApp(store, env) {
   const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself (only a warning in the app, never blocks)
-  const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60;   // generous limits: any file type (text or binary), many files
+  const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60, CLONE_MAX = 95 * 1024 * 1024;   // CLONE_MAX: apk/zip in clone-src/ (GitHub itself refuses files over 100 MB)   // generous limits: any file type (text or binary), many files
   const depBase = p => String(p).split('/').pop();
   function depPathOk(p) {
     p = String(p || '');
@@ -832,7 +832,8 @@ function makeApp(store, env) {
         if (seen.has(f.path)) globalThis.fail_('"' + f.path + '" was chosen twice.', 'DEPLOY'); seen.add(f.path);
         const buf = typeof f.b64 === 'string' ? Buffer.from(f.b64, 'base64') : Buffer.from(String(f.content || ''), 'utf8');
         total += buf.length;
-        if (buf.length > DEP_MAX || total > DEP_TOTAL) globalThis.fail_('The files are too big for one upload (max ' + (DEP_MAX / 1048576) + ' MB each, ' + (DEP_TOTAL / 1048576) + ' MB together).', 'DEPLOY');
+        const big = /^clone-src\/[\w.\-]+\.(apk|zip)$/i.test(f.path) && files.length === 1;   // Cloner source: one file, up to CLONE_MAX
+        if (big ? buf.length > CLONE_MAX : (buf.length > DEP_MAX || total > DEP_TOTAL)) globalThis.fail_('The files are too big for one upload (max ' + ((big ? CLONE_MAX : DEP_MAX) / 1048576) + ' MB' + (big ? '' : ' each, ' + (DEP_TOTAL / 1048576) + ' MB together') + ').', 'DEPLOY');
         const w = depCheckSyntax(f.path, buf); if (w) warn.push(w);
         bufs.push({ path: f.path, buf });
       }
@@ -1338,7 +1339,7 @@ function start(app, env) {
     if (rq.method === 'GET') return send(200, { ok: true, app: 'Attendance & Expense Tracker API', time: new Date().toISOString() });
     let body = '';
     let lim = 2e6;
-    rq.on('data', c => { body += c; if (body.length < 800 && /"action"\s*:\s*"deployUpload"/.test(body)) lim = 90e6; if (body.length > lim) rq.destroy(); });
+    rq.on('data', c => { body += c; if (body.length < 800 && /"action"\s*:\s*"deployUpload"/.test(body)) lim = 135e6; if (body.length > lim) rq.destroy(); });
     rq.on('end', async () => { let out; try { out = await app.handle(body); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
   }));
 }
