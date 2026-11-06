@@ -723,12 +723,16 @@ function makeApp(store, env) {
       return { ok: true };
     }
     if (a === 'verClone') {                         // Cloner: one APK per name, each with its own package id so all can be installed side by side
-      const files = Array.isArray(req.files) ? [...new Set(req.files.map(String))] : [];
+      const zip = String(req.zip || '').trim(), apk = String(req.apk || '').trim();      // optional: an uploaded .zip or .apk in the repo is the app (no file list needed)
+      if (zip && apk) globalThis.fail_('Choose either a zip or an apk, not both.', 'VER');
+      const files = (zip || apk) ? ['index.html'] : (Array.isArray(req.files) ? [...new Set(req.files.map(String))] : []);
       if (!files.length || files.length > 400) globalThis.fail_('Choose the files for the app first.', 'VER');
       if (!files.includes('index.html')) globalThis.fail_('index.html must be selected — it is the first screen of the app.', 'VER');
       const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
       const have = new Set((t.tree || []).filter(x => x.type === 'blob' && verPathOk(x.path)).map(x => x.path));
-      const gone = files.find(f => !have.has(f)); if (gone) globalThis.fail_('"' + gone + '" is not in the repository.', 'VER');
+      if (apk) { if (!verPathOk(apk) || !/\.apk$/i.test(apk) || !have.has(apk)) globalThis.fail_('The uploaded apk was not found in the repository.', 'VER'); }
+      else if (zip) { if (!verPathOk(zip) || !/\.zip$/i.test(zip) || !have.has(zip)) globalThis.fail_('The uploaded zip was not found in the repository.', 'VER'); }
+      else { const gone = files.find(f => !have.has(f)); if (gone) globalThis.fail_('"' + gone + '" is not in the repository.', 'VER'); }
       const ver = String(req.version || '').trim();
       if (!/^\d+(\.\d+){0,3}$/.test(ver)) globalThis.fail_('Version must look like 1.0 or 2.3.1', 'VER');
       const base = String(req.baseId || '').trim().toLowerCase();                      // e.g. com.ks.clone
@@ -743,7 +747,7 @@ function makeApp(store, env) {
       let started = 0;
       for (let i = 0; i < names.length; i++) {
         const id = base + String(start + i).padStart(2, '0');                           // com.ks.clone + 01 → com.ks.clone01 (unique per clone)
-        await verGh('POST', '/actions/workflows/' + VER_WF + '/dispatches', { ref: GH.branch, inputs: { files: csv, app_name: names[i], app_id: id, version: ver } });
+        await verGh('POST', '/actions/workflows/' + VER_WF + '/dispatches', { ref: GH.branch, inputs: { files: csv, app_name: names[i], app_id: id, version: ver, zip, apk } });
         started++;
         await new Promise(r => setTimeout(r, 1500));                                      // be gentle with the GitHub API
       }

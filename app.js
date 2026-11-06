@@ -1296,7 +1296,7 @@ const confirmBackendOk = (path, backend) => confirmBox('Restore this version of 
    ===================================================================== */
 const VER = { files:null, sel:new Set(), builds:[], err:'', ready:true, busy:false, starting:false, lastRun:0, timer:null,
   name:'KS', id:'com.ks.app', ver:'1.0', seeded:false,
-  cloneBase:'com.ks.clone', cloneNames:'AKS 1\nAKS 2\nAKS 3\nAKS 4\nAKS 5\nAKS 6\nAKS 7\nAKS 8\nAKS 9\nAKS 10', cloneStart:1, cloneBusy:false };
+  cloneBase:'com.ks.clone', cloneNames:'AKS 1\nAKS 2\nAKS 3\nAKS 4\nAKS 5\nAKS 6\nAKS 7\nAKS 8\nAKS 9\nAKS 10', cloneStart:1, cloneBusy:false, cloneZip:null, cloneApk:null };
 const VER_SKIP = /^(server\.js|code\.gs|gas-shim\.js|google-store\.js|package(-lock)?\.json|readme\.md)$/i;
 const verWebFile = p => /\.(html|js|css|json|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|webmanifest|mp3|wav|mp4)$/i.test(p) && !VER_SKIP.test(p) && !/^(test|docs|\.github)\//i.test(p);
 async function verLoad(){
@@ -1344,10 +1344,14 @@ function vVersion(){
       <div class="actions" style="margin-top:12px"><span class="muted" id="verCnt"></span><button class="btn" id="verGo" ${VER.busy ? 'disabled' : ''}>🔨 Build APK</button></div></div>
     <div class="card" style="margin-bottom:16px"><h3>🧬 Cloner — same app, many installs</h3>
       <p class="muted" style="margin-bottom:10px">Ek hi app ke kai copy banao, har ek ka <b>alag naam</b> aur <b>alag package id</b>. Isse sab ek hi phone me saath install ho jaate hain aur har ek me alag login chal sakta hai.
-      Upar ticked files use hongi. Har line = ek clone ka naam (max 20). Har clone ek alag build hai (5–8 min), saare saath me chalte hain.</p>
+      <b>Neeche APK ya zip upload karoge to wahi clone hoga</b>, warna upar ticked files use hongi. Har line = ek clone ka naam (max 20). Har clone ek alag build hai (5–8 min), saare saath me chalte hain.</p>
       <div class="form-grid">
         <div class="field"><label>Package prefix</label><input class="input" id="vcBase" maxlength="45" value="${esc(VER.cloneBase)}" autocapitalize="off"></div>
         <div class="field"><label>Start number</label><input class="input" id="vcStart" type="number" min="1" max="999" value="${esc(String(VER.cloneStart))}"></div></div>
+      <div class="field"><label>App to clone <span class="muted">(.zip of your app's files — index.html inside; optional)</span></label>
+        <input class="input" type="file" id="vcZip" accept=".zip,application/zip"><div class="muted" id="vcZipInfo" style="margin-top:4px"></div></div>
+      <div class="field"><label>Ready APK to clone <span class="muted">(.apk of YOUR app; optional — use this OR the zip)</span></label>
+        <input class="input" type="file" id="vcApk" accept=".apk,application/vnd.android.package-archive"><div class="muted" id="vcApkInfo" style="margin-top:4px"></div></div>
       <div class="field"><label>Clone names <span class="muted">(one per line)</span></label><textarea class="input" id="vcNames" rows="6" style="width:100%">${esc(VER.cloneNames)}</textarea></div>
       <div class="actions" style="margin-top:10px"><span class="muted" id="vcCnt"></span><button class="btn" id="vcGo" ${VER.cloneBusy ? 'disabled' : ''}>🧬 Build all clones</button></div></div>
     <div class="card"><h3>📦 Builds <button class="btn ghost sm" id="verRef">↻ Refresh</button></h3><div id="verBuilds">${verBuildsHtml()}</div></div>`;
@@ -1368,6 +1372,8 @@ function bindVersion(){
   const vcCount = () => { const c = $q('vcCnt'); if (c) c.textContent = vcN().length + ' clone(s): ' + (VER.cloneBase.trim() || '?') + String(parseInt(VER.cloneStart, 10) || 1).padStart(2, '0') + ' …'; };
   [['vcBase', 'cloneBase'], ['vcStart', 'cloneStart'], ['vcNames', 'cloneNames']].forEach(([i, k]) => { if ($q(i)) $q(i).oninput = e => { VER[k] = e.target.value; vcCount(); }; });
   vcCount();
+  if ($q('vcZip')) $q('vcZip').onchange = e => { const f = e.target.files[0]; VER.cloneZip = f || null; const i = $q('vcZipInfo'); if (i) i.textContent = f ? ('✅ ' + f.name + ' · ' + updSize(f.size)) : ''; };
+  if ($q('vcApk')) $q('vcApk').onchange = e => { const f = e.target.files[0]; VER.cloneApk = f || null; const i = $q('vcApkInfo'); if (i) i.textContent = f ? ('✅ ' + f.name + ' · ' + updSize(f.size)) : ''; };
   if ($q('vcGo')) $q('vcGo').onclick = verClone;
   const bx = $q('verBuilds'); if (bx) bx.onclick = e => { const b = e.target.closest('[data-vdl]'); if (b) verDownload(b.dataset.vdl); };
 }
@@ -1385,15 +1391,33 @@ async function verBuild(){
 }
 async function verClone(){
   if (VER.cloneBusy) return;
-  const files = [...VER.sel]; if (!files.length) return toast('Choose the files first', true);
-  if (!files.includes('index.html')) return toast('index.html must be ticked — it is the first screen of the app', true);
+  const zip = VER.cloneZip, apk = VER.cloneApk, files = [...VER.sel];
+  if (zip && apk) return toast('Choose either the APK or the zip, not both', true);
+  if (apk){
+    if (!/\.apk$/i.test(apk.name)) return toast('Please choose an .apk file', true);
+    if (apk.size > 24 * 1024 * 1024) return toast('The APK is too big (max 24 MB)', true);
+  } else if (!zip){
+    if (!files.length) return toast('Upload a zip or choose the files first', true);
+    if (!files.includes('index.html')) return toast('index.html must be ticked — it is the first screen of the app', true);
+  } else if (!/\.zip$/i.test(zip.name)) return toast('Please choose a .zip file', true);
+  else if (zip.size > 24 * 1024 * 1024) return toast('The zip is too big (max 24 MB)', true);
   const items = VER.cloneNames.split('\n').map(x => x.trim()).filter(Boolean);
   if (!items.length) return toast('Add at least one clone name', true);
   if (items.length > 20) return toast('Maximum 20 clones at a time', true);
-  if (!await confirmBox('Build ' + items.length + ' clones?', items.join(', ') + ' — each gets its own package id and its own APK.', 'Build', false)) return;
+  if (!await confirmBox('Build ' + items.length + ' clones?', items.join(', ') + ' — each gets its own package id and its own APK.' + (apk ? ' Source: ' + apk.name : zip ? ' Source: ' + zip.name : ''), 'Build', false)) return;
   VER.cloneBusy = true; const btn = document.getElementById('vcGo'); if (btn) btn.disabled = true;
   try {
-    const r = await api('verClone', { files, items, baseId:VER.cloneBase.trim(), startNo:parseInt(VER.cloneStart, 10) || 1, version:VER.ver.trim() });
+    let zipPath = '', apkPath = '';
+    if (apk){
+      toast('Uploading ' + apk.name + '…');
+      apkPath = 'clone-src/app.apk';
+      await api('deployUpload', { files:[{ path:apkPath, b64:depB64(await apk.arrayBuffer()) }], message:'Cloner source [skip render]', confirmBackend:true });
+    } else if (zip){
+      toast('Uploading ' + zip.name + '…');
+      zipPath = 'clone-src/app.zip';
+      await api('deployUpload', { files:[{ path:zipPath, b64:depB64(await zip.arrayBuffer()) }], message:'Cloner source [skip render]', confirmBackend:true });
+    }
+    const r = await api('verClone', { files, zip:zipPath, apk:apkPath, items, baseId:VER.cloneBase.trim(), startNo:parseInt(VER.cloneStart, 10) || 1, version:VER.ver.trim() });
     toast(r.started + ' builds started — about 5–8 minutes'); VER.starting = true; VER.err = ''; verDraw(); verWatch();
   } catch(e){ handleErr(e); }
   VER.cloneBusy = false; if (btn) btn.disabled = false;
