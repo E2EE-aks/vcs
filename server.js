@@ -619,7 +619,7 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'verFiles', 'verBuild', 'verList', 'verTicket']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself (only a warning in the app, never blocks)
   const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60;   // generous limits: any file type (text or binary), many files
@@ -698,7 +698,7 @@ function makeApp(store, env) {
       return { ok: true, truncated: !!t.truncated, files: (t.tree || []).filter(x => x.type === 'blob' && verPathOk(x.path)).map(x => ({ path: x.path, size: x.size || 0 })) };
     }
     if (a === 'verList') {
-      const [rr, rl] = await Promise.all([verGh('GET', '/actions/workflows/' + VER_WF + '/runs?per_page=8'), gh('GET', '/releases?per_page=30')]);
+      const [rr, rl] = await Promise.all([verGh('GET', '/actions/workflows/' + VER_WF + '/runs?per_page=25'), gh('GET', '/releases?per_page=30')]);
       const rel = new Map((Array.isArray(rl) ? rl : []).filter(r => /^apk-\d+$/.test(r.tag_name)).map(r => [r.tag_name, r]));
       return { ok: true, builds: (rr.workflow_runs || []).map(r => {
         const x = rel.get('apk-' + r.run_number), as = x && (x.assets || []).find(q => /\.apk$/i.test(q.name));
@@ -721,6 +721,33 @@ function makeApp(store, env) {
       if (csv.length > 30000) globalThis.fail_('Too many files selected.', 'VER');
       await verGh('POST', '/actions/workflows/' + VER_WF + '/dispatches', { ref: GH.branch, inputs: { files: csv, app_name: name, app_id: id, version: ver } });
       return { ok: true };
+    }
+    if (a === 'verClone') {                         // Cloner: one APK per name, each with its own package id so all can be installed side by side
+      const files = Array.isArray(req.files) ? [...new Set(req.files.map(String))] : [];
+      if (!files.length || files.length > 400) globalThis.fail_('Choose the files for the app first.', 'VER');
+      if (!files.includes('index.html')) globalThis.fail_('index.html must be selected — it is the first screen of the app.', 'VER');
+      const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
+      const have = new Set((t.tree || []).filter(x => x.type === 'blob' && verPathOk(x.path)).map(x => x.path));
+      const gone = files.find(f => !have.has(f)); if (gone) globalThis.fail_('"' + gone + '" is not in the repository.', 'VER');
+      const ver = String(req.version || '').trim();
+      if (!/^\d+(\.\d+){0,3}$/.test(ver)) globalThis.fail_('Version must look like 1.0 or 2.3.1', 'VER');
+      const base = String(req.baseId || '').trim().toLowerCase();                      // e.g. com.ks.clone
+      if (!/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(base) || base.length > 45) globalThis.fail_('Package prefix must look like com.ks.clone', 'VER');
+      const items = (Array.isArray(req.items) ? req.items : []).slice(0, 20);
+      if (!items.length) globalThis.fail_('Add at least one clone name.', 'VER');
+      const names = items.map(x => String(x || '').trim());
+      if (names.some(n => !/^[\w][\w .\-]{0,29}$/.test(n))) globalThis.fail_('Each name: 1–30 letters, numbers, space, dot or dash.', 'VER');
+      const csv = files.join(',');
+      if (csv.length > 30000) globalThis.fail_('Too many files selected.', 'VER');
+      const start = Math.max(1, Math.min(999, parseInt(req.startNo, 10) || 1));
+      let started = 0;
+      for (let i = 0; i < names.length; i++) {
+        const id = base + String(start + i).padStart(2, '0');                           // com.ks.clone + 01 → com.ks.clone01 (unique per clone)
+        await verGh('POST', '/actions/workflows/' + VER_WF + '/dispatches', { ref: GH.branch, inputs: { files: csv, app_name: names[i], app_id: id, version: ver } });
+        started++;
+        await new Promise(r => setTimeout(r, 1500));                                      // be gentle with the GitHub API
+      }
+      return { ok: true, started };
     }
     if (a === 'verTicket') {
       const aid = String(req.asset || ''); if (!/^\d+$/.test(aid)) globalThis.fail_('Invalid file.', 'VER');
