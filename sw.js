@@ -1,7 +1,7 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v45';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-motion.css', 'ks-motion.js', 'ks-cache.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'nettools-view.js', 'browser-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png'];
+const CACHE = 'ks-shell-v46';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-motion.css', 'ks-motion.js', 'ks-cache.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'ep-view.js', 'nettools-view.js', 'browser-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting()));
