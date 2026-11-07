@@ -2474,22 +2474,70 @@ function fmtDateNice(iso){ const [y, m, d] = iso.split('-').map(Number); return 
 function entryForm(id){ if (!can('exp')) return deny();
   const x = id ? S.d.expenses.find(e => e.id === id) : null;
   if (!S.d.categories.length) return toast('Add a category first (⚙ Categories)', true);
+  if (x) return entryEditForm(x);
+  /* New entry = a Debit / Credit voucher.  Dr = plus in "This ledger" (and minus in "Against"), Cr = minus in "This ledger" (and plus in "Against").
+     Normal income / expense on a category against My Account is saved as before; anything that touches a customer / person / FD / bank (or
+     goes against the natural side of a category) is saved as a ledger entry, so both ledgers move. */
+  const cats = S.d.categories, accs = lgAccs();
+  const o = (v, label, sel) => `<option value="${esc(v)}" ${sel === v ? 'selected' : ''}>${esc(label)}</option>`;
+  const optA = sel => `<optgroup label="Expense">${cats.filter(c => c.type !== 'Income').map(c => o('C:' + c.name, c.name, sel)).join('')}</optgroup><optgroup label="Income">${cats.filter(c => c.type === 'Income').map(c => o('C:' + c.name, c.name, sel)).join('')}</optgroup>${accs.length ? `<optgroup label="Customers · Persons · FD · Banks">${accs.map(a => o(a.id, a.name + ' (' + a.type + ')', sel)).join('')}</optgroup>` : ''}`;
+  const optB = sel => `${o(LG_ME, 'My Account (my own money)', sel)}${accs.length ? `<optgroup label="Customers · Persons · FD · Banks">${accs.map(a => o(a.id, a.name + ' (' + a.type + ')', sel)).join('')}</optgroup>` : ''}<optgroup label="My categories">${cats.map(c => o('C:' + c.name, c.name, sel)).join('')}</optgroup>`;
+  const firstA = 'C:' + cats[0].name;
+  let side = lgNatural(firstA);
+  const w = openModal(`<h3>Add entry</h3><p class="sub"><b>Debit (Dr) = plus ＋</b> · <b>Credit (Cr) = minus −</b>. Every entry moves <b>two ledgers</b>.<br>Salary: Ledger “Salary”, Dr. Paid Ravi: Ledger “Ravi”, Dr, Against “My Account”. Salary → FD: Ledger “FD”, Dr, Against “Salary”.</p>
+    <form id="ef"><div class="row2"><div class="field"><label>Date</label><input class="input" type="date" name="date" value="${esc(todayISO())}" required></div>
+      <div class="field"><label>Amount (${esc(cfg().currency)})</label><input class="input" type="number" name="amount" min="0.01" step="0.01" required inputmode="decimal"></div></div>
+      <div class="field"><label>This ledger (Category / Customer / FD)</label><select class="select" name="a">${optA(firstA)}</select></div>
+      <div class="field"><label>Entry type</label><div class="seg" id="efSide"><button type="button" data-s="dr">Debit (Dr) · plus ＋</button><button type="button" data-s="cr">Credit (Cr) · minus −</button></div></div>
+      <div class="field"><label>Against (other ledger)</label><select class="select" name="b">${optB(LG_ME)}</select></div>
+      <div class="hint" id="efHint" style="margin:-4px 0 10px;font-weight:600"></div>
+      <div class="field"><label>Note</label><input class="input" name="note" maxlength="300" placeholder="Optional"></div>
+      <div class="foot"><button type="button" class="btn ghost" id="efNewC" style="margin-right:auto">＋ Add customer</button><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#efNewC').onclick = () => { w.remove(); S.exp.tab = 'lg'; render(); lgAccForm('', 'Customer'); };
+  const form = w.querySelector('#ef'), hint = w.querySelector('#efHint');
+  const paint = () => {
+    w.querySelectorAll('#efSide button').forEach(b => b.classList.toggle('on', b.dataset.s === side));
+    const A = lgName(form.a.value), B = lgName(form.b.value), n = Number(form.amount.value) || 0, amt = n ? ' ' + fm(n) : '';
+    hint.textContent = side === 'dr' ? `${A}: plus${amt}  ·  ${B}: minus${amt}` : `${A}: minus${amt}  ·  ${B}: plus${amt}`;
+  };
+  w.querySelectorAll('#efSide button').forEach(b => b.onclick = () => { side = b.dataset.s; paint(); });
+  form.a.addEventListener('change', () => { side = lgNatural(form.a.value); if (form.b.value === form.a.value) form.b.value = LG_ME; paint(); });
+  form.b.addEventListener('change', paint); form.amount.addEventListener('input', paint);
+  paint();
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target)), btn = ev.submitter;
+    if (f.a === f.b) return toast('This ledger and Against ledger must be different', true);
+    btn.disabled = true;
+    try{
+      if (lgIsCat(f.a) && f.b === LG_ME && side === lgNatural(f.a)){           // ordinary income / expense -> same as before
+        const r = await api('addExpense', { date:f.date, amount:f.amount, category:String(f.a).slice(2), note:f.note }); S.d.expenses.push(r.expense);
+        w.remove(); render(); toast('Saved');
+      } else {
+        const r = await api('addLgEntry', { date:f.date, amount:f.amount, note:f.note, to: side === 'dr' ? f.a : f.b, from: side === 'dr' ? f.b : f.a });
+        S.d.ledgerEntries = S.d.ledgerEntries || []; S.d.ledgerEntries.push(r.entry);
+        S.exp.tab = 'lg'; S.exp.acc = lgAcc(f.a) ? f.a : (lgAcc(f.b) ? f.b : f.a);
+        w.remove(); render(); toast('Saved in ledgers ✔');
+      }
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+const lgNatural = id => (lgIsCat(id) && catType(String(id).slice(2)) === 'Expense') ? 'cr' : 'dr';     // income category = Dr (plus), expense category = Cr (minus)
+function entryEditForm(x){
   const opt = t => S.d.categories.filter(c => c.type === t).map(c => `<option ${x && x.category===c.name ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
-  const w = openModal(`<h3>${x ? 'Edit entry' : 'Add entry'}</h3><p class="sub">Income categories add to your balance, expense categories subtract.</p>
-    <form id="ef"><div class="row2"><div class="field"><label>Date</label><input class="input" type="date" name="date" value="${esc(x ? x.date : todayISO())}" required></div>
-      <div class="field"><label>Amount (${esc(cfg().currency)})</label><input class="input" type="number" name="amount" min="0.01" step="0.01" value="${x ? x.amount : ''}" required inputmode="decimal"></div></div>
+  const w = openModal(`<h3>Edit entry</h3><p class="sub">Income categories add to your balance, expense categories subtract.</p>
+    <form id="ef"><div class="row2"><div class="field"><label>Date</label><input class="input" type="date" name="date" value="${esc(x.date)}" required></div>
+      <div class="field"><label>Amount (${esc(cfg().currency)})</label><input class="input" type="number" name="amount" min="0.01" step="0.01" value="${x.amount}" required inputmode="decimal"></div></div>
       <div class="field"><label>Category</label><select class="select" name="category"><optgroup label="Expense">${opt('Expense')}</optgroup><optgroup label="Income">${opt('Income')}</optgroup></select></div>
-      <div class="field"><label>Note</label><input class="input" name="note" maxlength="300" placeholder="Optional" value="${esc(x ? x.note : '')}"></div>
+      <div class="field"><label>Note</label><input class="input" name="note" maxlength="300" placeholder="Optional" value="${esc(x.note)}"></div>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
   w.querySelector('#ef').onsubmit = async ev => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
-    try{
-      if (x){ const r = await api('updateExpense', { id:x.id, ...f }); Object.assign(x, r.expense); }
-      else { const r = await api('addExpense', f); S.d.expenses.push(r.expense); }
-      w.remove(); render(); toast('Saved');
-    }catch(e){ btn.disabled = false; handleErr(e); }
+    try{ const r = await api('updateExpense', { id:x.id, ...f }); Object.assign(x, r.expense); w.remove(); render(); toast('Saved'); }
+    catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
 async function delEntry(id){ if (!can('exp')) return deny();
