@@ -12,7 +12,7 @@ const EK = 'att_tracker_emp';
 
 const isPhone = () => window.matchMedia('(max-width:640px)').matches;
 function defaultWf(){ return { date:'', month:'all', q:'', only:isPhone() }; }
-const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:''}, setup:false,
+const S = { token:null, d:null, view:'dashboard', month:new Date().getMonth()+1, exp:{month:'all', cat:'all', q:'', tab:'tx', acc:'ME', lgFrom:'', lgTo:''}, setup:false,
   wy:new Date().getFullYear(), wcm:new Date().getMonth()+1, wf:defaultWf(), wAdd:{}, wEdit:null, wDraft:{}, wBusy:false, emp:null, me:null, as:null, users:null, logs:null, lf:{ u:'all', r:'all', q:'' }, photos:null, acts:null, af:{ u:'all', q:'' }, tt:{ date:'' }, pw:{ q:'' }, link:{ q:'', type:'all' }, lic:{ q:'' }, groups:null, sig:'' };
 
 const LV = { rows:new Map(), cli:new Map(), hist:[], dest:{}, stats:null, hello:null, conn:'off', since:0, retry:0, cn:0, f:{ q:'', mode:'all', poll:false }, open:new Set(), paused:false, ctl:null, rt:null, tick:null, dt:null, err:'', hcAt:0, c0:0, fatal:false };
@@ -2433,9 +2433,15 @@ function filteredExpenses(){
   ).sort((a, b) => b.date.localeCompare(a.date));
 }
 function vExpenses(){
+  const tabs = `<div class="seg" style="margin-bottom:14px"><button type="button" class="${S.exp.tab !== 'lg' ? 'on' : ''}" onclick="S.exp.tab='tx';render()">💸 Transactions</button><button type="button" class="${S.exp.tab === 'lg' ? 'on' : ''}" onclick="S.exp.tab='lg';render()">📒 Ledgers</button></div>`;
+  if (S.exp.tab === 'lg') return tabs + vLedgers();
+  return tabs + vExpTx();
+}
+function vExpTx(){
   const list = filteredExpenses();
   let inc = 0, exp = 0; const byCat = {};
   list.forEach(x => { if (catType(x.category) === 'Income') inc += x.amount; else { exp += x.amount; byCat[x.category] = (byCat[x.category]||0) + x.amount; } });
+  const trNet = (S.exp.cat === 'all' && !S.exp.q.trim()) ? lgMeNet(S.exp.month) : 0;     // money moved to / from FD, persons ... (ledger transfers)
   const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
   const catHtml = cats.length ? cats.map(([n, v]) => `<div class="hbar"><div class="row"><span>${esc(n)}</span><b>${esc(fm(v))} <span class="muted" style="font-weight:500">· ${(v/exp*100).toFixed(0)}%</span></b></div><div class="track"><div class="fill" style="width:${v/exp*100}%"></div></div></div>`).join('')
     : '<div class="empty-state">No expenses in this view</div>';
@@ -2448,7 +2454,7 @@ function vExpenses(){
   return `<div class="grid kpis">
     <div class="card kpi p"><div class="lbl">Income</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(inc))}</div></div>
     <div class="card kpi a"><div class="lbl">Expenses</div><div class="val" style="font-size:calc(22px*var(--fs))">${esc(fm(exp))}</div></div>
-    <div class="card kpi s"><div class="lbl">Balance</div><div class="val" style="font-size:calc(22px*var(--fs));color:${inc-exp<0?'var(--bad)':'var(--good)'}">${esc(fm(inc-exp))}</div></div>
+    <div class="card kpi s"><div class="lbl">Balance</div><div class="val" style="font-size:calc(22px*var(--fs));color:${inc-exp+trNet<0?'var(--bad)':'var(--good)'}">${esc(fm(inc-exp+trNet))}</div>${trNet ? `<div class="hint">after ledger transfers ${trNet < 0 ? '−' : '+'}${esc(fm(Math.abs(trNet)))}</div>` : ''}</div>
     <div class="card kpi m"><div class="lbl">Entries</div><div class="val">${list.length}</div></div></div>
   <div class="card" style="margin-bottom:16px"><div class="actions">
       <select class="select" style="width:auto" onchange="S.exp.month=this.value;render()">${monthOpts}</select>
@@ -2490,6 +2496,141 @@ async function delEntry(id){ if (!can('exp')) return deny();
   const x = S.d.expenses.find(e => e.id === id);
   if (!await confirmBox('Delete this entry?', `${x.category} · ${fm(x.amount)} on ${fmtDateNice(x.date)} will be removed from your sheet.`, 'Delete', true)) return;
   try { await api('deleteExpense', { id }); S.d.expenses = S.d.expenses.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+
+
+/* =====================================================================
+   LEDGERS  (Busy-style accounts: FD, persons / users, banks ...)
+   "ME" = your own main account (income + expenses). A transfer FROM x TO y puts a Credit on x and a Debit on y,
+   so money sent to the FD goes OUT of your account (minus) and INTO the FD ledger (plus).
+   ===================================================================== */
+const LG_ME = 'ME', LG_TYPES = ['FD', 'Person', 'Bank', 'Other'];
+const lgAccs = () => S.d.ledgerAccounts || [];
+const lgEnts = () => S.d.ledgerEntries || [];
+const lgAcc = id => lgAccs().find(a => a.id === id);
+const lgName = id => id === LG_ME ? 'My Account' : ((lgAcc(id) || {}).name || '(deleted account)');
+const lgBal = n => fm(Math.abs(n)) + (Math.abs(n) < 0.005 ? '' : n > 0 ? ' Dr' : ' Cr');
+const lgBalPdf = n => PM(Math.abs(n)) + (Math.abs(n) < 0.005 ? '' : n > 0 ? ' Dr' : ' Cr');
+function lgPostings(id){
+  const P = [];
+  if (id === LG_ME) S.d.expenses.forEach(x => { const inc = catType(x.category) === 'Income';
+    P.push({ date:x.date, part:x.category, vch:inc ? 'Income' : 'Expense', note:x.note, dr:inc ? x.amount : 0, cr:inc ? 0 : x.amount, kind:'exp', id:x.id }); });
+  lgEnts().forEach(e => {
+    if (e.to === id) P.push({ date:e.date, part:lgName(e.from), vch:'Transfer', note:e.note, dr:e.amount, cr:0, kind:'lg', id:e.id });
+    else if (e.from === id) P.push({ date:e.date, part:lgName(e.to), vch:'Transfer', note:e.note, dr:0, cr:e.amount, kind:'lg', id:e.id });
+  });
+  return P.map((p, i) => ({ ...p, i })).sort((a, b) => a.date.localeCompare(b.date) || a.i - b.i);
+}
+function lgStatement(id, from, to){
+  const a = id === LG_ME ? null : lgAcc(id), all = lgPostings(id); let bal = a ? (Number(a.opening) || 0) : 0;
+  if (from) all.forEach(p => { if (p.date < from) bal += p.dr - p.cr; });
+  const open = bal, rows = []; let dr = 0, cr = 0;
+  all.forEach(p => { if ((from && p.date < from) || (to && p.date > to)) return; bal += p.dr - p.cr; dr += p.dr; cr += p.cr; rows.push({ ...p, bal }); });
+  return { open, rows, dr, cr, close:bal };
+}
+function lgMeNet(month){      // net effect of ledger transfers on your own account (for the Balance card)
+  let n = 0;
+  lgEnts().forEach(e => { if (month !== 'all' && +e.date.slice(5, 7) !== +month) return; if (e.to === LG_ME) n += e.amount; if (e.from === LG_ME) n -= e.amount; });
+  return n;
+}
+function vLedgers(){
+  let id = S.exp.acc || LG_ME; if (id !== LG_ME && !lgAcc(id)) id = S.exp.acc = LG_ME;
+  const from = S.exp.lgFrom || '', to = S.exp.lgTo || '', st = lgStatement(id, from, to), a = lgAcc(id);
+  const cards = [LG_ME, ...lgAccs().map(x => x.id)].map(x => { const b = lgStatement(x, '', '').close, ac = lgAcc(x);
+    return `<button type="button" class="card" style="text-align:left;cursor:pointer;border:2px solid ${x === id ? 'var(--brand)' : 'transparent'}" onclick="S.exp.acc='${x}';render()"><div class="muted" style="font-size:calc(11.5px*var(--fs))">${x === LG_ME ? 'Main account' : esc(ac.type)}</div><div style="font-weight:800;word-break:break-word">${esc(lgName(x))}</div><div style="font-weight:700;color:${b >= 0 ? 'var(--good)' : 'var(--bad)'}">${esc(lgBal(b))}</div></button>`; }).join('');
+  const rows = st.rows.map(p => `<tr><td data-l="Date">${esc(fmtDateNice(p.date))}</td><td data-l="Particulars" style="white-space:normal;min-width:150px"><b>${esc(p.part)}</b>${p.note ? `<div class="muted" style="font-size:calc(12px*var(--fs))">${esc(p.note)}</div>` : ''}</td><td data-l="Type">${esc(p.vch)}</td>
+      <td data-l="Debit" class="n">${p.dr ? esc(fm(p.dr)) : ''}</td><td data-l="Credit" class="n">${p.cr ? esc(fm(p.cr)) : ''}</td><td data-l="Balance" class="n"><b>${esc(lgBal(p.bal))}</b></td>
+      <td class="n nowrap">${can('exp') ? `<button class="btn ghost sm" onclick="${p.kind === 'lg' ? `lgEntryForm('${esc(p.id)}')` : `entryForm('${esc(p.id)}')`}">Edit</button> <button class="btn ghost sm" onclick="${p.kind === 'lg' ? `lgDelEntry('${esc(p.id)}')` : `delEntry('${esc(p.id)}')`}">🗑</button>` : ''}</td></tr>`).join('');
+  const table = `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Date</th><th>Particulars</th><th>Type</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th><th></th></tr></thead><tbody>
+    <tr class="tot"><td></td><td colspan="4"><b>Opening balance</b></td><td class="n"><b>${esc(lgBal(st.open))}</b></td><td></td></tr>${rows}
+    <tr class="tot"><td></td><td colspan="2"><b>Total</b></td><td class="n">${esc(fm(st.dr))}</td><td class="n">${esc(fm(st.cr))}</td><td class="n"><b>${esc(lgBal(st.close))}</b></td><td></td></tr></tbody></table></div>`;
+  return `<div class="card" style="margin-bottom:16px"><div class="actions">
+      ${can('exp') ? `<button class="btn" onclick="lgEntryForm()">⇄ Transfer / Payment</button><button class="btn soft" onclick="lgAccForm()">＋ Add account</button>` : ''}
+    </div><p class="muted" style="font-size:calc(12.5px*var(--fs));margin:10px 0 0">Money <b>sent from</b> an account is a Credit (minus) there and a Debit (plus) in the account it goes <b>to</b> — like Busy. Dr = you get / hold, Cr = you owe.</p></div>
+  <div class="grid kpis" style="margin-bottom:16px">${cards}</div>
+  <div class="card"><h3>📒 ${esc(lgName(id))} <span class="muted" style="font-weight:500">· Ledger</span></h3>
+    <div class="actions" style="margin-bottom:12px"><label class="muted">From <input class="input" type="date" style="width:auto" value="${esc(from)}" onchange="S.exp.lgFrom=this.value;render()"></label>
+      <label class="muted">To <input class="input" type="date" style="width:auto" value="${esc(to)}" onchange="S.exp.lgTo=this.value;render()"></label>
+      ${from || to ? `<button class="btn ghost sm" onclick="S.exp.lgFrom='';S.exp.lgTo='';render()">Clear dates</button>` : ''}
+      <span style="flex:1"></span>
+      ${a && can('exp') ? `<button class="btn ghost sm" onclick="lgAccForm('${esc(a.id)}')">✏ Edit account</button><button class="btn ghost sm" onclick="lgAccDel('${esc(a.id)}')">🗑 Delete</button>` : ''}
+      <button class="btn soft" onclick="lgPdf()">⬇ Ledger PDF</button></div>
+    ${st.rows.length || st.open ? table : '<div class="empty-state">No entries in this ledger yet. Tap “Transfer / Payment” to add one.</div>'}</div>`;
+}
+function lgAccForm(id){ if (!can('exp')) return deny();
+  const a = id ? lgAcc(id) : null, op = a ? Number(a.opening) || 0 : 0, users = (S.d.vcsUsers || []).filter(u => u.id !== (S.me && S.me.id));
+  const w = openModal(`<h3>${a ? 'Edit account' : 'Add account'}</h3><p class="sub">An FD, a person / user, a bank or anything else you want a separate ledger for.</p>
+    <form id="lgaf">${!a && users.length ? `<div class="field"><label>Pick an app user <span class="muted">(optional)</span></label><select class="select" id="lgaU"><option value="">— type a name instead —</option>${users.map(u => `<option>${esc(u.name)}</option>`).join('')}</select></div>` : ''}
+      <div class="field"><label>Account name</label><input class="input" name="name" maxlength="80" required value="${esc(a ? a.name : '')}" placeholder="e.g. SBI FD, Ravi"></div>
+      <div class="row2"><div class="field"><label>Type</label><select class="select" name="type">${LG_TYPES.map(t => `<option ${a && a.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+        <div class="field"><label>Opening balance (${esc(cfg().currency)})</label><div style="display:flex;gap:6px"><input class="input" type="number" name="op" min="0" step="0.01" value="${op ? Math.abs(op) : ''}" inputmode="decimal" placeholder="0"><select class="select" name="side" style="width:84px"><option value="dr" ${op >= 0 ? 'selected' : ''}>Dr</option><option value="cr" ${op < 0 ? 'selected' : ''}>Cr</option></select></div></div></div>
+      <div class="field"><label>Note</label><input class="input" name="note" maxlength="200" value="${esc(a ? a.note : '')}" placeholder="Optional"></div>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  const pick = w.querySelector('#lgaU');
+  if (pick) pick.onchange = () => { if (pick.value){ w.querySelector('[name=name]').value = pick.value; w.querySelector('[name=type]').value = 'Person'; } };
+  w.querySelector('#lgaf').onsubmit = async ev => {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target)), btn = ev.submitter; btn.disabled = true;
+    const opening = (Number(f.op) || 0) * (f.side === 'cr' ? -1 : 1);
+    try{
+      const r = await api('saveLgAccount', { id:a ? a.id : '', name:f.name, type:f.type, note:f.note, opening });
+      S.d.ledgerAccounts = S.d.ledgerAccounts || [];
+      if (a) Object.assign(a, r.account); else { S.d.ledgerAccounts.push(r.account); S.exp.acc = r.account.id; }
+      w.remove(); render(); toast('Saved');
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function lgAccDel(id){ if (!can('exp')) return deny();
+  const a = lgAcc(id); if (!a) return;
+  if (!await confirmBox('Delete this account?', `“${a.name}” will be removed. (Only possible when it has no entries.)`, 'Delete', true)) return;
+  try { await api('deleteLgAccount', { id }); S.d.ledgerAccounts = lgAccs().filter(x => x.id !== id); S.exp.acc = LG_ME; render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+function lgEntryForm(id){ if (!can('exp')) return deny();
+  const x = id ? lgEnts().find(e => e.id === id) : null, ids = [LG_ME, ...lgAccs().map(a => a.id)];
+  if (ids.length < 2) return toast('Add an account first (＋ Add account)', true);
+  const cur = S.exp.acc && S.exp.acc !== LG_ME ? S.exp.acc : ids[1], from = x ? x.from : LG_ME, to = x ? x.to : cur;
+  const opt = sel => ids.map(i => `<option value="${i}" ${sel === i ? 'selected' : ''}>${esc(lgName(i))}</option>`).join('');
+  const w = openModal(`<h3>${x ? 'Edit transfer' : 'Transfer / Payment'}</h3><p class="sub"><b>From</b> loses the money (minus, Credit) and <b>To</b> receives it (plus, Debit). Example: salary → FD = From “My Account”, To “FD”.</p>
+    <form id="lgef"><div class="row2"><div class="field"><label>Date</label><input class="input" type="date" name="date" value="${esc(x ? x.date : todayISO())}" required></div>
+      <div class="field"><label>Amount (${esc(cfg().currency)})</label><input class="input" type="number" name="amount" min="0.01" step="0.01" value="${x ? x.amount : ''}" required inputmode="decimal"></div></div>
+      <div class="row2"><div class="field"><label>From</label><select class="select" name="from">${opt(from)}</select></div><div class="field"><label>To</label><select class="select" name="to">${opt(to)}</select></div></div>
+      <div class="field"><label>Note</label><input class="input" name="note" maxlength="300" placeholder="Optional" value="${esc(x ? x.note : '')}"></div>
+      <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
+  w.querySelector('[data-x]').onclick = () => w.remove();
+  w.querySelector('#lgef').onsubmit = async ev => {
+    ev.preventDefault();
+    const f = Object.fromEntries(new FormData(ev.target)), btn = ev.submitter;
+    if (f.from === f.to) return toast('From and To must be different', true);
+    btn.disabled = true;
+    try{
+      S.d.ledgerEntries = S.d.ledgerEntries || [];
+      if (x){ const r = await api('updateLgEntry', { id:x.id, ...f }); Object.assign(x, r.entry); }
+      else { const r = await api('addLgEntry', f); S.d.ledgerEntries.push(r.entry); }
+      w.remove(); render(); toast('Saved');
+    }catch(e){ btn.disabled = false; handleErr(e); }
+  };
+}
+async function lgDelEntry(id){ if (!can('exp')) return deny();
+  const x = lgEnts().find(e => e.id === id); if (!x) return;
+  if (!await confirmBox('Delete this transfer?', `${lgName(x.from)} → ${lgName(x.to)} · ${fm(x.amount)} on ${fmtDateNice(x.date)} will be removed.`, 'Delete', true)) return;
+  try { await api('deleteLgEntry', { id }); S.d.ledgerEntries = lgEnts().filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
+}
+async function lgPdf(){
+  if (S.exBusy) return; S.exBusy = true; toast('Preparing your PDF file…');
+  try{
+    await needPdf();
+    const id = S.exp.acc || LG_ME, from = S.exp.lgFrom || '', to = S.exp.lgTo || '', st = lgStatement(id, from, to);
+    const P = { doc:new window.jspdf.jsPDF({ orientation:'p', unit:'mm', format:'a4' }) };
+    const per = (from || to) ? `${from ? fmtDateNice(from) : 'Start'} to ${to ? fmtDateNice(to) : 'Today'}` : 'All dates';
+    let y = pdfStart(P, 'Ledger Account', `${lgName(id)}  |  ${per}`, 'p', true);
+    y = pdfBoxes(P, y, [{ label:'Opening', value:lgBalPdf(st.open) }, { label:'Total Debit', value:PM(st.dr), color:[21, 128, 61] }, { label:'Total Credit', value:PM(st.cr), color:[185, 28, 28] }, { label:'Closing', value:lgBalPdf(st.close) }]);
+    const body = [['', 'Opening Balance', '', '', '', lgBalPdf(st.open)]].concat(st.rows.map(p => [fmtDateNice(p.date), PT(p.part) + (p.note ? '\n' + PT(p.note) : ''), p.vch, p.dr ? PM(p.dr) : '', p.cr ? PM(p.cr) : '', lgBalPdf(p.bal)]));
+    pdfTable(P, { startY:y, head:[['Date', 'Particulars', 'Vch Type', 'Debit', 'Credit', 'Balance']], body, foot:[['', 'Total', '', PM(st.dr), PM(st.cr), lgBalPdf(st.close)]],
+      columnStyles:{ 0:{ cellWidth:24 }, 2:{ cellWidth:20 }, 3:{ halign:'right' }, 4:{ halign:'right' }, 5:{ halign:'right', fontStyle:'bold' } } });
+    pdfFooter(P.doc); saveBlob('KS-ledger-' + (lgName(id).replace(/[^\w-]+/g, '_') || 'account') + '.pdf', P.doc.output('blob')); toast('Download ready ✔');
+  }catch(e){ console.error(e); toast((e && e.message) || 'Could not create the PDF', true); }
+  finally{ S.exBusy = false; }
 }
 
 /* ---- category manager ---- */

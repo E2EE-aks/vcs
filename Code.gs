@@ -56,9 +56,11 @@ const SHEET_KEYS = {
   LIC: ['lic', 'lic policies', 'policies'],
   VCS: ['vcs complaints', 'vcs complaint'],
   RACK: ['rack mapping'],
-  RACKCFG: ['rack config']
+  RACKCFG: ['rack config'],
+  LGA: ['ledger accounts'],
+  LGE: ['ledger entries']
 };
-const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', DEV: 'Device Notes', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ARCH: 'Daily Archive', ACT: 'Activity Log', HIST: 'Change History', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config' };
+const SHEET_NAMES = { ATT: 'Attendance Register', SET: 'Settings', EXP: 'Expenses', CAT: 'Categories', WORK: 'Work', EMP: 'Employees', USERS: 'Users', LOG: 'Login Log', PW: 'Password Manager', LINK: 'Links', DEV: 'Device Notes', GROUPS: 'Groups', TT: 'Timetable', CHAT: 'Chat', CGRP: 'Group Conversations', TRASH: 'Trash Bin', ARCH: 'Daily Archive', ACT: 'Activity Log', HIST: 'Change History', LPH: 'Login Security Photos', LIC: 'LIC Policies', VCS: 'VCS Complaints', RACK: 'Rack Mapping', RACKCFG: 'Rack Config', LGA: 'Ledger Accounts', LGE: 'Ledger Entries' };
 const DEFAULT_CATS = [['Food & Dining', 'Expense'], ['Transport', 'Expense'], ['Bills & Utilities', 'Expense'], ['Shopping', 'Expense'], ['Health', 'Expense'], ['Other', 'Expense'], ['Salary', 'Income']];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const TOKEN_TTL = 6 * 60 * 60;   // 6 hours (max allowed by CacheService)
@@ -161,6 +163,7 @@ var WRITE_ACTIONS = {
   historyRestore: 1, saveLoginCfg: 1,
   setup: 1, setAttendance: 1, saveSettings: 1, saveStatuses: 1, changeCredentials: 1,
   addExpense: 1, updateExpense: 1, deleteExpense: 1,
+  saveLgAccount: 1, deleteLgAccount: 1, addLgEntry: 1, updateLgEntry: 1, deleteLgEntry: 1,
   addCategory: 1, updateCategory: 1, deleteCategory: 1,
   addWork: 1, updateWork: 1, deleteWork: 1,
   addPw: 1, updatePw: 1, deletePw: 1,
@@ -176,7 +179,7 @@ var WRITE_ACTIONS = {
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
 var NEED = {
   setAttendance: 'att',
-  addExpense: 'exp', updateExpense: 'exp', deleteExpense: 'exp', addCategory: 'exp', updateCategory: 'exp', deleteCategory: 'exp',
+  addExpense: 'exp', updateExpense: 'exp', deleteExpense: 'exp', saveLgAccount: 'exp', deleteLgAccount: 'exp', addLgEntry: 'exp', updateLgEntry: 'exp', deleteLgEntry: 'exp', addCategory: 'exp', updateCategory: 'exp', deleteCategory: 'exp',
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
@@ -298,6 +301,11 @@ function route_(req) {
       case 'addExpense':        out = addExpense_(req); break;
       case 'updateExpense':     out = updateExpense_(req); break;
       case 'deleteExpense':     out = deleteExpense_(req); break;
+      case 'saveLgAccount':     out = saveLgAccount_(req); break;
+      case 'deleteLgAccount':   out = deleteLgAccount_(req); break;
+      case 'addLgEntry':        out = addLgEntry_(req); break;
+      case 'updateLgEntry':     out = updateLgEntry_(req); break;
+      case 'deleteLgEntry':     out = deleteLgEntry_(req); break;
       case 'addCategory':       out = addCategory_(req); break;
       case 'updateCategory':    out = updateCategory_(req); break;
       case 'deleteCategory':    out = deleteCategory_(req); break;
@@ -876,6 +884,7 @@ var ACTIVITY_LABEL_ = {
   addStatus: 'Added a status code', deleteStatus: 'Deleted a status code', historyRestore: 'Restored an earlier change',
   addEmployee: 'Added an employee', updateEmployee: 'Updated an employee', deleteEmployee: 'Deleted an employee',
   changeCredentials: 'Changed login password', addExpense: 'Added an expense', updateExpense: 'Updated an expense', deleteExpense: 'Deleted an expense',
+  saveLgAccount: 'Saved a ledger account', deleteLgAccount: 'Deleted a ledger account', addLgEntry: 'Added a ledger transfer', updateLgEntry: 'Updated a ledger transfer', deleteLgEntry: 'Deleted a ledger transfer',
   addCategory: 'Added a category', updateCategory: 'Updated a category', deleteCategory: 'Deleted a category',
   addWork: 'Added a work entry', updateWork: 'Updated a work entry', deleteWork: 'Deleted a work entry',
   addPw: 'Added a saved password', updatePw: 'Updated a saved password', deletePw: 'Deleted a saved password',
@@ -1283,7 +1292,7 @@ function listGroups_() {
 }
 // moves every row owned by `fromId` to the group, so the group starts with that person's existing data
 function adoptData_(fromId, toOwner) {
-  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['DEV', 5], ['LIC', 8], ['RACK', 10], ['RACKCFG', 4], ['CAT', 3], ['TT', 4]].forEach(function (p) {
+  [['EMP', 7], ['EXP', 6], ['WORK', 8], ['PW', 5], ['LINK', 5], ['DEV', 5], ['LIC', 8], ['RACK', 10], ['RACKCFG', 4], ['LGA', 6], ['LGE', 7], ['CAT', 3], ['TT', 4]].forEach(function (p) {
     var sh = ownedSheet_(p[0], p[1]), last = sh.getLastRow();
     if (last < 2) return;
     var rng = sh.getRange(2, p[1], last - 1, 1), changed = false;
@@ -1461,6 +1470,15 @@ function createSheet_(k) {
     sh.getRange('A:K').setNumberFormat('@');
     sh.setFrozenRows(1);
     sh.hideColumns(5, 2);                       // the number now lives in one column per category (from column L on)
+  } else if (k === 'LGA') {
+    sh.getRange(1, 1, 1, 6).setValues([['ID', 'Account name', 'Type (FD / Person / Bank / Other)', 'Note', 'Opening balance (+ = Dr, - = Cr)', 'Owner']]);
+    sh.getRange('A:D').setNumberFormat('@');
+    sh.setFrozenRows(1);
+  } else if (k === 'LGE') {
+    sh.getRange(1, 1, 1, 7).setValues([['Date', 'From (ME or account ID)', 'To (ME or account ID)', 'Amount', 'Note', 'ID', 'Owner']]);
+    sh.getRange('A:C').setNumberFormat('@');
+    sh.getRange('E:G').setNumberFormat('@');
+    sh.setFrozenRows(1);
   } else if (k === 'RACKCFG') {
     sh.getRange(1, 1, 1, 4).setValues([['Type (Rows / Cats)', 'Key (rack number or *)', 'Value (JSON list)', 'Owner']]);
     sh.getRange('A:D').setNumberFormat('@');
@@ -1964,6 +1982,97 @@ function updateExpense_(req) {
 function deleteExpense_(req) {
   var sh = ownedSheet_('EXP', 6);
   var row = findExpenseRow_(sh, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  sh.deleteRow(row);
+  return { ok: true };
+}
+
+// ---------- LEDGERS (Busy-style accounts: FD, persons, banks ... every transfer is a Debit / Credit pair) ----------
+// 'ME' = the user's own main account (income / expenses).  A transfer FROM x TO y credits x and debits y.
+function readLgAccounts_() {
+  var sh = ownedSheet_('LGA', 6), last = sh.getLastRow();
+  if (last < 2) return [];
+  var out = [];
+  sh.getRange(2, 1, last - 1, 6).getValues().forEach(function (r) {
+    if (!String(r[0]).trim() || ownerOf_(r[5]) !== CTX.owner) return;
+    out.push({ id: String(r[0]), name: String(r[1]), type: String(r[2] || 'Other'), note: String(r[3] || ''), opening: Number(r[4]) || 0 });
+  });
+  return out;
+}
+function readLgEntries_() {
+  var sh = ownedSheet_('LGE', 7), last = sh.getLastRow();
+  if (last < 2) return [];
+  var out = [];
+  sh.getRange(2, 1, last - 1, 7).getValues().forEach(function (r) {
+    if (!String(r[5]).trim() || ownerOf_(r[6]) !== CTX.owner) return;
+    out.push({ id: String(r[5]), date: fmtDate_(r[0]), from: String(r[1]), to: String(r[2]), amount: Number(r[3]) || 0, note: String(r[4] || '') });
+  });
+  return out;
+}
+function findRowById_(sh, idCol, ownCol, id) {
+  var last = sh.getLastRow();
+  if (last < 2) return -1;
+  var v = sh.getRange(2, 1, last - 1, ownCol).getValues();
+  for (var i = 0; i < v.length; i++) if (String(v[i][idCol - 1]) === String(id) && ownerOf_(v[i][ownCol - 1]) === CTX.owner) return i + 2;
+  return -1;
+}
+function saveLgAccount_(req) {
+  var name = String(req.name || '').trim().slice(0, 80);
+  if (!name) fail_('Enter the account name.');
+  var type = String(req.type || 'Other').trim().slice(0, 20) || 'Other';
+  var note = String(req.note || '').trim().slice(0, 200);
+  var opening = Number(req.opening) || 0;
+  var dup = readLgAccounts_().filter(function (a) { return a.name.toLowerCase() === name.toLowerCase() && a.id !== String(req.id || ''); });
+  if (dup.length) fail_('An account with this name already exists.');
+  var sh = ownedSheet_('LGA', 6), id = String(req.id || '').trim();
+  if (id) {
+    var row = findRowById_(sh, 1, 6, id);
+    if (row < 0) fail_('Account not found. Please refresh.');
+    sh.getRange(row, 1, 1, 5).setValues([[id, name, type, note, opening]]);
+  } else {
+    id = 'L' + Utilities.getUuid().replace(/-/g, '').slice(0, 7);
+    var r2 = sh.getLastRow() + 1;
+    sh.getRange(r2, 1, 1, 4).setNumberFormat('@');
+    sh.getRange(r2, 1, 1, 6).setValues([[id, name, type, note, opening, CTX.owner]]);
+  }
+  return { ok: true, account: { id: id, name: name, type: type, note: note, opening: opening } };
+}
+function deleteLgAccount_(req) {
+  var id = String(req.id || '');
+  if (readLgEntries_().some(function (e) { return e.from === id || e.to === id; })) fail_('This account has entries. Delete those entries first.');
+  var sh = ownedSheet_('LGA', 6), row = findRowById_(sh, 1, 6, id);
+  if (row < 0) fail_('Account not found. Please refresh.');
+  sh.deleteRow(row);
+  return { ok: true };
+}
+function validLgEntry_(req) {
+  var date = String(req.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) fail_('Enter a valid date.');
+  var amt = Number(req.amount);
+  if (isNaN(amt) || amt <= 0) fail_('Amount must be greater than 0.');
+  var from = String(req.from || ''), to = String(req.to || '');
+  if (!from || !to) fail_('Choose both accounts.');
+  if (from === to) fail_('From and To must be different accounts.');
+  var ids = { ME: 1 };
+  readLgAccounts_().forEach(function (a) { ids[a.id] = 1; });
+  if (!ids[from] || !ids[to]) fail_('Account not found. Please refresh.');
+  return { date: date, from: from, to: to, amount: amt, note: String(req.note || '').trim().slice(0, 300) };
+}
+function addLgEntry_(req) {
+  var x = validLgEntry_(req), sh = ownedSheet_('LGE', 7), row = sh.getLastRow() + 1, id = Utilities.getUuid().slice(0, 8);
+  sh.getRange(row, 1, 1, 3).setNumberFormat('@');
+  sh.getRange(row, 1, 1, 7).setValues([[x.date, x.from, x.to, x.amount, x.note, id, CTX.owner]]);
+  return { ok: true, entry: { id: id, date: x.date, from: x.from, to: x.to, amount: x.amount, note: x.note } };
+}
+function updateLgEntry_(req) {
+  var x = validLgEntry_(req), sh = ownedSheet_('LGE', 7), row = findRowById_(sh, 6, 7, req.id);
+  if (row < 0) fail_('Entry not found. Please refresh.');
+  sh.getRange(row, 1, 1, 3).setNumberFormat('@');
+  sh.getRange(row, 1, 1, 5).setValues([[x.date, x.from, x.to, x.amount, x.note]]);
+  return { ok: true, entry: { id: String(req.id), date: x.date, from: x.from, to: x.to, amount: x.amount, note: x.note } };
+}
+function deleteLgEntry_(req) {
+  var sh = ownedSheet_('LGE', 7), row = findRowById_(sh, 6, 7, req.id);
   if (row < 0) fail_('Entry not found. Please refresh.');
   sh.deleteRow(row);
   return { ok: true };
@@ -3913,6 +4022,8 @@ function getAll_() {
     attendanceAll: p.att === 'none' ? {} : attAll_(),
     expenses: p.exp === 'none' ? [] : readExpenses_(),
     categories: p.exp === 'none' ? [] : cleanCats_(readCategories_()),
+    ledgerAccounts: p.exp === 'none' ? [] : readLgAccounts_(),
+    ledgerEntries: p.exp === 'none' ? [] : readLgEntries_(),
     work: p.work === 'none' ? [] : readWork_(),
     passwords: p.pw === 'none' ? [] : readPw_(),
     links: p.link === 'none' ? [] : readLink_(),
