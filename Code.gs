@@ -1890,7 +1890,7 @@ function updateCategory_(req) {
   if (!name) fail_('Category name is required.');
   if (cats.some(function (c) { return c !== cur && c.name.toLowerCase() === name.toLowerCase(); })) fail_('Another category already has that name.');
   ownedSheet_('CAT', 3).getRange(cur.row, 1, 1, 2).setValues([[name, normType_(req.type)]]);
-  if (name !== old) renameInExpenses_(old, name);
+  if (name !== old) { renameInExpenses_(old, name); renameInLedger_(old, name); }
   return { ok: true, categories: cleanCats_(readCategories_()) };
 }
 
@@ -1899,11 +1899,25 @@ function deleteCategory_(req) {
   var old = String(req.name || '');
   var cur = cats.filter(function (c) { return c.name === old; })[0];
   if (!cur) fail_('Category not found.');
+  var hasRe = req.reassignTo !== undefined && req.reassignTo !== null && String(req.reassignTo) !== '';
+  if (!hasRe && readLgEntries_().some(function (e) { return e.from === 'C:' + old || e.to === 'C:' + old; })) fail_('This category has ledger transfers. Delete them first (Expenses > Ledgers).');
   ownedSheet_('CAT', 3).deleteRow(cur.row);
   if (req.reassignTo !== undefined && req.reassignTo !== null) renameInExpenses_(old, String(req.reassignTo));
+  if (hasRe) renameInLedger_(old, String(req.reassignTo));
   return { ok: true, categories: cleanCats_(readCategories_()) };
 }
 
+function renameInLedger_(from, to) {          // ledger transfers that name a category ('C:Name') follow its rename
+  var sh = ownedSheet_('LGE', 7), last = sh.getLastRow();
+  if (last < 2) return;
+  var rng = sh.getRange(2, 2, last - 1, 6), v = rng.getValues(), changed = false;            // B..G  (G = owner)
+  v.forEach(function (r) {
+    if (ownerOf_(r[5]) !== CTX.owner) return;
+    if (String(r[0]) === 'C:' + from) { r[0] = 'C:' + to; changed = true; }
+    if (String(r[1]) === 'C:' + from) { r[1] = 'C:' + to; changed = true; }
+  });
+  if (changed) rng.setValues(v);
+}
 function renameInExpenses_(from, to) {
   var sh = ownedSheet_('EXP', 6);
   var last = sh.getLastRow();
@@ -2055,6 +2069,7 @@ function validLgEntry_(req) {
   if (from === to) fail_('From and To must be different accounts.');
   var ids = { ME: 1 };
   readLgAccounts_().forEach(function (a) { ids[a.id] = 1; });
+  readCategories_().forEach(function (c) { ids['C:' + c.name] = 1; });          // a category is a ledger too
   if (!ids[from] || !ids[to]) fail_('Account not found. Please refresh.');
   return { date: date, from: from, to: to, amount: amt, note: String(req.note || '').trim().slice(0, 300) };
 }
