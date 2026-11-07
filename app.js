@@ -2505,7 +2505,7 @@ async function delEntry(id){ if (!can('exp')) return deny();
    A transfer FROM x TO y puts a Credit (minus) on x and a Debit (plus) on y.
    e.g. Salary -> FD: Salary goes down, FD goes up.   You pay Ravi: you go down, Ravi goes up.
    ===================================================================== */
-const LG_ME = 'ME', LG_TYPES = ['FD', 'Person', 'Bank', 'Other'];
+const LG_ME = 'ME', LG_TYPES = ['Customer', 'Person', 'FD', 'Bank', 'Other'];
 const lgAccs = () => S.d.ledgerAccounts || [];
 const lgEnts = () => S.d.ledgerEntries || [];
 const lgAcc = id => lgAccs().find(a => a.id === id);
@@ -2567,9 +2567,9 @@ function vLedgers(){
     <tr class="tot"><td></td><td colspan="2"><b>Total</b></td><td class="n">${esc(fm(st.dr))}</td><td class="n">${esc(fm(st.cr))}</td><td class="n"><b>${esc(lgBal(st.close))}</b></td><td></td></tr>
     <tr class="tot"><td></td><td colspan="4"><b>Closing balance</b></td><td class="n"><b>${esc(lgBal(st.close))}</b></td><td></td></tr></tbody></table></div>`;
   return `<div class="card" style="margin-bottom:16px"><div class="actions">
-      ${can('exp') ? `<button class="btn" onclick="lgEntryForm()">⇄ Transfer / Payment</button><button class="btn soft" onclick="lgAccForm('', 'Person')">＋ Add person</button><button class="btn soft" onclick="lgAccForm('', 'FD')">＋ Add FD / account</button>` : ''}
+      ${can('exp') ? `<button class="btn" onclick="lgEntryForm()">＋ Debit / Credit Entry</button><button class="btn soft" onclick="lgAccForm('', 'Customer')">＋ Add customer</button><button class="btn soft" onclick="lgAccForm('', 'FD')">＋ Add FD / account</button>` : ''}
       <span style="flex:1"></span><button class="btn soft" onclick="lgPdf(true)">⬇ All ledgers PDF</button>
-    </div><p class="muted" style="font-size:calc(12.5px*var(--fs));margin:10px 0 0">Every category has its own ledger. Money <b>sent from</b> a ledger is a Credit (minus) there and a Debit (plus) in the ledger it goes <b>to</b> — like Busy. <b>Dr</b> = plus (you hold / will get), <b>Cr</b> = minus (you owe).</p></div>
+    </div><p class="muted" style="font-size:calc(12.5px*var(--fs));margin:10px 0 0">Every category has its own ledger. Every entry posts twice: <b>Debit (Dr) = plus</b> in one ledger and <b>Credit (Cr) = minus</b> in the other — like Busy. <b>Dr</b> = plus (you hold / will get), <b>Cr</b> = minus (you owe).</p></div>
   <div class="card" style="margin-bottom:16px"><div class="actions"><b>Period</b>
       <label class="muted">From <input class="input" type="date" style="width:auto" value="${esc(from)}" onchange="S.exp.lgFrom=this.value;render()"></label>
       <label class="muted">To <input class="input" type="date" style="width:auto" value="${esc(to)}" onchange="S.exp.lgTo=this.value;render()"></label>
@@ -2586,9 +2586,9 @@ function vLedgers(){
 }
 function lgAccForm(id, type){ if (!can('exp')) return deny();
   const a = id ? lgAcc(id) : null, op = a ? Number(a.opening) || 0 : 0, tp = a ? a.type : (type || 'FD'), users = (S.d.vcsUsers || []).filter(u => u.id !== (S.me && S.me.id));
-  const w = openModal(`<h3>${a ? 'Edit account' : tp === 'Person' ? 'Add person' : 'Add account'}</h3><p class="sub">A person / user, an FD, a bank or anything else that needs its own ledger.</p>
+  const w = openModal(`<h3>${a ? 'Edit account' : (tp === 'Person' || tp === 'Customer') ? 'Add customer / person' : 'Add account'}</h3><p class="sub">A customer, person / user, an FD, a bank or anything else that needs its own separate ledger.</p>
     <form id="lgaf">${!a && users.length ? `<div class="field"><label>Pick an app user <span class="muted">(optional)</span></label><select class="select" id="lgaU"><option value="">— type a name instead —</option>${users.map(u => `<option>${esc(u.name)}</option>`).join('')}</select></div>` : ''}
-      <div class="field"><label>Name</label><input class="input" name="name" maxlength="80" required value="${esc(a ? a.name : '')}" placeholder="e.g. SBI FD, Ravi"></div>
+      <div class="field"><label>Name</label><input class="input" name="name" maxlength="80" required value="${esc(a ? a.name : '')}" placeholder="e.g. Ravi (customer), SBI FD"></div>
       <div class="row2"><div class="field"><label>Type</label><select class="select" name="type">${LG_TYPES.map(t => `<option ${tp === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <div class="field"><label>Opening balance (${esc(cfg().currency)})</label><div style="display:flex;gap:6px"><input class="input" type="number" name="op" min="0" step="0.01" value="${op ? Math.abs(op) : ''}" inputmode="decimal" placeholder="0"><select class="select" name="side" style="width:84px"><option value="dr" ${op >= 0 ? 'selected' : ''}>Dr</option><option value="cr" ${op < 0 ? 'selected' : ''}>Cr</option></select></div></div></div>
       <div class="field"><label>Note</label><input class="input" name="note" maxlength="200" value="${esc(a ? a.note : '')}" placeholder="Optional"></div>
@@ -2615,27 +2615,44 @@ async function lgAccDel(id){ if (!can('exp')) return deny();
 }
 function lgEntryForm(id){ if (!can('exp')) return deny();
   const x = id ? lgEnts().find(e => e.id === id) : null;
-  if (!lgAccs().length) return toast('Add a person or FD first (＋ Add person / ＋ Add FD)', true);
-  const cur = lgIds().includes(S.exp.acc) ? S.exp.acc : LG_ME, first = lgAccs()[0].id;
-  const from = x ? x.from : (lgAcc(cur) ? LG_ME : cur), to = x ? x.to : (lgAcc(cur) ? cur : first);
+  if (!lgAccs().length) return toast('Add a customer / person / FD first (＋ Add customer)', true);
+  const cur = lgIds().includes(S.exp.acc) ? S.exp.acc : LG_ME;
+  /* Voucher style: pick THIS ledger, choose Dr or Cr, pick the ledger on the other side.
+     Dr = plus in this ledger (and minus in the other).  Cr = minus in this ledger (and plus in the other).  Stored as from (Cr) / to (Dr). */
+  let A = x ? x.to : cur, B = x ? x.from : ((lgAccs().find(a => a.id !== cur) || {}).id || LG_ME), side = x ? 'dr' : (lgIsMe(cur) ? 'cr' : 'dr');
+  if (!x && !lgIsMe(cur) && B === cur) B = LG_ME;
+  if (!x && lgAcc(cur)) B = LG_ME;
   const o = (i, sel) => `<option value="${esc(i)}" ${sel === i ? 'selected' : ''}>${esc(lgName(i))}</option>`;
-  const opt = sel => `<optgroup label="Mine">${o(LG_ME, sel)}${lgCats().map(c => o('C:' + c.name, sel)).join('')}</optgroup><optgroup label="FD · Persons · Banks">${lgAccs().map(a => o(a.id, sel)).join('')}</optgroup>`;
-  const w = openModal(`<h3>${x ? 'Edit transfer' : 'Transfer / Payment'}</h3><p class="sub"><b>From</b> loses the money (minus, Credit) and <b>To</b> receives it (plus, Debit).<br>Salary → FD: From “Salary”, To “FD”. Paid Ravi: From “My Account”, To “Ravi”.</p>
+  const opt = sel => `<optgroup label="Mine">${o(LG_ME, sel)}${lgCats().map(c => o('C:' + c.name, sel)).join('')}</optgroup><optgroup label="Customers · Persons · FD · Banks">${lgAccs().map(a => o(a.id, sel)).join('')}</optgroup>`;
+  const w = openModal(`<h3>${x ? 'Edit entry' : 'Debit / Credit Entry'}</h3><p class="sub">Every entry posts in <b>two ledgers</b>. <b>Debit (Dr)</b> = plus, <b>Credit (Cr)</b> = minus.<br>Salary → FD: Ledger “FD”, <b>Dr</b>, Against “Salary”. Paid Ravi: Ledger “Ravi”, <b>Dr</b>, Against “My Account”.</p>
     <form id="lgef"><div class="row2"><div class="field"><label>Date</label><input class="input" type="date" name="date" value="${esc(x ? x.date : todayISO())}" required></div>
       <div class="field"><label>Amount (${esc(cfg().currency)})</label><input class="input" type="number" name="amount" min="0.01" step="0.01" value="${x ? x.amount : ''}" required inputmode="decimal"></div></div>
-      <div class="row2"><div class="field"><label>From (minus)</label><select class="select" name="from">${opt(from)}</select></div><div class="field"><label>To (plus)</label><select class="select" name="to">${opt(to)}</select></div></div>
+      <div class="field"><label>This ledger</label><select class="select" name="a">${opt(A)}</select></div>
+      <div class="field"><label>Entry type</label><div class="seg" id="lgSide"><button type="button" data-s="dr">Debit (Dr) · plus ＋</button><button type="button" data-s="cr">Credit (Cr) · minus −</button></div></div>
+      <div class="field"><label>Against (other ledger)</label><select class="select" name="b">${opt(B)}</select></div>
+      <div class="hint" id="lgHint" style="margin:-4px 0 10px;font-weight:600"></div>
       <div class="field"><label>Note</label><input class="input" name="note" maxlength="300" placeholder="Optional" value="${esc(x ? x.note : '')}"></div>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">Save</button></div></form>`);
   w.querySelector('[data-x]').onclick = () => w.remove();
-  w.querySelector('#lgef').onsubmit = async ev => {
+  const form = w.querySelector('#lgef'), hint = w.querySelector('#lgHint');
+  const paint = () => {
+    w.querySelectorAll('#lgSide button').forEach(b => b.classList.toggle('on', b.dataset.s === side));
+    const a = lgName(form.a.value), b = lgName(form.b.value), n = Number(form.amount.value) || 0, amt = n ? ' ' + fm(n) : '';
+    hint.textContent = side === 'dr' ? `${a}: plus${amt}  ·  ${b}: minus${amt}` : `${a}: minus${amt}  ·  ${b}: plus${amt}`;
+  };
+  w.querySelectorAll('#lgSide button').forEach(b => b.onclick = () => { side = b.dataset.s; paint(); });
+  ['a', 'b', 'amount'].forEach(n => form[n].addEventListener('input', paint));
+  paint();
+  form.onsubmit = async ev => {
     ev.preventDefault();
     const f = Object.fromEntries(new FormData(ev.target)), btn = ev.submitter;
-    if (f.from === f.to) return toast('From and To must be different', true);
+    if (f.a === f.b) return toast('This ledger and Against ledger must be different', true);
+    const body = { date:f.date, amount:f.amount, note:f.note, to: side === 'dr' ? f.a : f.b, from: side === 'dr' ? f.b : f.a };
     btn.disabled = true;
     try{
       S.d.ledgerEntries = S.d.ledgerEntries || [];
-      if (x){ const r = await api('updateLgEntry', { id:x.id, ...f }); Object.assign(x, r.entry); }
-      else { const r = await api('addLgEntry', f); S.d.ledgerEntries.push(r.entry); }
+      if (x){ const r = await api('updateLgEntry', { id:x.id, ...body }); Object.assign(x, r.entry); }
+      else { const r = await api('addLgEntry', body); S.d.ledgerEntries.push(r.entry); }
       w.remove(); render(); toast('Saved');
     }catch(e){ btn.disabled = false; handleErr(e); }
   };
