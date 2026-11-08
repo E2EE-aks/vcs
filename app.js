@@ -448,7 +448,7 @@ async function loadAll(){
   applyAccess(); startSync(); licAlert();
 }
 function ingest(d){
-  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.devices = S.d.devices || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.licFields = S.d.licFields || []; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
+  S.d = d; S.d.work = S.d.work || []; S.d.passwords = S.d.passwords || []; S.d.links = S.d.links || []; S.d.devices = S.d.devices || []; S.d.vcs = S.d.vcs || []; S.d.vcsUsers = S.d.vcsUsers || []; S.d.rack = S.d.rack || []; S.d.licFields = S.d.licFields || []; S.d.delReqs = S.d.delReqs || {}; S.d.rackCfg = S.d.rackCfg || { fields:['Carton','Inner','Box','Scheme','INS No.'], rows:{ '*':['a','b','c','d'] }, data:{}, presets:[] };
   S.d.employees = S.d.employees || []; S.d.attAll = S.d.attendanceAll || {};
   S.d.timetable = S.d.timetable || {}; S.d.ttCats = S.d.ttCats || [];
   S.me = S.d.me || null; S.meAt = Date.now(); if (!isAdmin()) S.as = null;
@@ -1658,7 +1658,18 @@ function thFromServer(str){
   if (!b || !b.t) return;
   S.themeApplied = str;
   T = thNorm(b.t); store.set(TH_KEY, JSON.stringify(T), true); thApply();
-  if (window.bbSet && typeof b.bb === 'string') bbSet(b.bb);
+  if (window.bbSet && typeof b.bb === 'string') bbSet(thKeepOwnBb(b.bb));
+}
+/* A user who moved / hid buttons on the bottom bar keeps that placement; the admin's colours and sizes still arrive. */
+function thKeepOwnBb(adminJ){
+  if (thCan() || !window.bbGet) return adminJ;
+  let own = null, a = {}; try { own = JSON.parse(bbGet() || 'null'); } catch(e){}
+  if (!own || typeof own !== 'object') return adminJ;
+  try { a = JSON.parse(adminJ || '{}') || {}; } catch(e){ a = {}; }
+  if (own.place && Object.keys(own.place).length) a.place = own.place;
+  if (own.icons && Object.keys(own.icons).length) a.icons = own.icons;
+  if (own.pos && own.pos !== 'bottom') a.pos = own.pos;
+  return JSON.stringify(a);
 }
 async function thPoll(){
   if (document.hidden || !S.token || !S.d) return;
@@ -2448,7 +2459,7 @@ function vExpTx(){
   const rows = list.map(x => { const t = catType(x.category);
     return `<tr><td data-l="Date">${esc(fmtDateNice(x.date))}</td><td data-l="Category"><span class="pill ${t==='Income'?'inc':'exp'}">${esc(x.category)}</span></td><td data-l="Note" style="white-space:normal;min-width:140px">${esc(x.note)}</td>
       <td data-l="Amount" class="n ${t==='Income'?'amt-inc':'amt-exp'}">${t==='Income'?'+':'−'}${esc(fm(x.amount))}</td>
-      <td class="n nowrap"><button class="btn ghost sm" onclick="entryForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="delEntry('${esc(x.id)}')">🗑</button></td></tr>`; }).join('');
+      <td class="n nowrap"><button class="btn ghost sm" onclick="entryForm('${esc(x.id)}')">Edit</button> ${delBtn('delEntry', x.id)}</td></tr>`; }).join('');
   const monthOpts = '<option value="all">All months</option>' + MONTHS.map((n, i) => `<option value="${i+1}" ${S.exp.month==i+1?'selected':''}>${n}</option>`).join('');
   const catOpts = '<option value="all">All categories</option>' + S.d.categories.map(c => `<option ${S.exp.cat===c.name?'selected':''}>${esc(c.name)}</option>`).join('');
   return `<div class="grid kpis">
@@ -2540,8 +2551,26 @@ function entryEditForm(x){
     catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
+/* A normal user cannot delete: the request goes to the main admin (chat "VCS Management" with Approve / Decline). Admins delete directly. */
+async function delRequest(kind, id, what){ if (!can('exp')) return deny();
+  if (!await confirmBox('Send delete request to admin?', `${what}\n\nIt is deleted only after the admin approves it.`, 'Send request', false)) return;
+  try { await api('requestDelete', { kind, id }); toast('Request sent to the admin ✔'); } catch(e){ handleErr(e); }
+}
+const delBtn = (fn, id) => isAdmin() ? `<button class="btn ghost sm" onclick="${fn}('${esc(id)}')" title="Delete">🗑</button>` : `<button class="btn ghost sm" onclick="${fn}('${esc(id)}')" title="The admin must approve">📨 Request delete</button>`;
+function delReqAsk(id, ok){
+  S.d.delReqs = S.d.delReqs || {};
+  const b = document.querySelectorAll(`[data-dq="${id}"] button`); b.forEach(x => { x.disabled = true; });
+  api('decideDelete', { id, approve:ok }).then(r => { S.d.delReqs[id] = r.status; toast(ok ? 'Approved - entry deleted ✔' : 'Declined'); S.chat.sig = ''; chatRenderMsgs(); })
+    .catch(e => { b.forEach(x => { x.disabled = false; }); handleErr(e); });
+}
+function delReqHtml(id){
+  const st = (S.d.delReqs || {})[id] || 'p';
+  return st === 'p' ? `<div class="actions" data-dq="${esc(id)}" style="margin-top:8px"><button class="btn sm" onclick="event.stopPropagation();delReqAsk('${esc(id)}',true)">✔ Approve</button><button class="btn ghost sm" onclick="event.stopPropagation();delReqAsk('${esc(id)}',false)">✕ Decline</button></div>`
+    : `<div class="tg ${st === 'd' ? 'bad' : ''}" style="margin-top:6px;font-weight:700">${st === 'a' ? '✅ Approved - entry deleted' : '❌ Declined'}</div>`;
+}
 async function delEntry(id){ if (!can('exp')) return deny();
   const x = S.d.expenses.find(e => e.id === id);
+  if (!isAdmin()) return delRequest('exp', id, `${x.category} · ${fm(x.amount)} on ${fmtDateNice(x.date)}`);
   if (!await confirmBox('Delete this entry?', `${x.category} · ${fm(x.amount)} on ${fmtDateNice(x.date)} will be removed from your sheet.`, 'Delete', true)) return;
   try { await api('deleteExpense', { id }); S.d.expenses = S.d.expenses.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
 }
@@ -2568,14 +2597,14 @@ const lgBalPdf = n => PM(Math.abs(n)) + (Math.abs(n) < 0.005 ? '' : n > 0 ? ' Dr
 function lgPostings(id){
   const P = [], cat = lgIsCat(id), cn = cat ? String(id).slice(2) : '';
   if (id === LG_ME || cat) S.d.expenses.forEach(x => { if (cat && x.category !== cn) return; const inc = catType(x.category) === 'Income';
-    P.push({ date:x.date, part:cat ? 'My Account' : x.category, vch:inc ? 'Income' : 'Expense', note:x.note, dr:inc ? x.amount : 0, cr:inc ? 0 : x.amount, kind:'exp', id:x.id }); });
+    P.push({ date:x.date, part:cat ? 'My Account' : x.category, vch:inc ? 'Income' : 'Expense', note:x.note, dr:inc ? x.amount : 0, cr:inc ? 0 : x.amount, kind:'exp', id:x.id, frm:inc ? x.category : 'My Account', tto:inc ? 'My Account' : x.category }); });
   lgEnts().forEach(e => {
     if (id === LG_ME){                                           // main account: only transfers that cross the line between "mine" and "outside"
       const f = lgIsMe(e.from), t = lgIsMe(e.to); if (f === t) return;
-      if (t) P.push({ date:e.date, part:lgName(e.from) + (e.to !== LG_ME ? ' → ' + lgName(e.to) : ''), vch:'Transfer', note:e.note, dr:e.amount, cr:0, kind:'lg', id:e.id });
-      else P.push({ date:e.date, part:lgName(e.to) + (e.from !== LG_ME ? ' ← ' + lgName(e.from) : ''), vch:'Transfer', note:e.note, dr:0, cr:e.amount, kind:'lg', id:e.id });
-    } else if (e.to === id) P.push({ date:e.date, part:lgName(e.from), vch:'Transfer', note:e.note, dr:e.amount, cr:0, kind:'lg', id:e.id });
-    else if (e.from === id) P.push({ date:e.date, part:lgName(e.to), vch:'Transfer', note:e.note, dr:0, cr:e.amount, kind:'lg', id:e.id });
+      if (t) P.push({ date:e.date, part:lgName(e.from) + (e.to !== LG_ME ? ' → ' + lgName(e.to) : ''), vch:'Transfer', note:e.note, dr:e.amount, cr:0, kind:'lg', id:e.id, frm:lgName(e.from), tto:lgName(e.to) });
+      else P.push({ date:e.date, part:lgName(e.to) + (e.from !== LG_ME ? ' ← ' + lgName(e.from) : ''), vch:'Transfer', note:e.note, dr:0, cr:e.amount, kind:'lg', id:e.id, frm:lgName(e.from), tto:lgName(e.to) });
+    } else if (e.to === id) P.push({ date:e.date, part:lgName(e.from), vch:'Transfer', note:e.note, dr:e.amount, cr:0, kind:'lg', id:e.id, frm:lgName(e.from), tto:lgName(e.to) });
+    else if (e.from === id) P.push({ date:e.date, part:lgName(e.to), vch:'Transfer', note:e.note, dr:0, cr:e.amount, kind:'lg', id:e.id, frm:lgName(e.from), tto:lgName(e.to) });
   });
   return P.map((p, i) => ({ ...p, i })).sort((a, b) => a.date.localeCompare(b.date) || a.i - b.i);
 }
@@ -2609,7 +2638,7 @@ function vLedgers(){
   const sumRows = sum.map(r => `<tr style="cursor:pointer" data-id="${esc(r.id)}" onclick="lgPick(this.dataset.id)"><td data-l="Ledger"><b>${esc(lgName(r.id))}</b> <span class="muted">${esc(lgKind(r.id))}</span></td><td data-l="Opening" class="n">${esc(lgBal(r.open))}</td><td data-l="Debit" class="n">${r.dr ? esc(fm(r.dr)) : ''}</td><td data-l="Credit" class="n">${r.cr ? esc(fm(r.cr)) : ''}</td><td data-l="Closing" class="n"><b>${esc(lgBal(r.close))}</b></td></tr>`).join('');
   const rows = st.rows.map(p => `<tr><td data-l="Date">${esc(fmtDateNice(p.date))}</td><td data-l="Particulars" style="white-space:normal;min-width:150px"><b>${esc(p.part)}</b>${p.note ? `<div class="muted" style="font-size:calc(12px*var(--fs))">${esc(p.note)}</div>` : ''}</td><td data-l="Type">${esc(p.vch)}</td>
       <td data-l="Debit" class="n">${p.dr ? esc(fm(p.dr)) : ''}</td><td data-l="Credit" class="n">${p.cr ? esc(fm(p.cr)) : ''}</td><td data-l="Balance" class="n"><b>${esc(lgBal(p.bal))}</b></td>
-      <td class="n nowrap">${can('exp') ? `<button class="btn ghost sm" onclick="${p.kind === 'lg' ? `lgEntryForm('${esc(p.id)}')` : `entryForm('${esc(p.id)}')`}">Edit</button> <button class="btn ghost sm" onclick="${p.kind === 'lg' ? `lgDelEntry('${esc(p.id)}')` : `delEntry('${esc(p.id)}')`}">🗑</button>` : ''}</td></tr>`).join('');
+      <td class="n nowrap">${can('exp') ? `<button class="btn ghost sm" onclick="${p.kind === 'lg' ? `lgEntryForm('${esc(p.id)}')` : `entryForm('${esc(p.id)}')`}">Edit</button> ${delBtn(p.kind === 'lg' ? 'lgDelEntry' : 'delEntry', p.id)}` : ''}</td></tr>`).join('');
   const table = `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Date</th><th>Particulars</th><th>Type</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th><th></th></tr></thead><tbody>
     <tr class="tot"><td></td><td colspan="4"><b>Opening balance</b></td><td class="n"><b>${esc(lgBal(st.open))}</b></td><td></td></tr>${rows}
     <tr class="tot"><td></td><td colspan="2"><b>Total</b></td><td class="n">${esc(fm(st.dr))}</td><td class="n">${esc(fm(st.cr))}</td><td class="n"><b>${esc(lgBal(st.close))}</b></td><td></td></tr>
@@ -2707,6 +2736,7 @@ function lgEntryForm(id){ if (!can('exp')) return deny();
 }
 async function lgDelEntry(id){ if (!can('exp')) return deny();
   const x = lgEnts().find(e => e.id === id); if (!x) return;
+  if (!isAdmin()) return delRequest('lge', id, `${lgName(x.from)} → ${lgName(x.to)} · ${fm(x.amount)} on ${fmtDateNice(x.date)}`);
   if (!await confirmBox('Delete this transfer?', `${lgName(x.from)} → ${lgName(x.to)} · ${fm(x.amount)} on ${fmtDateNice(x.date)} will be removed.`, 'Delete', true)) return;
   try { await api('deleteLgEntry', { id }); S.d.ledgerEntries = lgEnts().filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
 }
@@ -2714,9 +2744,10 @@ function lgPdfLedger(P, id, from, to, first){
   const st = lgStatement(id, from, to), per = (from || to) ? `${from ? fmtDateNice(from) : 'Start'} to ${to ? fmtDateNice(to) : 'Today'}` : 'All dates';
   let y = pdfStart(P, 'Ledger Account', `${lgName(id)}  |  ${lgKind(id)}  |  ${per}`, 'p', first);
   y = pdfBoxes(P, y, [{ label:'Opening', value:lgBalPdf(st.open) }, { label:'Total Debit', value:PM(st.dr), color:[21, 128, 61] }, { label:'Total Credit', value:PM(st.cr), color:[185, 28, 28] }, { label:'Closing', value:lgBalPdf(st.close) }]);
-  const body = [['', 'Opening Balance', '', '', '', lgBalPdf(st.open)]].concat(st.rows.map(p => [fmtDateNice(p.date), PT(p.part) + (p.note ? '\n' + PT(p.note) : ''), p.vch, p.dr ? PM(p.dr) : '', p.cr ? PM(p.cr) : '', lgBalPdf(p.bal)]));
-  pdfTable(P, { startY:y, head:[['Date', 'Particulars', 'Vch Type', 'Debit', 'Credit', 'Balance']], body, foot:[['', 'Total', '', PM(st.dr), PM(st.cr), lgBalPdf(st.close)], ['', 'Closing Balance', '', '', '', lgBalPdf(st.close)]],
-    columnStyles:{ 0:{ cellWidth:24 }, 2:{ cellWidth:20 }, 3:{ halign:'right' }, 4:{ halign:'right' }, 5:{ halign:'right', fontStyle:'bold' } } });
+  /* From = the ledger that GAVE (Credit, minus), To = the ledger that RECEIVED (Debit, plus) - so every line shows which account went to which */
+  const body = [['', 'Opening Balance', '', '', '', lgBalPdf(st.open)]].concat(st.rows.map(p => [fmtDateNice(p.date), PT(p.frm || p.part), PT(p.tto || '') + (p.note ? '\n' + PT(p.note) : ''), p.dr ? PM(p.dr) : '', p.cr ? PM(p.cr) : '', lgBalPdf(p.bal)]));
+  pdfTable(P, { startY:y, head:[['Date', 'From A/c (paid by)', 'To A/c (received by)', 'Debit (+)', 'Credit (-)', 'Balance']], body, foot:[['', 'Total', '', PM(st.dr), PM(st.cr), lgBalPdf(st.close)], ['', 'Closing Balance', '', '', '', lgBalPdf(st.close)]],
+    styles:{ fontSize:8 }, columnStyles:{ 0:{ cellWidth:22 }, 3:{ halign:'right' }, 4:{ halign:'right' }, 5:{ halign:'right', fontStyle:'bold' } } });
 }
 async function lgPdf(all){
   if (S.exBusy) return; S.exBusy = true; toast('Preparing your PDF file…');
@@ -3665,28 +3696,43 @@ function licMore(x){
   const ex = x.extra || {};
   return (S.d.licFields || []).filter(n => ex[n]).map(n => `<div><span class="muted">${esc(n)}:</span> ${esc(ex[n])}</div>`).join('');
 }
+/* "Table No." = the LIC plan / table number. It lives in an extra field whose name contains "table" (the filter button creates it). */
+const licTblName = () => (S.d.licFields || []).find(n => /table/i.test(n)) || '';
+const licTblVal = x => { const n = licTblName(); return n ? String((x.extra || {})[n] || '').trim() : ''; };
+const licKey = t => String(t || '').toLowerCase().replace(/[^a-z0-9ऀ-ॿ]+/g, '');      // "98765-43210" -> "9876543210"
+const licDmy = iso => iso ? String(iso).split('-').reverse().join('/') : '';
+function licHay(x){
+  const hay = [x.name, x.policyNo, x.policyName, x.nominee, x.phone, licGName(x.group), LIC_FREQ[x.freq], x.amount, x.totalAmount, x.startDate, x.endDate, licDmy(x.startDate), licDmy(x.endDate), x.dueDate, licDmy(x.dueDate), ...Object.values(x.extra || {})]
+    .filter(v => v !== undefined && v !== null && v !== '').join(' ').toLowerCase();
+  return { hay, key:licKey(hay) };
+}
 function filteredLic(){
-  const q = (S.lic.q || '').trim().toLowerCase();
+  const toks = (S.lic.q || '').toLowerCase().split(/\s+/).filter(Boolean), t = S.lic.t || '';
   return [...(S.d.lic || [])]
     .filter(x => { const g = S.lic.g || ''; return !g || (g === 'none' ? !x.group : x.group === g); })
-    .filter(x => !q || [x.name, x.policyNo, x.policyName, x.nominee, x.phone, ...Object.values(x.extra || {})].join(' ').toLowerCase().includes(q))
+    .filter(x => !t || (t === '__none' ? !licTblVal(x) : licTblVal(x).toLowerCase() === t.toLowerCase()))
+    .filter(x => { if (!toks.length) return true; const h = licHay(x); return toks.every(k => h.hay.includes(k) || (licKey(k) && h.key.includes(licKey(k)))); })     // every word must match (any order)
     .sort((a, b) => (a.endDate || '9999').localeCompare(b.endDate || '9999'));     // soonest-ending first
 }
-function vLic(){
+function licTableBar(){
+  const n = licTblName(), all = S.d.lic || [];
+  if (!n) return can('lic') ? `<div class="actions" style="margin-top:12px"><button type="button" class="btn ghost sm" onclick="licTableAdd()" title="Adds a “Table No” box to every policy and a filter here">＋ Add “Table No” field &amp; filter</button></div>` : '';
+  const cnt = {}; let none = 0;
+  all.forEach(x => { const v = licTblVal(x); if (v) cnt[v.toLowerCase()] = { v, n:((cnt[v.toLowerCase()] || {}).n || 0) + 1 }; else none++; });
+  const vals = Object.values(cnt).sort((a, b) => a.v.localeCompare(b.v, undefined, { numeric:true }));
+  const cur = S.lic.t || '';
+  return `<div class="actions" style="margin-top:12px;align-items:center;gap:8px"><label class="muted" for="licTbl" style="font-weight:700">🔢 ${esc(n)}</label>
+    <select class="select" id="licTbl" style="max-width:240px" onchange="licTableSel(this.value)"><option value="">All (${all.length})</option>${vals.map(o => `<option value="${esc(o.v)}" ${cur.toLowerCase() === o.v.toLowerCase() ? 'selected' : ''}>${esc(o.v)} · ${o.n}</option>`).join('')}${none ? `<option value="__none" ${cur === '__none' ? 'selected' : ''}>(blank) · ${none}</option>` : ''}</select>
+    ${cur ? '<button type="button" class="btn ghost sm" onclick="licTableSel(\'\')">✕ Clear</button>' : ''}</div>`;
+}
+function licTableSel(v){ S.lic.t = v || ''; render(); }
+async function licTableAdd(){ if (!can('lic')) return deny();
+  const cur = (S.d.licFields || []).slice();
+  if (cur.length >= 20) return toast('Up to 20 extra options. Remove one first.', true);
+  try{ const r = await api('saveLicFields', { fields:cur.map(o => ({ o, n:o })).concat([{ o:'', n:'Table No' }]) }); S.d.licFields = r.fields || []; render(); toast('“Table No” added - fill it in each policy'); }catch(e){ handleErr(e); }
+}
+function licListHtml(){
   const all = S.d.lic || [], list = filteredLic(), total = all.length;
-  const now = Date.now();
-  let maturing = 0, matured = 0, totalAmt = 0, renew7 = 0, renew30 = 0, yearAmt = 0, yearN = 0;
-  all.forEach(x => {
-    totalAmt += Number(x.amount) || 0;
-    if (licYearly(x) && (!x.endDate || x.endDate >= licToday())){ yearAmt += licYearly(x); yearN++; }      // running policies only
-    if (x.endDate){
-      const end = new Date(x.endDate + 'T23:59:59').getTime();
-      if (end <= now) matured++; else if (end - now <= 30 * 86400000) maturing++;
-    }
-    const rn = licRenewInfo(x);
-    if (rn.due){ if (rn.days <= 7) renew7++; if (rn.days <= 30) renew30++; }
-  });
-  const remind = all.map(x => ({ x, rn: licRenewInfo(x) })).filter(o => o.rn.due && o.rn.days <= 30).sort((a, b) => a.rn.days - b.rn.days);
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
       <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><div class="lic-name"><b>${esc(x.name) || '<span class="dim">—</span>'}</b><span class="lic-name-tags">${licStatusTag(x.endDate)}${licGroupTag(x)}</span></div></td>
       <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}${x.pic ? ` <img class="pthumb" alt="Policy photo" src="${x.pic}" onclick="picOpen('lic','${esc(x.id)}')">` : ''}</td>
@@ -3705,6 +3751,27 @@ function vLic(){
       <td class="n nowrap"><button class="btn soft sm" onclick="licCopy('${esc(x.id)}')" title="Copy all of this customer's data">📋 Copy</button>
         <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`;
   }).join('');
+  return `<div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
+      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Sum Assured</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-state">${total ? 'No policies match your search / filter.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
+      <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
+    </div>`;
+}
+function vLic(){
+  const all = S.d.lic || [], list = filteredLic(), total = all.length;
+  const now = Date.now();
+  let maturing = 0, matured = 0, totalAmt = 0, renew7 = 0, renew30 = 0, yearAmt = 0, yearN = 0;
+  all.forEach(x => {
+    totalAmt += Number(x.amount) || 0;
+    if (licYearly(x) && (!x.endDate || x.endDate >= licToday())){ yearAmt += licYearly(x); yearN++; }      // running policies only
+    if (x.endDate){
+      const end = new Date(x.endDate + 'T23:59:59').getTime();
+      if (end <= now) matured++; else if (end - now <= 30 * 86400000) maturing++;
+    }
+    const rn = licRenewInfo(x);
+    if (rn.due){ if (rn.days <= 7) renew7++; if (rn.days <= 30) renew30++; }
+  });
+  const remind = all.map(x => ({ x, rn: licRenewInfo(x) })).filter(o => o.rn.due && o.rn.days <= 30).sort((a, b) => a.rn.days - b.rn.days);
   const remindCard = remind.length ? `<div class="card lic-remind" style="margin-bottom:16px"><h3>🔔 Renewal reminders <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· due within 30 days</span></h3>
       ${remind.map(({ x, rn }) => `<div class="lic-ri"><div class="lic-ri-main"><b>${esc(x.name || x.policyNo || 'Policy')}</b>${x.name && x.policyNo ? ` <span class="muted">· ${esc(x.policyNo)}</span>` : ''}
         <div class="muted" style="font-size:calc(12.5px*var(--fs))">${esc(LIC_FREQ[x.freq] || 'One-time')} premium${x.amount ? ' · ₹' + Number(x.amount).toLocaleString('en-IN') : ''} · ${licDateFmt(rn.due)}</div></div>
@@ -3719,20 +3786,16 @@ function vLic(){
       <div class="card kpi a"><div class="lbl">Matured / Expired</div><div class="val">${matured}</div></div>
     </div>
     <div class="card" style="margin-bottom:16px"><div class="actions">
-      <input class="input" id="licq" style="width:220px" placeholder="Search name, policy, nominee, mobile…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)">
+      <input class="input" id="licq" style="width:220px" placeholder="Search name, policy no., mobile, nominee, table no…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)" autocomplete="off" enterkeyhint="search">
       <span style="flex:1"></span>
       <button class="btn soft" onclick="licExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="licExport('pdf')">⬇ PDF</button>
       <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
-      <button class="btn" onclick="licForm()">＋ Add policy</button></div>${licChips()}</div>
-    <div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
-      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Sum Assured</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
-        : `<div class="empty-state">${total ? 'No policies match your search.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
-      <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
-    </div>`;
+      <button class="btn" onclick="licForm()">＋ Add policy</button></div>${licChips()}${licTableBar()}</div>
+    <div id="licList">${licListHtml()}</div>`;
 }
-function licSearch(v){
+function licSearch(v){            // only the list is redrawn (the search box is never rebuilt, so the keyboard stays open)
   S.lic.q = v; clearTimeout(window._lict);
-  window._lict = setTimeout(() => { render(); const i = $('#licq'); if (i){ i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
+  window._lict = setTimeout(() => { const el = $('#licList'); if (!el) return render(); el.innerHTML = licListHtml(); applyRO($('#view')); startLic(); }, 120);
 }
 async function licCopy(id){
   const x = (S.d.lic || []).find(e => e.id === id); if (!x) return;
@@ -3894,9 +3957,9 @@ function licForm(id){ if (!can('lic')) return deny();
   if (dr && dr.pic !== undefined) licPic = dr.pic;
   const drawPic = () => {                              // the small photo button next to the policy number
     const cur = licPic === 'clear' ? '' : (licPic ? licPic.thumb : (x ? x.pic : '')), box = w.querySelector('#licPicBox');
-    box.innerHTML = (cur ? `<img class="pthumb" alt="Policy photo" src="${cur}" data-pv>` : '') + `<label class="btn ghost sm" style="cursor:pointer;margin:0" title="Add a photo of the policy">📷<input type="file" accept="image/*" hidden data-pf></label>` + (cur ? `<button type="button" class="btn ghost sm" data-pd title="Remove photo">✕</button>` : '');
+    box.innerHTML = (cur ? `<img class="pthumb" alt="Policy photo" src="${cur}" data-pv>` : '') + `<label class="btn ghost sm" style="cursor:pointer;margin:0" title="Take a photo with the camera">📷<input type="file" accept="image/*" capture="environment" hidden data-pf></label><label class="btn ghost sm" style="cursor:pointer;margin:0" title="Choose a photo from the gallery">🖼<input type="file" accept="image/*" hidden data-pf></label>` + (cur ? `<button type="button" class="btn ghost sm" data-pd title="Remove photo">✕</button>` : '');
     const im = box.querySelector('[data-pv]'); if (im) im.onclick = () => { if (licPic && licPic !== 'clear') picShow(licPic.full); else picOpen('lic', x.id); };
-    box.querySelector('[data-pf]').onchange = async ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (!f) return; try { toast('Preparing the picture…'); licPic = await picMake(f); drawPic(); } catch(e){ toast(e.message || 'Could not use this picture', true); } };
+    box.querySelectorAll('[data-pf]').forEach(inp => inp.onchange = async ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (!f) return; try { toast('Preparing the picture…'); licPic = await picMake(f); drawPic(); } catch(e){ toast(e.message || 'Could not use this picture', true); } });
     const d = box.querySelector('[data-pd]'); if (d) d.onclick = () => { licPic = 'clear'; drawPic(); };
   };
   drawPic();
@@ -5837,9 +5900,10 @@ function chatRenderMsgs(toBottom){
         const tk = chTicks(); tkh = ` <span class="tick em ${rdn ? 'read' : dlv ? 'dlv' : ''}">${esc(rdn ? tk.read : dlv ? tk.dlv : tk.sent)}</span>`; }
     }
     if (!meta) meta = dual ? `<span class="tl" title="Time for the sender">${tl}</span><span class="tr" title="Time for the receiver">${esc(dual.r)}${tkh}</span>` : tl + tkh;
-    const v = chatView(m), sl = S.chat.sel.has(m.id);
+    let v = chatView(m); const sl = S.chat.sel.has(m.id), dq = /\[\[DEL:([a-f0-9]+)\]\]/.exec(m.text || '');
+    if (dq) v = Object.assign({}, v, { text:String(v.text || '').replace(/\s*\[\[DEL:[a-f0-9]+\]\]/, '') });
     const tg = v.busy ? '<div class="tg">🌐 Translating…</div>' : v.fail ? '<div class="tg bad">🌐 Could not translate · tap to retry</div>' : v.lang ? `<div class="tg">🌐 ${esc(CH_LANGS[v.lang].short)} · tap for options</div>` : '';
-    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''} ${dual ? 'd2' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chRqHtml(m)}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${v.text ? tg : ''}${chRxHtml(m)}<div class="mt${dual ? ' dual' : ''}">${meta}</div></div>`;
+    html += `<div class="ch-b ${m.mine ? 'me' : 'them'} ${m.state || ''} ${sl ? 'picked' : ''} ${dual ? 'd2' : ''}" data-mid="${esc(m.id)}" ${m.state === 'failed' ? `onclick="chatRetry('${esc(m.id)}')"` : ''}>${!m.mine && m.from ? `<div class="mf" style="color:${chColor(m.from)}">${esc(m.from)}</div>` : ''}${chRqHtml(m)}${chMediaHtml(m)}${v.text ? `<div class="tx">${esc(v.text)}</div>` : ''}${dq && !m.mine ? delReqHtml(dq[1]) : ''}${v.text ? tg : ''}${chRxHtml(m)}<div class="mt${dual ? ' dual' : ''}">${meta}</div></div>`;
   });
   box.innerHTML = html;
   if (toBottom || near) box.scrollTop = box.scrollHeight; else box.scrollTop = keepTop;
@@ -6401,7 +6465,7 @@ function chMedia(m){
   try{ const o = JSON.parse(t.slice(8)); return o && typeof o === 'object' ? o : null; }catch(e){ return null; }
 }
 const chTxt = m => { const o = chMedia(m); return o ? String(o.c || '') : m.text; };
-const chPrev = t => { const o = chMedia({ text:t }); return o ? ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80) : String(t).slice(0, 80); };
+const chPrev = t => { t = String(t == null ? '' : t).replace(/\s*\[\[DEL:[a-f0-9]+\]\]/, ''); const o = chMedia({ text:t }); return o ? ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80) : String(t).slice(0, 80); };
 function chMediaUrl(m, dl){
   const o = chMedia(m), u = o && o.i && S.chat.mu[o.i]; if (!u) return '';
   return dl ? u + '&dl=1&n=' + encodeURIComponent(o.n || (o.k === 'vid' ? 'video' : 'photo')) : u;

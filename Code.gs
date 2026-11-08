@@ -173,13 +173,14 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, setMyBirthday: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1, requestDelete: 1, decideDelete: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
 var NEED = {
   setAttendance: 'att',
   addExpense: 'exp', updateExpense: 'exp', deleteExpense: 'exp', saveLgAccount: 'exp', deleteLgAccount: 'exp', addLgEntry: 'exp', updateLgEntry: 'exp', deleteLgEntry: 'exp', addCategory: 'exp', updateCategory: 'exp', deleteCategory: 'exp',
+  requestDelete: 'exp',
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
@@ -272,6 +273,8 @@ function route_(req) {
     if (NEED[a]) need_(NEED[a]);
     if (ADMIN_ONLY[a]) needAdmin_();
     if (USER_MGR[a]) needUserMgr_();
+    // Only an admin deletes ledger / expense entries directly. Everybody else asks (requestDelete) and the main admin approves in the VCS Management chat.
+    if ((a === 'deleteExpense' || a === 'deleteLgEntry') && CTX.role !== 'admin') fail_('Deleting needs the admin\'s approval. Use "Request delete" - the admin gets a message and can approve it.', 'PERM');
   }
 
   var lock = null;
@@ -315,6 +318,8 @@ function route_(req) {
       case 'payRequest':        out = payRequest_(req); break;
       case 'paySave':           out = paySave_(req); break;
       case 'payDecide':         out = payDecide_(req); break;
+      case 'requestDelete':     out = requestDelete_(req); break;
+      case 'decideDelete':      out = decideDelete_(req); break;
       case 'addWork':           out = addWork_(req); break;
       case 'updateWork':        out = updateWork_(req); break;
       case 'deleteWork':        out = deleteWork_(req); break;
@@ -883,7 +888,7 @@ var ACTIVITY_LABEL_ = {
   setAttendance: 'Updated attendance', saveSettings: 'Changed settings', saveStatuses: 'Changed status codes',
   addStatus: 'Added a status code', deleteStatus: 'Deleted a status code', historyRestore: 'Restored an earlier change',
   addEmployee: 'Added an employee', updateEmployee: 'Updated an employee', deleteEmployee: 'Deleted an employee',
-  changeCredentials: 'Changed login password', addExpense: 'Added an expense', updateExpense: 'Updated an expense', deleteExpense: 'Deleted an expense',
+  changeCredentials: 'Changed login password', addExpense: 'Added an expense', updateExpense: 'Updated an expense', deleteExpense: 'Deleted an expense', requestDelete: 'Asked the admin to delete an entry', decideDelete: 'Decided a delete request',
   saveLgAccount: 'Saved a ledger account', deleteLgAccount: 'Deleted a ledger account', addLgEntry: 'Added a ledger transfer', updateLgEntry: 'Updated a ledger transfer', deleteLgEntry: 'Deleted a ledger transfer',
   addCategory: 'Added a category', updateCategory: 'Updated a category', deleteCategory: 'Deleted a category',
   addWork: 'Added a work entry', updateWork: 'Updated a work entry', deleteWork: 'Deleted a work entry',
@@ -2091,6 +2096,62 @@ function deleteLgEntry_(req) {
   if (row < 0) fail_('Entry not found. Please refresh.');
   sh.deleteRow(row);
   return { ok: true };
+}
+
+// ---------- DELETE REQUESTS (a user cannot delete an entry; the main admin approves or declines it from the "VCS Management" chat) ----------
+// DEL_REQS = [{id, k:'exp'|'lge', i:entry id, o:data owner, u:who asked, n:name, d:text, t:time, s:'p'ending|'a'pproved|'d'eclined}]  (kept small: a script property holds ~9 KB)
+function delReqs_() { var r = []; try { r = JSON.parse(String(PropertiesService.getScriptProperties().getProperty('DEL_REQS') || '[]')); } catch (e) { r = []; } return Array.isArray(r) ? r : []; }
+function delReqSave_(list) {
+  if (list.length > 40) {
+    var keep = list.filter(function (x) { return x.s === 'p'; }), rest = list.filter(function (x) { return x.s !== 'p'; }).slice(-Math.max(0, 40 - keep.length));
+    list = rest.concat(keep).sort(function (a, b) { return a.t - b.t; });
+  }
+  PropertiesService.getScriptProperties().setProperty('DEL_REQS', JSON.stringify(list));
+}
+function delStatusMap_() {                       // shown to the main admin only: lets the chat buttons know which requests are already decided
+  var m = {}; if (CTX.uid !== 'ADMIN') return m;
+  delReqs_().forEach(function (x) { m[x.id] = x.s; }); return m;
+}
+function lgNameOf_(id) {
+  if (id === 'ME') return 'My Account';
+  if (String(id).indexOf('C:') === 0) return String(id).slice(2);
+  var a = readLgAccounts_().filter(function (x) { return x.id === id; })[0]; return a ? a.name : String(id);
+}
+function requestDelete_(req) {
+  var kind = String(req.kind || ''), id = String(req.id || ''), desc = '';
+  if (kind === 'exp') {
+    var sh = ownedSheet_('EXP', 6), row = findExpenseRow_(sh, id);
+    if (row < 0) fail_('Entry not found. Please refresh.');
+    var v = sh.getRange(row, 1, 1, 4).getValues()[0];
+    desc = 'Entry: ' + String(v[1]) + ' | Rs. ' + Number(v[2]) + ' | ' + fmtDate_(v[0]) + (v[3] ? ' | ' + String(v[3]) : '');
+  } else if (kind === 'lge') {
+    var e = readLgEntries_().filter(function (x) { return x.id === id; })[0];
+    if (!e) fail_('Entry not found. Please refresh.');
+    desc = 'Ledger entry: ' + lgNameOf_(e.from) + ' (Cr) -> ' + lgNameOf_(e.to) + ' (Dr) | Rs. ' + e.amount + ' | ' + e.date + (e.note ? ' | ' + e.note : '');
+  } else fail_('Unknown entry type.');
+  var list = delReqs_();
+  if (list.some(function (x) { return x.k === kind && x.i === id && x.s === 'p'; })) fail_('A delete request for this entry is already waiting for the admin.');
+  var name = String(CTX.name || CTX.username || 'User'), r = { id: Utilities.getUuid().replace(/-/g, '').slice(0, 10), k: kind, i: id, o: CTX.owner, u: CTX.uid, n: name.slice(0, 40), d: desc.slice(0, 110), t: Date.now(), s: 'p' };
+  list.push(r); delReqSave_(list);
+  sysChatSend_('ADMIN', '🗑 Delete request\n\nFrom: ' + name + '\n' + desc + '\n\nApprove = the entry is deleted. Decline = nothing changes.  [[DEL:' + r.id + ']]');
+  return { ok: true, id: r.id };
+}
+function decideDelete_(req) {
+  if (CTX.uid !== 'ADMIN') fail_('Only the main admin can approve or decline.', 'PERM');
+  var list = delReqs_(), r = null;
+  list.forEach(function (x) { if (x.id === String(req.id || '')) r = x; });
+  if (!r) fail_('Request not found. It may be too old - ask the user to send it again.');
+  if (r.s !== 'p') fail_('This request is already ' + (r.s === 'a' ? 'approved' : 'declined') + '.');
+  var ok = req.approve === true || req.approve === 'true';
+  if (ok) {
+    var keep = CTX.owner; CTX.owner = r.o;                         // delete from the USER's data, not the admin's
+    try { if (r.k === 'exp') deleteExpense_({ id: r.i }); else deleteLgEntry_({ id: r.i }); }
+    catch (e) { if (!/not found/i.test(String(e && e.message))) { CTX.owner = keep; throw e; } }   // already gone = fine
+    finally { CTX.owner = keep; }
+  }
+  r.s = ok ? 'a' : 'd'; r.at = Date.now(); delReqSave_(list);
+  sysChatSend_(r.u, ok ? '✅ Your delete request was approved and the entry is deleted.\n' + r.d : '❌ Your delete request was declined by the admin. The entry is kept.\n' + r.d, 'ADMIN');
+  return { ok: true, status: r.s };
 }
 
 // ---------- PLANS & PAYMENTS (the main admin sets plans + a payment QR; an expired user pays and sends the reference; the admin approves) ----------
@@ -3610,6 +3671,7 @@ function chatMediaParse_(text) {
   try { var o = JSON.parse(String(text).slice(8)); return (o && /^[A-Za-z0-9_-]{10,100}$/.test(String(o.i || ''))) ? o : null; } catch (e) { return null; }
 }
 function chatPreview_(text) {
+  text = String(text).replace(/\s*\[\[DEL:[a-f0-9]+\]\]/, '');
   var o = chatMediaParse_(text);
   if (!o) return String(text).slice(0, 80);
   return ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80);
@@ -4039,6 +4101,7 @@ function getAll_() {
     categories: p.exp === 'none' ? [] : cleanCats_(readCategories_()),
     ledgerAccounts: p.exp === 'none' ? [] : readLgAccounts_(),
     ledgerEntries: p.exp === 'none' ? [] : readLgEntries_(),
+    delReqs: delStatusMap_(),
     work: p.work === 'none' ? [] : readWork_(),
     passwords: p.pw === 'none' ? [] : readPw_(),
     links: p.link === 'none' ? [] : readLink_(),
