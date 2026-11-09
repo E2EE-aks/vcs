@@ -4268,6 +4268,8 @@ function vSettingsBase(){
       <button class="btn" type="submit">Update login</button>
     </form></div>
 
+  ${isAdmin() && S.me && S.me.primary ? kwCard() : ''}
+
   <div class="card"><h3>🏷️ Attendance status codes</h3>
     <p class="muted" style="margin-bottom:14px">Paid factor: 1 = full day, 0.5 = half day, 0 = unpaid. Salary is calculated from this. P, A, W are core codes (cannot be deleted).</p>
     <form id="fStat">
@@ -4291,6 +4293,18 @@ function vSettingsBase(){
     <button class="btn soft" onclick="catManager()">⚙ Manage categories</button></div>
 
   ${exportCard()}</div>`;
+}
+function kwCard(){
+  const k = S.kw;
+  if (!k){ api('kwGet').then(r => { S.kw = { on: r.on, words: r.words }; if (S.view === 'settings') render(); }).catch(() => {}); }
+  const w = (k && k.words) || [];
+  return `<div class="card"><h3>🔔 Chat keyword alerts</h3>
+    <p class="muted" style="margin-bottom:12px">If a user sends any of these words in a chat, <b>VCS Management</b> sends you a message and a phone notification with who sent it and the full message. Messages from admins are ignored.</p>
+    <label style="display:flex;gap:8px;align-items:center;margin-bottom:12px"><input type="checkbox" id="kwOn" ${!k || k.on ? 'checked' : ''}> Alerts ON</label>
+    <div class="field"><label>Words <span class="muted">(add one at a time, or separate with commas)</span></label>
+      <div style="display:flex;gap:8px"><input class="input" id="kwNew" maxlength="200" placeholder="e.g. urgent, resign, salary"><button class="btn" type="button" id="kwAdd">＋ Add</button></div></div>
+    <div id="kwList" style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0">${w.map((x, i) => `<span class="tag" style="display:inline-flex;gap:6px;align-items:center">${esc(x)} <a href="#" data-kwdel="${i}" style="text-decoration:none">✕</a></span>`).join('') || '<span class="muted">' + (k ? 'No words yet.' : 'Loading…') + '</span>'}</div>
+    <button class="btn soft" type="button" id="kwSave">Save alerts</button></div>`;
 }
 const SESS_OPTS = [['0','Normal (6 hours)'],['1','1 hour'],['2','2 hours'],['5','5 hours'],['12','12 hours'],['24','1 day'],['72','3 days'],['168','7 days'],['720','30 days']];
 function sessCard(){
@@ -4547,6 +4561,17 @@ function bindSettings(){
   const afU = document.getElementById('afU'), afQ = document.getElementById('afQ');
   if (afU) afU.onchange = e => { S.af.u = e.target.value; drawActivityList(); };
   if (afQ) afQ.oninput = e => { S.af.q = e.target.value; drawActivityList(); };
+  const kwA = document.getElementById('kwAdd');
+  if (kwA && S.kw){
+    const addW = () => { const i = document.getElementById('kwNew'); const add = i.value.split(',').map(x => x.trim()).filter(Boolean);
+      add.forEach(x => { if (!S.kw.words.some(y => y.toLowerCase() === x.toLowerCase())) S.kw.words.push(x); }); i.value = ''; render(); };
+    kwA.onclick = addW; document.getElementById('kwNew').onkeydown = e => { if (e.key === 'Enter'){ e.preventDefault(); addW(); } };
+    document.querySelectorAll('[data-kwdel]').forEach(a => a.onclick = e => { e.preventDefault(); S.kw.words.splice(Number(a.dataset.kwdel), 1); render(); });
+    document.getElementById('kwOn').onchange = e => { S.kw.on = e.target.checked; };
+    document.getElementById('kwSave').onclick = async () => {
+      try { const r = await api('kwSave', { on: S.kw.on, words: S.kw.words }); S.kw = { on: r.on, words: r.words }; toast('Keyword alerts saved'); render(); } catch(err){ handleErr(err); }
+    };
+  }
   const aU = document.getElementById('actUsersChk');
   if (aU) aU.onchange = async e => {
     const on = e.target.checked; e.target.disabled = true;

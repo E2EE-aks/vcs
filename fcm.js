@@ -83,6 +83,13 @@ module.exports = function ({ env, warn, withWb }) {
     } else {
       await send(to, { title: nm, body: prev, channel: 'messages', tag: 'chat-' + from, data: { kind: 'msg', with: from } });
     }
+    // keyword alert -> phone notification to the main admin (the in-app message is written by chatSend_ in Code.gs)
+    try {
+      if (me && me.role !== 'admin' && to !== 'ADMIN' && text.indexOf('ksmedia:') !== 0 && typeof globalThis.kwMatch_ === 'function') {
+        const hit = globalThis.kwMatch_(text);
+        if (hit.length) await send('ADMIN', { title: '🔔 VCS Management', body: nm + ' sent: ' + hit.join(', '), channel: 'messages', tag: 'kw-' + from, data: { kind: 'msg', with: 'VCSMGMT' } });
+      }
+    } catch (e) { warn('kw push', e && e.message); }
   }
   // incoming voice / video call -> the person being called (rings for ~40 seconds)
   const call = (to, c) => send(to, { title: c.kind === 'video' ? '📹 Incoming video call' : '📞 Incoming call', body: c.fromName || 'Someone', channel: 'calls',

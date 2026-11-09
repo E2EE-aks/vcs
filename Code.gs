@@ -173,7 +173,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, setMyBirthday: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, calDisconnect: 1, requestDelete: 1, decideDelete: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, kwSave: 1, calDisconnect: 1, requestDelete: 1, decideDelete: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -371,6 +371,8 @@ function route_(req) {
       case 'saveGroup':         out = saveGroup_(req); break;
       case 'deleteGroup':       out = deleteGroup_(req); break;
       case 'setActivityAccess': out = setActivityAccess_(req); break;
+      case 'kwGet':             return kwGet_();
+      case 'kwSave':            out = kwSave_(req); break;
       case 'chatDelete':        out = chatDelete_(req); break;
       case 'chatEdit':          out = chatEdit_(req); break;
       case 'chatReact':         out = chatReact_(req); break;
@@ -899,7 +901,7 @@ var ACTIVITY_LABEL_ = {
   saveRackRows: 'Customised rack rows', saveRackCats: 'Changed rack categories', saveRackFields: 'Changed rack fields', saveRackData: 'Saved rack details', saveRackPresets: 'Changed INS packing list',
   setTimetable: 'Edited Time Table', addTtCat: 'Added a Time Table category', updateTtCat: 'Renamed a Time Table category', deleteTtCat: 'Deleted a Time Table category',
   saveUser: 'Added/edited a user', deleteUser: 'Deleted a user', kickUser: 'Signed a user out everywhere',
-  saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log',
+  saveGroup: 'Added/edited a group', deleteGroup: 'Deleted a group', setActivityAccess: 'Changed who can see the Activity log', kwSave: 'Changed chat keyword alerts',
   deployUpload: 'Published files to GitHub', deployRestore: 'Restored a file on GitHub',
   calConnect: 'Connected Google Calendar', calDisconnect: 'Disconnected Google Calendar'
 };
@@ -940,6 +942,35 @@ function setActivityAccess_(req) {
   var on = req.on === true || req.on === 'true';
   PropertiesService.getScriptProperties().setProperty('ACT_USERS', on ? '1' : '0');
   return { ok: true, on: on };
+}
+// ---------- KEYWORD ALERTS: when a user sends one of these words in chat, VCS Management tells the main admin ----------
+function kwCfg_() {
+  try {
+    var j = JSON.parse(PropertiesService.getScriptProperties().getProperty('KW_ALERTS') || '{}') || {};
+    return { on: j.on !== false, words: Array.isArray(j.words) ? j.words.map(String) : [] };
+  } catch (e) { return { on: true, words: [] }; }
+}
+function kwGet_() {
+  if (!CTX.primary) fail_('Only the main admin can change this.', 'PERM');
+  var c = kwCfg_(); return { ok: true, on: c.on, words: c.words };
+}
+function kwSave_(req) {
+  if (!CTX.primary) fail_('Only the main admin can change this.', 'PERM');
+  var seen = {}, words = [];
+  (Array.isArray(req.words) ? req.words : String(req.words || '').split(/[,\n]/)).forEach(function (w) {
+    w = String(w).replace(/\s+/g, ' ').trim().slice(0, 40);
+    var k = w.toLowerCase();
+    if (w && !seen[k] && words.length < 100) { seen[k] = 1; words.push(w); }
+  });
+  var on = req.on === true || req.on === 'true';
+  PropertiesService.getScriptProperties().setProperty('KW_ALERTS', JSON.stringify({ on: on, words: words }));
+  return { ok: true, on: on, words: words };
+}
+// Which alert words appear in this text (case-insensitive, also inside longer words). Used by chatSend_ and the push sender.
+function kwMatch_(text) {
+  var c = kwCfg_(); if (!c.on || !c.words.length) return [];
+  var t = String(text || '').toLowerCase();
+  return c.words.filter(function (w) { return t.indexOf(w.toLowerCase()) >= 0; });
 }
 function readActivity_(limit, uid) {
   var sh = getSheet_('ACT'), last = sh.getLastRow(), out = [];
@@ -3753,6 +3784,15 @@ function chatSend_(req) {
   if (rep) { var rc = sh.getRange(row, 7); rc.setNumberFormat('@'); rc.setValue(JSON.stringify(rep)); }
   if (sh.getLastRow() > 20000) sh.deleteRows(2, 2000);              // keep the sheet from growing forever
   chatArchiveMaybe_();                                               // 24-hour rule: older chats move to the Daily Archive
+  try {                                                              // keyword alert -> a message from VCS Management in the main admin's chat
+    if (CTX.role !== 'admin' && peer.id !== 'ADMIN' && text.indexOf('ksmedia:') !== 0) {
+      var hit = kwMatch_(text);
+      if (hit.length) {
+        var who = CTX.name || CTX.username || CTX.uid, isG1 = isChatGroupId_(req.to);
+        sysChatSend_('ADMIN', '🔔 Keyword alert\n\nUser: ' + who + (CTX.username ? ' (' + CTX.username + ')' : '') + '\nWord: ' + hit.join(', ') + '\n' + (isG1 ? 'Group: ' : 'Sent to: ') + (peer.name || peer.username || peer.id) + '\n\n“' + text.replace(/\s+/g, ' ').slice(0, 200) + '”');
+      }
+    }
+  } catch (e) {}
   return { ok: true, message: chatMsgOut_({ id: id, t: t, from: CTX.uid, to: peer.id, text: text, reply: rep, edited: 0 }) };
 }
 
