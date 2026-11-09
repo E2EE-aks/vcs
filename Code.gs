@@ -3722,7 +3722,7 @@ function chatMediaTicket_(req) {
     for (var i = rows.length - 1; i >= 0; i--) {
       var r = rows[i], o = chatMediaParse_(r.text);
       if (!o || o.i !== id) continue;
-      var ok = r.from === CTX.uid || r.to === CTX.uid;
+      var ok = CTX.primary || r.from === CTX.uid || r.to === CTX.uid;      // the main admin may also open photos / videos of other users' chats (Live chats view)
       if (!ok && isChatGroupId_(r.to)) { if (mine === null) mine = myChatGroups_().map(function (g) { return g.id; }); ok = mine.indexOf(r.to) >= 0; }
       if (ok) out[id] = { u: CTX.uid, e: exp, k: mediaSign_(id, CTX.uid, exp) };
       return;
@@ -4001,8 +4001,9 @@ function chatLiveAll_() {
     if (r.from === SYS_ID || r.to === SYS_ID || r.from === 'ADMIN' || r.to === 'ADMIN') return;
     var isG = r.to in gn, key = isG ? r.to : [r.from, r.to].sort().join('|');
     var c = convs[key] || (convs[key] = { key: key, group: isG, name: isG ? ('👥 ' + gn[r.to]) : ((nm[r.from] || r.from) + ' ↔ ' + (nm[r.to] || r.to)), count: 0, last: 0, items: [] });
-    var text = r.text; if (chatMediaParse_(text)) text = chatPreview_(text);
-    c.count++; c.last = r.t; c.items.push({ t: r.t, f: nm[r.from] || r.from, x: text, e: r.edited ? 1 : 0 });
+    var text = r.text, md = chatMediaParse_(text), it = { t: r.t, f: nm[r.from] || r.from, x: text, e: r.edited ? 1 : 0 };
+    if (md) { it.x = (md.c ? String(md.c) : ''); it.m = { i: md.i, k: md.k, n: String(md.n || ''), d: md.d || 0 }; }
+    c.count++; c.last = r.t; c.items.push(it);
     if (c.items.length > 300) c.items.shift();
   });
   var list = Object.keys(convs).map(function (k) { return convs[k]; }).sort(function (a, b) { return b.last - a.last; });

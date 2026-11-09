@@ -6765,7 +6765,7 @@ function trashView(i){
 /* ---------- Daily Chats: chats older than 24 hours, saved day by day, downloadable as PDF (main admin) ---------- */
 S.dchat = { days:null, total:0, busy:false, err:'', open:null, items:null, loadingDay:false };
 function dchatCard(){
-  return `<div class="card" id="dcCard"><h3>📄 Daily Chats <span><button class="btn ghost sm" type="button" onclick="dliveLoad();dchatLoad()">↻ Refresh</button></span></h3>
+  return `<div class="card" id="dcCard"><h3>📄 Daily Chats <span><button class="btn ghost sm" type="button" onclick="dliveLoad(true);dchatLoad()">↻ Refresh</button></span></h3>
     <p class="muted" style="margin-bottom:12px">Every chat older than 24 hours is saved here automatically, one entry per day, and then removed from the Chat sheet so the sheet stays light. Open a day to read it, or download it as a PDF. Only you can see this.</p>
     <div class="sec-title" style="margin:6px 0">💬 Live chats between users (last 24 hours)</div>
     <p class="muted" style="margin-bottom:8px">All current one-to-one and group chats of your users. Chats with you are in your normal Chat.</p>
@@ -6773,30 +6773,61 @@ function dchatCard(){
     <div class="sec-title" style="margin:6px 0">📄 Older days</div>
     <div id="dcList"><div class="empty-state">Loading…</div></div></div>`;
 }
-S.dlive = { convs:null, open:null, err:'' };
-async function dliveLoad(){
-  const L = S.dlive;
-  try{ const r = await api('chatLiveAll'); L.convs = r.convs || []; L.err = ''; }
-  catch(e){ L.err = (e && e.message) || 'Could not load chats'; }
+S.dlive = { convs:null, open:null, err:'', sig:'', mu:{}, busy:false, timer:null };
+async function dliveLoad(force){
+  const L = S.dlive; if (L.busy) return; L.busy = true;
+  try{
+    const r = await api('chatLiveAll'), convs = r.convs || [], sig = JSON.stringify(convs.map(c => [c.key, c.count, c.last]));
+    L.err = '';
+    if (force || sig !== L.sig || !L.convs){ L.sig = sig; L.convs = convs; dliveDraw(); }
+  }catch(e){ L.err = (e && e.message) || 'Could not load chats'; if (!L.convs) dliveDraw(); if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
+  finally{ L.busy = false; }
+  dliveMedia();
+}
+function dliveStart(){            // refresh every 4 seconds while this screen is open
+  const L = S.dlive; clearInterval(L.timer);
+  L.timer = setInterval(() => {
+    if (!document.querySelector('#dlList')){ clearInterval(L.timer); L.timer = null; return; }
+    if (!document.hidden) dliveLoad();
+  }, 4000);
+}
+async function dliveMedia(){      // signed links for the photos / videos / voice notes of the open chat
+  const L = S.dlive, c = (L.convs || []).find(x => x.key === L.open); if (!c) return;
+  const ids = []; c.items.slice(-60).forEach(m => { if (m.m && m.m.i && L.mu[m.m.i] === undefined) ids.push(m.m.i); });
+  if (!ids.length) return;
+  ids.forEach(i => L.mu[i] = null);
+  try{
+    const r = await chatApi('chatMediaTicket', { ids });
+    ids.forEach(i => { const t = r.tickets && r.tickets[i]; L.mu[i] = t ? API_URL + '/chat/media?' + new URLSearchParams({ id:i, u:t.u, e:t.e, k:t.k }).toString() : ''; });
+  }catch(e){ ids.forEach(i => delete L.mu[i]); return; }
   dliveDraw();
+}
+function dliveMediaHtml(m){
+  const o = m.m, u = S.dlive.mu[o.i], ic = o.k === 'vid' ? '🎥' : o.k === 'aud' ? '🎤' : '📷';
+  if (!u) return `<div class="muted">${ic} ${u === '' ? 'Could not load' : 'Loading…'}</div>`;
+  if (o.k === 'vid') return `<video src="${esc(u)}" controls preload="metadata" playsinline style="max-width:100%;max-height:300px;border-radius:10px"></video>`;
+  if (o.k === 'aud') return `<audio src="${esc(u)}" controls preload="metadata" style="max-width:100%"></audio>`;
+  return `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="" loading="lazy" style="max-width:100%;max-height:300px;border-radius:10px"></a>`;
 }
 function dliveDraw(){
   const el = document.querySelector('#dlList'); if (!el) return;
   const L = S.dlive;
-  if (L.err){ el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">${esc(L.err)}</b></div>`; return; }
+  if (L.err && !L.convs){ el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">${esc(L.err)}</b></div>`; return; }
   if (!L.convs){ el.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
   if (!L.convs.length){ el.innerHTML = '<div class="empty-state">No chats between users right now.</div>'; return; }
+  const keep = el.querySelector('.dc-msgs'), top = keep ? keep.scrollTop : 0, atEnd = keep ? keep.scrollHeight - keep.scrollTop - keep.clientHeight < 40 : true;
   el.innerHTML = L.convs.map(c => {
     const open = L.open === c.key;
-    const body = open ? `<div class="dc-msgs">${c.items.map(m => `<div class="dc-m"><div class="dc-h"><b>${esc(m.f)}</b> <span>${esc(dcTime(m.t))}</span>${m.e ? ' <span>(edited)</span>' : ''}</div><div class="tr-tx">${esc(m.x)}</div></div>`).join('')}</div>` : '';
+    const body = open ? `<div class="dc-msgs" style="max-height:60vh;overflow-y:auto">${c.items.map(m => `<div class="dc-m"><div class="dc-h"><b>${esc(m.f)}</b> <span>${esc(dcTime(m.t))}</span>${m.e ? ' <span>(edited)</span>' : ''}</div>${m.m ? dliveMediaHtml(m) : ''}${m.x ? `<div class="tr-tx">${esc(m.x)}</div>` : ''}</div>`).join('')}</div>` : '';
     return `<div class="tr-item"><div class="tr-top"><b>${esc(c.name)}</b><span style="color:var(--muted)">${c.count} message${c.count === 1 ? '' : 's'} · ${esc(dcTime(c.last))}</span></div>
       <div style="margin-top:8px"><button class="btn ghost sm" type="button" data-dlk="${esc(c.key)}">${open ? '▲ Close' : '👁 Read'}</button></div>${body}</div>`;
   }).join('');
-  el.querySelectorAll('[data-dlk]').forEach(b => b.onclick = () => { L.open = L.open === b.dataset.dlk ? null : b.dataset.dlk; dliveDraw(); });
+  el.querySelectorAll('[data-dlk]').forEach(b => b.onclick = () => { L.open = L.open === b.dataset.dlk ? null : b.dataset.dlk; dliveDraw(); dliveMedia(); });
+  const nb = el.querySelector('.dc-msgs'); if (nb) nb.scrollTop = atEnd ? nb.scrollHeight : top;
 }
 function bindDchat(){
   if (!(S.me && S.me.primary) || S.setSec !== 'dchat') return;
-  dliveLoad(); dchatLoad();
+  dliveLoad(true); dliveStart(); dchatLoad();
 }
 async function dchatLoad(){
   const D = S.dchat; if (D.busy) return; D.busy = true;
