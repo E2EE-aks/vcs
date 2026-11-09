@@ -1119,8 +1119,12 @@ function makeApp(store, env) {
       headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'multipart/related; boundary=' + bnd }, body });
     const j = await r.json().catch(() => ({}));
     if (!j.id) { if (r.status === 401) drvTok = null; throw new Error('Google Drive did not accept the file: ' + ((j.error && j.error.message) || r.status)); }
-    const text = 'ksmedia:' + JSON.stringify({ i: j.id, k: vid ? 'vid' : aud ? 'aud' : 'img', n: nm, s: buf.length, d: aud ? Math.max(0, Math.min(3600, Math.round(Number(q.d) || 0))) : undefined, c: String(q.c || '').replace(/\s+/g, ' ').trim().slice(0, 300) });
+    const text = 'ksmedia:' + JSON.stringify({ i: j.id, k: vid ? 'vid' : aud ? 'aud' : 'img', n: nm, s: buf.length, d: aud ? Math.max(0, Math.min(3600, Math.round(Number(q.d) || 0))) : undefined, c: String(q.c || '').replace(/\s+/g, ' ').trim().slice(0, 300), o: (q.o === '1' && !aud && !globalThis.isChatGroupId_(to)) ? 1 : undefined });
     return withWb(() => { globalThis.MEDIA_OK_ = true; try { return globalThis.route_({ action: 'chatSend', token, to, cid, text }); } finally { globalThis.MEDIA_OK_ = false; } });
+  }
+  async function drvDelete(id) {                                       // a snap that was opened is removed from Drive
+    const tok = await drvAccess();
+    await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id), { method: 'DELETE', headers: { Authorization: 'Bearer ' + tok } });
   }
   async function mediaOpen(q, range) {
     const id = String(q.id || ''), uid = String(q.u || ''), exp = String(q.e || ''), k = String(q.k || '');
@@ -1232,6 +1236,7 @@ function makeApp(store, env) {
   const handle = body => {                           // a new chat message also goes out as a phone notification
     const p = handle0(body);
     let r0 = null; try { r0 = JSON.parse(body); } catch (e) {}
+    if (r0 && r0.action === 'chatSnapOpen') p.then(res => { if (res && res.ok && res.fileId) setTimeout(() => drvDelete(res.fileId).catch(e => warn('snap delete', e && e.message)), 200000); }, () => {});
     if (r0 && r0.action === 'chatSend') p.then(res => { if (res && res.ok) PUSH.chat(r0, res).catch(e => warn('push', e && e.message)); }, () => {});
     return p;
   };

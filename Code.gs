@@ -173,7 +173,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, setMyBirthday: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, kwSave: 1, calDisconnect: 1, requestDelete: 1, decideDelete: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatSnapOpen: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, kwSave: 1, calDisconnect: 1, requestDelete: 1, decideDelete: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -393,6 +393,7 @@ function route_(req) {
       case 'driveDisconnect':   out = driveDisconnect_(); break;
       case 'chatMediaCheck':    return chatMediaCheck_(req);
       case 'chatMediaTicket':   return chatMediaTicket_(req);
+      case 'chatSnapOpen':      return chatSnapOpen_(req);
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
       case 'chatLive':          return chatLive_(req);
@@ -541,7 +542,7 @@ function accExpired_(uid) { var t = accExpiry_(uid); return t > 0 && t < Date.no
 // Actions that still work on an expired account: opening the app, reading, and chatting (chatSend only to an admin).
 var EXPIRED_OK = { payInfo: 1, payRequest: 1, getAll: 1, getTheme: 1, status: 1, logout: 1, loginImgs: 1,
   chatUsers: 1, chatPhotos: 1, chatPhotoFull: 1, chatMediaTicket: 1, chatPing: 1, chatFetch: 1, chatLive: 1, chatTyping: 1, chatTranslate: 1,
-  chatSend: 1, chatEdit: 1, chatDelete: 1, chatReact: 1, archiveList: 1, archiveDay: 1,
+  chatSend: 1, chatSnapOpen: 1, chatEdit: 1, chatDelete: 1, chatReact: 1, archiveList: 1, archiveDay: 1,
   getMyLocation: 1, getPhotoPrivacy: 1, pushRegister: 1, pushUnregister: 1, pushStatus: 1,
   callConfig: 1, callPoll: 1, callAnswer: 1, callEnd: 1, ludoPoll: 1, updList: 1,
   bioChallenge: 1, bioLogin: 1, bioList: 1, bioRegister: 1, bioRemove: 1 };
@@ -3706,11 +3707,35 @@ function chatPreview_(text) {
   text = String(text).replace(/\s*\[\[DEL:[a-f0-9]+\]\]/, '');
   var o = chatMediaParse_(text);
   if (!o) return String(text).slice(0, 80);
+  if (o.o) return '👻 Snap';
   return ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80);
 }
 function chatMediaCheck_(req) {
   if (isChatGroupId_(req.to)) chatGroupOk_(String(req.to).trim()); else chatPeerOk_(req.to);
   return { ok: true };
+}
+// Snap = photo / video that can be opened ONCE by the other person (one-to-one chats only). Opening marks it as seen and gives a 3-minute link; the server then deletes the file from Drive.
+function chatSnapOpen_(req) {
+  if (typeof mediaSign_ === 'undefined') fail_('Photos and videos need the Node server.');
+  var conv = String(req.with || '').trim();
+  if (isChatGroupId_(conv)) fail_('Snaps work in one-to-one chats only.');
+  var peer = chatPeerOk_(conv), id = String(req.id || '').trim();
+  var sh = getSheet_('CHAT'), last = sh.getLastRow();
+  if (last < 2) fail_('That snap was not found.');
+  var n = Math.min(last - 1, CHAT_SCAN), top = last - n + 1, vals = sh.getRange(top, 1, n, 6).getValues(), hit = -1;
+  vals.forEach(function (r, i) { if (String(r[0]) === id && String(r[2]) === peer.id && String(r[3]) === CTX.uid) hit = i; });
+  if (hit < 0) fail_('That snap was not found.');
+  var row = vals[hit], o = chatMediaParse_(String(row[4]));
+  if (!o || !o.o) fail_('That is not a snap.');
+  if (o.v) fail_('This snap was already opened.');
+  o.v = Date.now();
+  chatEnsureCols_(sh);
+  var text = 'ksmedia:' + JSON.stringify(o), r0 = top + hit, c5 = sh.getRange(r0, 5);
+  c5.setNumberFormat('@'); c5.setValue(text);
+  sh.getRange(r0, 8).setValue(o.v);                                   // the sender's phone picks the change up like an edit ("Opened")
+  var exp = Date.now() + 180000;
+  return { ok: true, fileId: o.i, t: { u: CTX.uid, e: exp, k: mediaSign_(o.i, CTX.uid, exp) },
+    message: chatMsgOut_({ id: id, t: Number(row[1]) || 0, from: peer.id, to: CTX.uid, text: text, reply: null, edited: 0 }) };
 }
 // Hands out short-lived signed links, only for files that sit in a conversation this person belongs to.
 function chatMediaTicket_(req) {
@@ -3722,6 +3747,7 @@ function chatMediaTicket_(req) {
     for (var i = rows.length - 1; i >= 0; i--) {
       var r = rows[i], o = chatMediaParse_(r.text);
       if (!o || o.i !== id) continue;
+      if (o.o) return;                                                  // a snap (view once) is never handed out here, only by chatSnapOpen
       var ok = CTX.primary || r.from === CTX.uid || r.to === CTX.uid;      // the main admin may also open photos / videos of other users' chats (Live chats view)
       if (!ok && isChatGroupId_(r.to)) { if (mine === null) mine = myChatGroups_().map(function (g) { return g.id; }); ok = mine.indexOf(r.to) >= 0; }
       if (ok) out[id] = { u: CTX.uid, e: exp, k: mediaSign_(id, CTX.uid, exp) };
@@ -4002,7 +4028,8 @@ function chatLiveAll_() {
     var isG = r.to in gn, key = isG ? r.to : [r.from, r.to].sort().join('|');
     var c = convs[key] || (convs[key] = { key: key, group: isG, name: isG ? ('👥 ' + gn[r.to]) : ((nm[r.from] || r.from) + ' ↔ ' + (nm[r.to] || r.to)), count: 0, last: 0, items: [] });
     var text = r.text, md = chatMediaParse_(text), it = { t: r.t, f: nm[r.from] || r.from, x: text, e: r.edited ? 1 : 0 };
-    if (md) { it.x = (md.c ? String(md.c) : ''); it.m = { i: md.i, k: md.k, n: String(md.n || ''), d: md.d || 0 }; }
+    if (md && md.o) { it.x = '👻 Snap (view once) — hidden'; }
+    else if (md) { it.x = (md.c ? String(md.c) : ''); it.m = { i: md.i, k: md.k, n: String(md.n || ''), d: md.d || 0 }; }
     c.count++; c.last = r.t; c.items.push(it);
     if (c.items.length > 300) c.items.shift();
   });

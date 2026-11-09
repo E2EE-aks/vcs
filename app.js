@@ -2191,7 +2191,7 @@ function render(){
   let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, pay:vPay, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), settings:vSettings, profile:vProfile})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
-  v.innerHTML = banner() + (S.view === 'dashboard' ? tmpCountdownHtml() + payCountdownHtml() : '') + html;
+  v.innerHTML = banner() + ((S.view === 'dashboard' || S.view === 'profile') ? tmpCountdownHtml() + payCountdownHtml() : '') + html;
   applyRO(v);
   startTmp(); startPay(); startLic();
   const setAfter = () => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); };
@@ -5881,7 +5881,7 @@ function chatRenderPane(){
     <div class="ch-sel" id="chSel" style="display:none"></div>
     <div class="ch-msgs" id="chMsgs"></div>
     <div class="ch-ctx" id="chCtx" style="display:none"></div>
-    <div class="ch-comp"><div class="ch-pill"><button class="ch-emo-btn" type="button" onclick="chatEmoji(event)" aria-label="Emoji"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button><textarea id="chInput" rows="1" placeholder="Message" maxlength="2000"></textarea><button class="ch-att" type="button" onclick="chatPlusMenu(event)" aria-label="Attach"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button></div><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)">
+    <div class="ch-comp"><div class="ch-pill"><button class="ch-emo-btn" type="button" onclick="chatEmoji(event)" aria-label="Emoji"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></button><textarea id="chInput" rows="1" placeholder="Message" maxlength="2000"></textarea><button class="ch-att" type="button" onclick="chatPlusMenu(event)" aria-label="Attach"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button></div><input type="file" id="chFile" accept="image/*,video/*" multiple hidden onchange="chatAttach(this)"><input type="file" id="chSnap" accept="image/*,video/*" hidden onchange="chatAttach(this,true)">
       <button class="ch-send" id="chSend" onclick="chatSendOrVoice()" aria-label="Send">➤</button></div>`;
   const ta = $('#chInput');
   ta.value = S.chat.drafts[u.id] || '';
@@ -5917,7 +5917,7 @@ function chatRenderMsgs(toBottom){
   arr.forEach(m => {
     const dl = chDayLabel(m.t);
     if (dl !== day){ day = dl; html += `<div class="ch-day">${esc(dl)}</div>`; }
-    let dual = null, tl = (m.edited ? 'edited · ' : '') + esc(dual ? dual.s : chClock(m.t)), tkh = '', meta = '';
+    let dual = null, tl = (m.edited && !(chMedia(m) || {}).o ? 'edited · ' : '') + esc(dual ? dual.s : chClock(m.t)), tkh = '', meta = '';
     if (m.mine){
       if (m.state === 'pending'){ meta = 'Sending…'; dual = null; }
       else if (m.state === 'failed'){ meta = 'Not sent · tap to retry'; dual = null; }
@@ -6490,7 +6490,7 @@ function chMedia(m){
   try{ const o = JSON.parse(t.slice(8)); return o && typeof o === 'object' ? o : null; }catch(e){ return null; }
 }
 const chTxt = m => { const o = chMedia(m); return o ? String(o.c || '') : m.text; };
-const chPrev = t => { t = String(t == null ? '' : t).replace(/\s*\[\[DEL:[a-f0-9]+\]\]/, ''); const o = chMedia({ text:t }); return o ? ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80) : String(t).slice(0, 80); };
+const chPrev = t => { t = String(t == null ? '' : t).replace(/\s*\[\[DEL:[a-f0-9]+\]\]/, ''); const o = chMedia({ text:t }); if (o && o.o) return '👻 Snap'; return o ? ((o.k === 'vid' ? '🎥 Video' : o.k === 'aud' ? '🎤 Voice message' : '📷 Photo') + (o.c ? ' · ' + o.c : '')).slice(0, 80) : String(t).slice(0, 80); };
 function chMediaUrl(m, dl){
   const o = chMedia(m), u = o && o.i && S.chat.mu[o.i]; if (!u) return '';
   return dl ? u + '&dl=1&n=' + encodeURIComponent(o.n || (o.k === 'vid' ? 'video' : 'photo')) : u;
@@ -6499,6 +6499,11 @@ function chMediaHtml(m){
   const o = chMedia(m); if (!o) return '';
   const vid = o.k === 'vid', aud = o.k === 'aud', ic = vid ? '🎥' : aud ? '🎤' : '📷';
   if (!o.i) return `<div class=\"mm ph\">${ic} ${esc(o.n || '')}<br><b>${m.state === 'failed' ? '⚠️ Not sent' : '⏫ ' + (m.up != null ? m.up + '%' : 'Uploading…')}</b></div>`;
+  if (o.o){                                                                        // snap: can be opened once
+    if (o.v) return `<div class=\"mm ph\">👻 Snap · Opened</div>`;
+    if (m.mine) return `<div class=\"mm ph\">👻 Snap ${vid ? 'video' : 'photo'} sent<br><small>Not opened yet</small></div>`;
+    return `<button type=\"button\" class=\"btn\" style=\"border-radius:14px\" onclick=\"chSnapView('${esc(m.id)}')\">👻 Tap to view ${vid ? 'video' : 'photo'}<br><small>Disappears after you open it</small></button>`;
+  }
   const u = S.chat.mu[o.i];
   if (u === undefined) return `<div class=\"mm ph\">${ic} Loading…</div>`;
   if (u === null) return `<div class=\"mm ph err\">⚠️ Could not load · tap to retry</div>`;
@@ -6510,7 +6515,7 @@ function chMediaErr(i){ if (S.chat.mu[i] === null) return; S.chat.mu[i] = null; 
 async function chatNeedMedia(){
   const c = S.chat, id = c.with; if (!id) return;
   const ids = [];
-  (c.msgs[id] || []).slice(-80).forEach(m => { const o = chMedia(m); if (o && o.i && c.mu[o.i] === undefined && !c.mBusy[o.i]) ids.push(o.i); });
+  (c.msgs[id] || []).slice(-80).forEach(m => { const o = chMedia(m); if (o && o.i && !o.o && c.mu[o.i] === undefined && !c.mBusy[o.i]) ids.push(o.i); });
   if (!ids.length) return;
   ids.forEach(i => c.mBusy[i] = 1);
   try{
@@ -6519,6 +6524,23 @@ async function chatNeedMedia(){
   }catch(e){ chatErr(e); ids.forEach(i => c.mu[i] = null); }
   ids.forEach(i => delete c.mBusy[i]);
   c.trv++; if (S.view === 'chat' && c.with === id) chatRenderMsgs();
+}
+async function chSnapView(id){
+  const c = S.chat, to = c.with, m = chatMsg(id); if (!m || !to || document.querySelector('.ch-view')) return;
+  let r; try{ r = await chatApi('chatSnapOpen', { with:to, id }); }catch(e){ chatErr(e); toast(e.message || 'Could not open this snap', true); return; }
+  if (r.message) chatMerge(to, [r.message]);
+  chatRenderMsgs();
+  const o = chMedia(m) || {}, vid = o.k === 'vid', url = API_URL + '/chat/media?' + new URLSearchParams({ id:r.fileId, u:r.t.u, e:r.t.e, k:r.t.k }).toString();
+  const w = document.createElement('div'); w.className = 'ch-view'; let tm = null, left = 10;
+  w.innerHTML = `<div class="cv-bar"><button class="ch-sbtn" data-x type="button">✕ Close</button><span class="ch-sbtn" id="snT">${vid ? '👻 Snap' : '👻 10s'}</span></div>` +
+    (vid ? `<video src="${esc(url)}" autoplay playsinline controls controlsList="nodownload noremoteplayback" disablePictureInPicture style="max-width:100%;max-height:100%"></video>` : `<img src="${esc(url)}" alt="" draggable="false" style="pointer-events:none">`);
+  const close = () => { clearInterval(tm); w.remove(); };
+  w.onclick = e => { if (e.target === w || e.target.closest('[data-x]')) close(); };
+  w.oncontextmenu = e => e.preventDefault();
+  document.body.appendChild(w);
+  if (vid){ const v = w.querySelector('video'); v.onended = close; v.onerror = () => { toast('Could not play this snap', true); close(); }; }
+  else { const im = w.querySelector('img'); im.onerror = () => { toast('Could not load this snap', true); close(); };
+    tm = setInterval(() => { left--; const t = document.getElementById('snT'); if (t) t.textContent = '👻 ' + left + 's'; if (left <= 0) close(); }, 1000); }
 }
 function chMediaView(id){
   const m = chatMsg(id), url = chMediaUrl(m); if (!url) return;
@@ -6540,12 +6562,12 @@ function chImgShrink(f){          // phone photos are 3-8 MB: shrink to ~1600 px
     img.src = url;
   });
 }
-async function chatAttach(inp){
+async function chatAttach(inp, once){
   const to = S.chat.with, files = [...(inp.files || [])].slice(0, 5); inp.value = '';
   if (!to || !files.length) return;
   const ta = $('#chInput'); let cap = ta ? ta.value.trim() : '';
   if (cap && ta){ ta.value = ''; S.chat.drafts[to] = ''; ta.style.height = 'auto'; }        // what you typed becomes the caption of the first file
-  for (const f of files){ await chatUpload(to, f, cap); cap = ''; }
+  for (const f of files){ await chatUpload(to, f, cap, null, once ? { o:1 } : null); cap = ''; }
 }
 /* ---------- ＋ menu in the chat box: photo / video and voice note ---------- */
 function chatPlusMenu(ev){
@@ -6554,10 +6576,11 @@ function chatPlusMenu(ev){
   const comp = $('.ch-comp'); if (!comp) return;
   const m = document.createElement('div'); m.id = 'chPlus'; m.className = 'ch-menu ch-plus'; m.setAttribute('role', 'menu');
   const item = (ic, label, fn, sub) => `<button type="button" role="menuitem" data-fn="${fn}"><span class="ic">${ic}</span><span>${label}${sub ? `<small>${sub}</small>` : ''}</span></button>`;
-  m.innerHTML = item('🖼️', 'Photo / Video', 'file', 'From your gallery') + item('🎤', 'Voice note', 'voice', 'Record and send');
+  const isG = (chatPeer(S.chat.with) || {}).isGroup;
+  m.innerHTML = item('🖼️', 'Photo / Video', 'file', 'From your gallery') + (isG ? '' : item('👻', 'Snap', 'snap', 'Opens once, then disappears')) + item('🎤', 'Voice note', 'voice', 'Record and send');
   comp.appendChild(m);
   const close = () => { m.remove(); document.removeEventListener('click', close, true); };
-  m.onclick = e => { const b = e.target.closest('[data-fn]'); if (!b) return; const f = b.dataset.fn; close(); if (f === 'file') document.getElementById('chFile').click(); else chatVoiceStart(); };
+  m.onclick = e => { const b = e.target.closest('[data-fn]'); if (!b) return; const f = b.dataset.fn; close(); if (f === 'file') document.getElementById('chFile').click(); else if (f === 'snap') document.getElementById('chSnap').click(); else chatVoiceStart(); };
   setTimeout(() => document.addEventListener('click', close, true), 0);
 }
 /* ---------- voice note recorder ---------- */
@@ -6606,14 +6629,14 @@ async function chatUpload(to, f, cap, again, extra){
   let m = again;
   if (!m){
     const cid = (window.crypto && crypto.randomUUID ? crypto.randomUUID().replace(/-/g, '') : String(Math.random()).slice(2) + Date.now()).slice(0, 14);
-    m = { id:cid, t:Date.now(), mine:true, text:'ksmedia:' + JSON.stringify({ k:vid ? 'vid' : aud ? 'aud' : 'img', n:f.name || (vid ? 'video' : aud ? 'voice-note' : 'photo'), c:cap, d:(extra && extra.d) || undefined }), state:'pending', up:0, _file:f };
+    m = { id:cid, t:Date.now(), mine:true, text:'ksmedia:' + JSON.stringify({ k:vid ? 'vid' : aud ? 'aud' : 'img', n:f.name || (vid ? 'video' : aud ? 'voice-note' : 'photo'), c:cap, d:(extra && extra.d) || undefined, o:(extra && extra.o) || undefined }), state:'pending', up:0, _file:f };
     (c.msgs[to] = c.msgs[to] || []).push(m); c.histLoaded[to] = true;
   } else { m.state = 'pending'; m.up = 0; }
   chatRenderMsgs(true);
   try{
     let blob = f, mime = f.type || (vid ? 'video/mp4' : aud ? 'audio/webm' : 'image/jpeg'), name = f.name || (vid ? 'video.mp4' : aud ? 'voice-note.webm' : 'photo.jpg');
     if (img && f.type !== 'image/gif'){ blob = await chImgShrink(f); mime = 'image/jpeg'; name = name.replace(/\.\w+$/, '') + '.jpg'; }
-    const q = new URLSearchParams({ to, cid:m.id, name, mime, c:(chMedia(m) || {}).c || '', d:(chMedia(m) || {}).d || '' });
+    const q = new URLSearchParams({ to, cid:m.id, name, mime, c:(chMedia(m) || {}).c || '', d:(chMedia(m) || {}).d || '', o:(chMedia(m) || {}).o ? '1' : '' });
     const r = await new Promise((resolve, reject) => {
       const x = new XMLHttpRequest(); x.open('POST', API_URL + '/chat/media/upload?' + q.toString());
       x.setRequestHeader('Authorization', 'Bearer ' + S.token); x.setRequestHeader('Content-Type', 'application/octet-stream');
