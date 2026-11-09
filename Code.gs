@@ -401,6 +401,7 @@ function route_(req) {
       case 'trashList':         return trashList_();
       case 'archiveList':       return archiveList_();
       case 'archiveDay':        return archiveDay_(req);
+      case 'chatLiveAll':       return chatLiveAll_();
       case 'trashMediaTicket':  return trashMediaTicket_(req);
       case 'chatTranslate':     return chatTranslate_(req);
       case 'chatSend':          return chatSend_(req);
@@ -3990,6 +3991,22 @@ function archiveList_() {
   }
   var list = Object.keys(days).sort().reverse().map(function (k) { return { day: k, count: days[k] }; });
   return { ok: true, moved: moved, total: total, days: list };
+}
+// Main admin: every chat of the last 24 h between OTHER users (one-to-one and groups). Chats with the admin are already in the admin's own Chat.
+function chatLiveAll_() {
+  if (!CTX.primary) fail_('Only the main admin can open this.', 'PERM');
+  var nm = chatNameMap_(), gn = {}, convs = {};
+  try { readChatGroups_().forEach(function (g) { gn[g.id] = g.name; }); } catch (e) {}
+  chatRows_().forEach(function (r) {
+    if (r.from === SYS_ID || r.to === SYS_ID || r.from === 'ADMIN' || r.to === 'ADMIN') return;
+    var isG = r.to in gn, key = isG ? r.to : [r.from, r.to].sort().join('|');
+    var c = convs[key] || (convs[key] = { key: key, group: isG, name: isG ? ('👥 ' + gn[r.to]) : ((nm[r.from] || r.from) + ' ↔ ' + (nm[r.to] || r.to)), count: 0, last: 0, items: [] });
+    var text = r.text; if (chatMediaParse_(text)) text = chatPreview_(text);
+    c.count++; c.last = r.t; c.items.push({ t: r.t, f: nm[r.from] || r.from, x: text, e: r.edited ? 1 : 0 });
+    if (c.items.length > 300) c.items.shift();
+  });
+  var list = Object.keys(convs).map(function (k) { return convs[k]; }).sort(function (a, b) { return b.last - a.last; });
+  return { ok: true, convs: list };
 }
 function archiveDay_(req) {
   if (!CTX.primary) fail_('Only the main admin can open Daily Chats.', 'PERM');

@@ -6765,13 +6765,38 @@ function trashView(i){
 /* ---------- Daily Chats: chats older than 24 hours, saved day by day, downloadable as PDF (main admin) ---------- */
 S.dchat = { days:null, total:0, busy:false, err:'', open:null, items:null, loadingDay:false };
 function dchatCard(){
-  return `<div class="card" id="dcCard"><h3>📄 Daily Chats <span><button class="btn ghost sm" type="button" onclick="dchatLoad()">↻ Refresh</button></span></h3>
+  return `<div class="card" id="dcCard"><h3>📄 Daily Chats <span><button class="btn ghost sm" type="button" onclick="dliveLoad();dchatLoad()">↻ Refresh</button></span></h3>
     <p class="muted" style="margin-bottom:12px">Every chat older than 24 hours is saved here automatically, one entry per day, and then removed from the Chat sheet so the sheet stays light. Open a day to read it, or download it as a PDF. Only you can see this.</p>
+    <div class="sec-title" style="margin:6px 0">💬 Live chats between users (last 24 hours)</div>
+    <p class="muted" style="margin-bottom:8px">All current one-to-one and group chats of your users. Chats with you are in your normal Chat.</p>
+    <div id="dlList" style="margin-bottom:18px"><div class="empty-state">Loading…</div></div>
+    <div class="sec-title" style="margin:6px 0">📄 Older days</div>
     <div id="dcList"><div class="empty-state">Loading…</div></div></div>`;
+}
+S.dlive = { convs:null, open:null, err:'' };
+async function dliveLoad(){
+  const L = S.dlive;
+  try{ const r = await api('chatLiveAll'); L.convs = r.convs || []; L.err = ''; }
+  catch(e){ L.err = (e && e.message) || 'Could not load chats'; }
+  dliveDraw();
+}
+function dliveDraw(){
+  const el = document.querySelector('#dlList'); if (!el) return;
+  const L = S.dlive;
+  if (L.err){ el.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">${esc(L.err)}</b></div>`; return; }
+  if (!L.convs){ el.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
+  if (!L.convs.length){ el.innerHTML = '<div class="empty-state">No chats between users right now.</div>'; return; }
+  el.innerHTML = L.convs.map(c => {
+    const open = L.open === c.key;
+    const body = open ? `<div class="dc-msgs">${c.items.map(m => `<div class="dc-m"><div class="dc-h"><b>${esc(m.f)}</b> <span>${esc(dcTime(m.t))}</span>${m.e ? ' <span>(edited)</span>' : ''}</div><div class="tr-tx">${esc(m.x)}</div></div>`).join('')}</div>` : '';
+    return `<div class="tr-item"><div class="tr-top"><b>${esc(c.name)}</b><span style="color:var(--muted)">${c.count} message${c.count === 1 ? '' : 's'} · ${esc(dcTime(c.last))}</span></div>
+      <div style="margin-top:8px"><button class="btn ghost sm" type="button" data-dlk="${esc(c.key)}">${open ? '▲ Close' : '👁 Read'}</button></div>${body}</div>`;
+  }).join('');
+  el.querySelectorAll('[data-dlk]').forEach(b => b.onclick = () => { L.open = L.open === b.dataset.dlk ? null : b.dataset.dlk; dliveDraw(); });
 }
 function bindDchat(){
   if (!(S.me && S.me.primary) || S.setSec !== 'dchat') return;
-  dchatLoad();
+  dliveLoad(); dchatLoad();
 }
 async function dchatLoad(){
   const D = S.dchat; if (D.busy) return; D.busy = true;
