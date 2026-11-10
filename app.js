@@ -215,13 +215,19 @@ $('#loginForm').addEventListener('submit', async ev => {
   }
   btn.disabled = true;
   try{
-    btn.textContent = 'Checking location…';
-    const client = await collectClient();
     btn.textContent = 'Signing in…';
-    const r = await api(S.setup ? 'setup' : 'login', { username:u, password:p, setupCode:$('#lc').value, client });
+    const act = S.setup ? 'setup' : 'login', body = { username:u, password:p, setupCode:$('#lc').value };
+    let r, fast = true;
+    try { r = await api(act, { ...body, client:await collectClient(true) }); }
+    catch(e){
+      if (!(e && e.code === 'LOCREQ')) throw e;
+      fast = false; btn.textContent = 'Checking location…';              // only users whose admin requires the location wait for it
+      r = await api(act, { ...body, client:await collectClient() });
+    }
     saveToken(r.token, true);
     await loadAll();
     enterApp();
+    if (fast) sendLoginLoc();
   }catch(e){
     showLoginErr(e.message);
     if (e.code === 'BADLOGIN') reportLoginPhoto(u, 'Wrong username/password');   // wrong user ID or password
@@ -304,11 +310,11 @@ async function bioLoginGo(silent){
     const a = await navigator.credentials.get({ publicKey:{ challenge:b64d(c.challenge), rpId:location.hostname, timeout:60000,
       allowCredentials:[{ type:'public-key', id:b64d(saved.credId) }], userVerification:'required' } });
     btn.textContent = 'Signing in…';
-    const client = await collectClient();
+    const client = await collectClient(true);
     const r = await api('bioLogin', { chId:c.chId, credId:b64e(a.rawId), clientDataJSON:b64e(a.response.clientDataJSON),
       authenticatorData:b64e(a.response.authenticatorData), signature:b64e(a.response.signature), client });
     saveToken(r.token, true);
-    await loadAll(); enterApp();
+    await loadAll(); enterApp(); sendLoginLoc();
   }catch(e){
     const quiet = e && (e.name === 'NotAllowedError' || e.name === 'AbortError');
     if (!(silent && quiet)) showLoginErr(bioErr(e));
@@ -702,8 +708,12 @@ async function getIp(){
       || await tryUrl('https://ipapi.co/json/', j => (j && j.ip) ? { ip:j.ip, city:place(j), lat:j.latitude, lng:j.longitude } : null)
       || {};
 }
-async function collectClient(){
+async function collectClient(fast){
   let c = { deviceId: deviceId() };
+  if (fast){                                         // sign in right away: device info only, the location is added after login (see sendLoginLoc)
+    try { const u = uaInfo(await highEntropy()); c = { ...c, ...u, screen:`${screen.width}x${screen.height}@${window.devicePixelRatio || 1}`, tz:(Intl.DateTimeFormat().resolvedOptions().timeZone || '') }; } catch {}
+    c.noLoc = 1; return c;
+  }
   try {
     const [gps, ip, hi] = await Promise.all([gpsStart(), ipStart(), highEntropy()]);
     _gpsP = null; _ipP = null;                                              // every sign-in takes a fresh fix
@@ -723,7 +733,10 @@ async function collectClient(){
   return c;
 }
 
-{ const lu = document.getElementById('lu'); if (lu) lu.addEventListener('focus', () => { gpsStart(); ipStart(); }, { once:true }); }   // start finding the GPS fix while the user types the password
+/* the location is taken AFTER the login, in the background, and added to that login's entry in the Logins tab */
+async function sendLoginLoc(){
+  try { const c = await collectClient(); if (c.lat !== undefined && c.lat !== '' && S.token) await api('locUpdate', { client:c }); } catch {}
+}
 /* ---------- users & access (admin) ---------- */
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
@@ -3735,7 +3748,7 @@ function licListHtml(){
   const all = S.d.lic || [], list = filteredLic(), total = all.length;
   const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
       <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><div class="lic-name"><b>${esc(x.name) || '<span class="dim">—</span>'}</b><span class="lic-name-tags">${licStatusTag(x.endDate)}${licGroupTag(x)}</span></div></td>
-      <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}${x.pic ? ` <img class="pthumb" alt="Policy photo" src="${x.pic}" onclick="picOpen('lic','${esc(x.id)}')">` : ''}</td>
+      <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}${x.pic ? ` <img class="pthumb" alt="Policy photo" src="${x.pic}" onclick="picOpen('lic','${esc(x.id)}')">` : ''}${(x.pp || []).map((t, i) => t ? ` <img class="pthumb" alt="Premium photo ${i + 1}" title="Premium photo ${i + 1}" src="${t}" onclick="licPpOpen('${esc(x.id)}',${i + 1})">` : '').join('')}</td>
       <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
       <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>
       <td data-l="Sum Assured" class="n">${licAmt(x.totalAmount)}</td>
@@ -3918,10 +3931,17 @@ function dateTypeable(root){
     di.addEventListener('change', sync);
   });
 }
+async function licPpOpen(id, slot){                  // full premium photo (fetched once, then kept)
+  const ck = 'lic:' + id + ':' + slot;
+  if (!PICF[ck]){ try { const r = await api('picGet', { kind:'lic', ids:[id], slot }); if (r.pics && r.pics[id]) PICF[ck] = r.pics[id]; } catch(e){ handleErr(e); return; } }
+  if (!PICF[ck]) return toast('Picture not found', true);
+  picShow(PICF[ck]);
+}
 function licForm(id){ if (!can('lic')) return deny();
   const x = id ? S.d.lic.find(e => e.id === id) : null;
   const freqOpts = Object.keys(LIC_FREQ).map(k => `<option value="${k}" ${(x ? x.freq : '') === k ? 'selected' : ''}>${LIC_FREQ[k]}</option>`).join('');
   let licPic = null;                                   // null = keep as it is, 'clear' = remove, {full, thumb} = new picture
+  let licPP = [null, null, null, null];               // the 4 premium photos, same meaning per slot
   const w = openModal(`<h3>${x ? 'Edit policy' : 'Add policy'}</h3><p class="sub">Customer, policy name, premium and sum assured, nominee, mobile number, premium mode, dates and the renewal (premium due) date.</p>
     <form id="licf" autocomplete="off">
       <div class="row2"><div class="field"><label>Customer Name</label><input class="input" name="name" maxlength="200" autocomplete="off" value="${esc(x ? x.name : '')}"></div>
@@ -3940,6 +3960,7 @@ function licForm(id){ if (!can('lic')) return deny();
       <div class="field"><label>👪 Group <span class="muted">(e.g. Family, Friends)</span></label><select class="select" name="group"><option value="">No group</option>${(S.d.licGroups || []).map(g => `<option value="${esc(g.id)}" ${((x ? x.group : (S.lic.g && S.lic.g !== 'none' ? S.lic.g : '')) || '') === g.id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select>${(S.d.licGroups || []).length ? '' : '<div class="muted" style="font-size:calc(12px*var(--fs));margin-top:4px">No groups yet. Make one with “⚙ Groups” on the LIC page.</div>'}</div>
       ${(S.d.licFields || []).length ? `<div class="field" style="margin-top:4px"><label style="font-weight:800">📎 More details</label></div><div class="row2">${S.d.licFields.map((n, i) => `<div class="field"><label class="lf-l"><span>${esc(n)}</span><span class="lf-b"><button type="button" class="lf-btn" data-fren="${i}" title="Edit this option's name" aria-label="Edit option name">✎</button><button type="button" class="lf-btn" data-frem="${i}" title="Remove this option" aria-label="Remove option">🗑</button></span></label><input class="input" data-ex="${esc(n)}" maxlength="300" autocomplete="off" value="${esc(x && x.extra ? (x.extra[n] || '') : '')}"></div>`).join('')}</div>` : ''}
       <div class="actions" style="margin:0 0 8px"><button type="button" class="btn ghost sm" data-fadd>＋ Add new option</button> <button type="button" class="btn ghost sm" data-fields>⚙ Manage / reorder</button></div>
+      <div class="field"><label>🧾 Premium photos <span class="muted">(up to 4 — receipts, premium slips)</span></label><div id="licPP" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px"></div></div>
       <div id="licPrev" class="lic-prev"></div>
       <p class="muted" style="font-size:calc(12.5px*var(--fs));margin-top:-2px">Enter the due date once. For Monthly / Quarterly / Half-Yearly / Yearly it then repeats by itself and shows how many days / months / years are left. If left empty, the starting date is used.</p>
       <div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${x ? 'Save' : 'Add'}</button></div></form>`);
@@ -3947,14 +3968,15 @@ function licForm(id){ if (!can('lic')) return deny();
   w.querySelector('[data-fields]').onclick = () => {          // keep what is already typed, open the fields editor, then come back
     const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {};
     fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; });
-    S.licDraft = { id:x ? x.id : '', vals, ex, pic:licPic }; w.remove(); licFieldsEdit(x ? x.id : '');
+    S.licDraft = { id:x ? x.id : '', vals, ex, pic:licPic, pp:licPP }; w.remove(); licFieldsEdit(x ? x.id : '');
   };
-  const keepDraft = () => { const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {}; fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; }); S.licDraft = { id:x ? x.id : '', vals, ex, pic:licPic }; };
+  const keepDraft = () => { const fm = w.querySelector('#licf'), vals = Object.fromEntries(new FormData(fm)), ex = {}; fm.querySelectorAll('[data-ex]').forEach(i => { ex[i.dataset.ex] = i.value; }); S.licDraft = { id:x ? x.id : '', vals, ex, pic:licPic, pp:licPP }; };
   w.querySelector('[data-fadd]').onclick = () => { keepDraft(); w.remove(); licFieldQuick('add', -1, x ? x.id : ''); };
   w.querySelectorAll('[data-fren]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('ren', +b.dataset.fren, x ? x.id : ''); });
   w.querySelectorAll('[data-frem]').forEach(b => b.onclick = () => { keepDraft(); w.remove(); licFieldQuick('rem', +b.dataset.frem, x ? x.id : ''); });
   const dr = S.licDraft && S.licDraft.id === (x ? x.id : '') ? S.licDraft : null; S.licDraft = null;
   if (dr && dr.pic !== undefined) licPic = dr.pic;
+  if (dr && dr.pp) licPP = dr.pp;
   const drawPic = () => {                              // the small photo button next to the policy number
     const cur = licPic === 'clear' ? '' : (licPic ? licPic.thumb : (x ? x.pic : '')), box = w.querySelector('#licPicBox');
     box.innerHTML = (cur ? `<img class="pthumb" alt="Policy photo" src="${cur}" data-pv>` : '') + `<label class="btn ghost sm" style="cursor:pointer;margin:0" title="Take a photo with the camera">📷<input type="file" accept="image/*" capture="environment" hidden data-pf></label><label class="btn ghost sm" style="cursor:pointer;margin:0" title="Choose a photo from the gallery">🖼<input type="file" accept="image/*" hidden data-pf></label>` + (cur ? `<button type="button" class="btn ghost sm" data-pd title="Remove photo">✕</button>` : '');
@@ -3963,6 +3985,19 @@ function licForm(id){ if (!can('lic')) return deny();
     const d = box.querySelector('[data-pd]'); if (d) d.onclick = () => { licPic = 'clear'; drawPic(); };
   };
   drawPic();
+  const drawPP = () => {                               // 4 premium photo slots
+    const box = w.querySelector('#licPP'); if (!box) return;
+    box.innerHTML = [0, 1, 2, 3].map(i => {
+      const d = licPP[i], cur = d === 'clear' ? '' : (d ? d.thumb : (x && x.pp ? x.pp[i] : ''));
+      return cur
+        ? `<div style="position:relative"><img src="${cur}" alt="Premium photo ${i + 1}" data-ppv="${i}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;border:1px solid var(--line);cursor:pointer"><button type="button" class="btn ghost sm" data-ppd="${i}" title="Remove" style="position:absolute;top:2px;right:2px;padding:0 6px">✕</button></div>`
+        : `<div style="aspect-ratio:1;border:2px dashed var(--line);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:calc(12px*var(--fs))" class="muted"><span>${i + 1}</span><span><label style="cursor:pointer;font-size:calc(18px*var(--fs))" title="Camera">📷<input type="file" accept="image/*" capture="environment" hidden data-ppf="${i}"></label> <label style="cursor:pointer;font-size:calc(18px*var(--fs))" title="Gallery">🖼<input type="file" accept="image/*" hidden data-ppf="${i}"></label></span></div>`;
+    }).join('');
+    box.querySelectorAll('[data-ppv]').forEach(im => im.onclick = () => { const i = +im.dataset.ppv; if (licPP[i] && licPP[i] !== 'clear') picShow(licPP[i].full); else licPpOpen(x.id, i + 1); });
+    box.querySelectorAll('[data-ppd]').forEach(b => b.onclick = () => { licPP[+b.dataset.ppd] = 'clear'; drawPP(); });
+    box.querySelectorAll('[data-ppf]').forEach(inp => inp.onchange = async ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (!f) return; try { toast('Preparing the picture…'); licPP[+inp.dataset.ppf] = await picMake(f); drawPP(); } catch(e){ toast(e.message || 'Could not use this picture', true); } });
+  };
+  drawPP();
   if (dr){
     const fm = w.querySelector('#licf');
     Object.keys(dr.vals).forEach(k => { if (fm.elements[k] && !fm.elements[k].length) fm.elements[k].value = dr.vals[k]; });
@@ -3978,8 +4013,9 @@ function licForm(id){ if (!can('lic')) return deny();
     ev.preventDefault(); const f = Object.fromEntries(new FormData(ev.target)); const btn = ev.submitter; btn.disabled = true;
     f.extra = {}; ev.target.querySelectorAll('[data-ex]').forEach(i => { if (i.value.trim()) f.extra[i.dataset.ex] = i.value.trim(); });
     if (licPic === 'clear') f.picClear = true; else if (licPic){ f.picFull = licPic.full; f.picThumb = licPic.thumb; }
+    f.pp = licPP.map((d, i) => d === 'clear' ? { n:i + 1, clear:true } : d ? { n:i + 1, full:d.full, thumb:d.thumb } : null).filter(Boolean);
     try{
-      if (x){ const r = await api('updateLic', { id:x.id, ...f }); Object.assign(x, r.lic); delete PICF['lic:' + x.id]; }
+      if (x){ const r = await api('updateLic', { id:x.id, ...f }); Object.assign(x, r.lic); delete PICF['lic:' + x.id]; for (let k = 1; k <= 4; k++) delete PICF['lic:' + x.id + ':' + k]; }
       else { const r = await api('addLic', f); S.d.lic.push(r.lic); }
       w.remove(); render(); toast('Saved');
     }catch(e){ btn.disabled = false; handleErr(e); }

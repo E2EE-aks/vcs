@@ -173,7 +173,7 @@ var WRITE_ACTIONS = {
   addRack: 1, updateRack: 1, deleteRack: 1, saveRackRows: 1, saveRackCats: 1, saveRackFields: 1, saveRackData: 1, saveRackPresets: 1,
   addEmployee: 1, updateEmployee: 1, deleteEmployee: 1, addStatus: 1, deleteStatus: 1,
   saveUser: 1, deleteUser: 1, kickUser: 1, setAvatar: 1, saveGroup: 1, deleteGroup: 1, setMyPhoto: 1, setPhotoPrivacy: 1, setMyLocation: 1, setMyBirthday: 1, driveDisconnect: 1,
-  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatSnapOpen: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, kwSave: 1, calDisconnect: 1, requestDelete: 1, decideDelete: 1
+  setTimetable: 1, addTtCat: 1, updateTtCat: 1, deleteTtCat: 1, chatSend: 1, chatSnapOpen: 1, locUpdate: 1, chatKeyUse: 1, payRequest: 1, paySave: 1, payDecide: 1, archiveList: 1, chatGroupSave: 1, chatGroupLeave: 1, chatGroupDelete: 1, chatDelete: 1, chatEdit: 1, chatReact: 1, setActivityAccess: 1, kwSave: 1, calDisconnect: 1, requestDelete: 1, decideDelete: 1
 };
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
@@ -393,6 +393,7 @@ function route_(req) {
       case 'driveDisconnect':   out = driveDisconnect_(); break;
       case 'chatMediaCheck':    return chatMediaCheck_(req);
       case 'chatMediaTicket':   return chatMediaTicket_(req);
+      case 'locUpdate':         return locUpdate_(req);
       case 'chatSnapOpen':      return chatSnapOpen_(req);
       case 'chatPing':          return chatPing_();
       case 'chatFetch':         return chatFetch_(req);
@@ -540,7 +541,7 @@ var ACC_HOURS = 24, ACC_MSG = 'Please choose any plan to continue this account';
 function accExpiry_(uid) { return Number(PropertiesService.getScriptProperties().getProperty('ACCX_' + uid) || 0); }
 function accExpired_(uid) { var t = accExpiry_(uid); return t > 0 && t < Date.now(); }
 // Actions that still work on an expired account: opening the app, reading, and chatting (chatSend only to an admin).
-var EXPIRED_OK = { payInfo: 1, payRequest: 1, getAll: 1, getTheme: 1, status: 1, logout: 1, loginImgs: 1,
+var EXPIRED_OK = { locUpdate: 1, payInfo: 1, payRequest: 1, getAll: 1, getTheme: 1, status: 1, logout: 1, loginImgs: 1,
   chatUsers: 1, chatPhotos: 1, chatPhotoFull: 1, chatMediaTicket: 1, chatPing: 1, chatFetch: 1, chatLive: 1, chatTyping: 1, chatTranslate: 1,
   chatSend: 1, chatSnapOpen: 1, chatEdit: 1, chatDelete: 1, chatReact: 1, archiveList: 1, archiveDay: 1,
   getMyLocation: 1, getPhotoPrivacy: 1, pushRegister: 1, pushUnregister: 1, pushStatus: 1,
@@ -703,6 +704,7 @@ function login_(req) {
     // Only the DEVICE's own location counts (GPS / network). A guess from the IP address is never accepted - it can be hundreds of km off.
     var devLoc = info.lat !== '' && (info.src === 'GPS' || info.src === 'Network');
     if (!devLoc) {
+      if (req.client && req.client.noLoc) fail_('Your admin requires your exact location to sign in.', 'LOCREQ');   // fast first try: the app now asks for the location and tries again (no log entry)
       logLogin_(acc, uname, 'Blocked', 'Location not shared', info);
       fail_('Your admin requires your exact location to sign in. Turn on Location / GPS, allow location access for this site (choose "Precise") and try again.', 'LOCREQ');
     }
@@ -730,6 +732,26 @@ function cleanInfo_(c) {
   return { lat: num(c.lat, -90, 90, 6), lng: num(c.lng, -180, 180, 6), acc: num(c.acc, 0, 10000000, 0), src: (['GPS', 'Network', 'IP (approx.)'].indexOf(String(c.src)) >= 0 ? String(c.src) : ''),
     device: str(c.device, 90), browser: str(c.browser, 60), os: str(c.os, 60), screen: str(c.screen, 30), tz: str(c.tz, 50),
     ip: str(c.ip, 45), city: str(c.city, 90), deviceId: str(c.deviceId, 40) };
+}
+// The app signs in first and sends the device location a moment later: add it to this person's newest successful login row.
+function locUpdate_(req) {
+  var i = cleanInfo_(req.client);
+  if (i.lat === '' || i.lng === '') return { ok: true };
+  var sh = getSheet_('LOG'), last = sh.getLastRow();
+  if (last < 2) return { ok: true };
+  var n = Math.min(last - 1, 60), top = last - n + 1, vals = sh.getRange(top, 1, n, 19).getValues();
+  for (var k = vals.length - 1; k >= 0; k--) {
+    var r = vals[k];
+    if (String(r[1]) !== String(CTX.uid) || String(r[4]) !== 'Success') continue;
+    if (i.deviceId && String(r[18]) !== i.deviceId) continue;
+    if (String(r[6]) !== '') return { ok: true };                    // this login already has a location
+    var link = 'https://www.google.com/maps?q=' + i.lat + ',' + i.lng, row = top + k;
+    sh.getRange(row, 7, 1, 5).setValues([[i.lat, i.lng, i.acc, i.src, link]]);
+    if (i.city) sh.getRange(row, 18).setValue(i.city);
+    if (i.ip && String(r[16]) === '') sh.getRange(row, 17).setValue(i.ip);
+    return { ok: true };
+  }
+  return { ok: true };
 }
 function logLogin_(acc, uname, result, reason, i) {
   try {
@@ -2304,11 +2326,25 @@ function picHead_(sh, col) {
   if (String(h.getValue()) !== 'Picture') { h.setNumberFormat('@'); h.setValue('Picture'); h.setFontWeight('bold'); sh.getRange(1, col + 1, 1, PIC_CHUNKS).setValues([['Picture 2', 'Picture 3', 'Picture 4', 'Picture 5']]); }
 }
 function picThumbOf_(sh, row, col) { return String(sh.getRange(row, col).getValue() || ''); }
+// LIC "Premium photos": up to 4 extra pictures per policy, stored in the same row: slot n = columns 21+5*(n-1) .. (thumbnail + 4 cells), i.e. U.., Z.., AE.., AJ..
+var LIC_PP_N = 4, LIC_PP_COL = 21, LIC_PP_STEP = 5;
+function licPpCol_(n) { return LIC_PP_COL + LIC_PP_STEP * (n - 1); }
+function licPpIn_(req) {                                 // -> [{ n, pin }]
+  var out = [];
+  (Array.isArray(req.pp) ? req.pp : []).slice(0, LIC_PP_N).forEach(function (q) {
+    var n = Number(q && q.n); if (!(n >= 1 && n <= LIC_PP_N)) return;
+    var pin = picIn_({ picClear: q.clear, picFull: q.full, picThumb: q.thumb }); if (pin) out.push({ n: n, pin: pin });
+  });
+  return out;
+}
+function licPpWrite_(sh, row, list) { list.forEach(function (o) { picWrite_(sh, row, licPpCol_(o.n), o.pin); }); }
+function licPpThumbs_(sh, row) { picEnsure_(sh, licPpCol_(LIC_PP_N) + PIC_CHUNKS); var t = []; for (var n = 1; n <= LIC_PP_N; n++) t.push(picThumbOf_(sh, row, licPpCol_(n))); return t; }
 function picGet_(req) {                                 // the full pictures of up to 12 entries: { id: dataUrl }
   var kind = req.kind === 'lic' ? 'lic' : 'work', p = CTX.perms || {};
   if (!p[kind] || p[kind] === 'none') fail_('You do not have permission to do this.', 'PERM');
   var ids = (Array.isArray(req.ids) ? req.ids : [req.id]).map(String).slice(0, 12), out = {};
   var sh = kind === 'lic' ? licSheet_() : ownedSheet_('WORK', 8), col = kind === 'lic' ? 16 : 9;
+  var slot = Number(req.slot) || 0; if (kind === 'lic' && slot >= 1 && slot <= LIC_PP_N) col = licPpCol_(slot);
   picEnsure_(sh, col + PIC_CHUNKS);
   ids.forEach(function (id) {
     var row = kind === 'lic' ? findLicRow_(sh, id) : findWorkRow_(sh, id);
@@ -2686,9 +2722,11 @@ function readLic_() {
   var last = sh.getLastRow();
   if (last < 2) return [];
   var vals = sh.getRange(2, 1, last - 1, 16).getValues();
+  picEnsure_(sh, licPpCol_(LIC_PP_N) + PIC_CHUNKS);
+  var ppc = []; for (var q = 1; q <= LIC_PP_N; q++) ppc.push(sh.getRange(2, licPpCol_(q), last - 1, 1).getValues());      // only the thumbnails
   var gids = {}; readLicGroups_().forEach(function (g) { gids[g.id] = 1; });
   var out = [], dirty = false;
-  vals.forEach(function (r) {
+  vals.forEach(function (r, ri) {
     if (r[0] === '' && r[1] === '' && r[2] === '') return;
     var id = String(r[6] || '').trim();
     if (!id) { id = Utilities.getUuid().slice(0, 8); r[6] = id; dirty = true; }
@@ -2698,7 +2736,8 @@ function readLic_() {
     out.push({ id: id, name: String(r[0]), policyNo: String(r[1]), amount: Number(r[2]) || 0,
       startDate: LIC_DATE_RE.test(r[3]) ? String(r[3]) : '', endDate: LIC_DATE_RE.test(r[4]) ? String(r[4]) : '',
       freq: LIC_FREQS[freq] ? freq : '', dueDate: LIC_DATE_RE.test(r[8]) ? String(r[8]) : '',
-      policyName: String(r[9] || ''), totalAmount: Number(r[10]) || 0, nominee: String(r[11] || ''), phone: String(r[12] || ''), extra: ex, group: gids[String(r[14] || '')] ? String(r[14]) : '', pic: String(r[15] || '') });
+      policyName: String(r[9] || ''), totalAmount: Number(r[10]) || 0, nominee: String(r[11] || ''), phone: String(r[12] || ''), extra: ex, group: gids[String(r[14] || '')] ? String(r[14]) : '', pic: String(r[15] || ''),
+      pp: ppc.map(function (c) { return String(c[ri][0] || ''); }) });
   });
   if (dirty) sh.getRange(2, 7, vals.length, 1).setValues(vals.map(function (r) { return [r[6]]; }));
   return out;
@@ -2743,6 +2782,7 @@ function addLic_(req) {
     p.policyName, p.totalAmount, p.nominee, p.phone, JSON.stringify(p.extra), p.group]]);
   var pin = picIn_(req); p.pic = '';
   if (pin && !pin.clear) { picWrite_(sh, row, 16, pin); p.pic = pin.thumb; }
+  licPpWrite_(sh, row, licPpIn_(req)); p.pp = licPpThumbs_(sh, row);
   p.id = id;
   return { ok: true, lic: p };
 }
@@ -2766,6 +2806,7 @@ function updateLic_(req) {
   var pin = picIn_(req);
   if (pin) { picWrite_(sh, row, 16, pin); p.pic = pin.clear ? '' : pin.thumb; }
   else p.pic = picThumbOf_(sh, row, 16);
+  licPpWrite_(sh, row, licPpIn_(req)); p.pp = licPpThumbs_(sh, row);
   p.id = String(req.id);
   return { ok: true, lic: p };
 }
