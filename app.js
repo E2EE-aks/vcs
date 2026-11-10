@@ -198,12 +198,15 @@ function showLogin(needsSetup, message, needsCode){
   document.querySelectorAll('.setup-code').forEach(e => e.classList.toggle('hidden', !(needsSetup && needsCode)));
   $('#lp').autocomplete = needsSetup ? 'new-password' : 'current-password';
   const er = $('#loginErr'); er.classList.toggle('hidden', !message); er.textContent = message || '';
-  $('#lp').value = ''; $('#lp2').value = '';
+  $('#lp').value = ''; $('#lp2').value = ''; $('#lp').type = 'password'; pwSync();
   bioShowBtn();
 }
+function pwSync(){                                  // the cartoon: hands over its eyes = password hidden, hands away = password visible
+  const p = $('#lp'), b = $('#togglePw'), shown = p.type !== 'password';
+  b.setAttribute('aria-pressed', shown ? 'true' : 'false'); b.setAttribute('aria-label', shown ? 'Hide password' : 'Show password');
+}
 $('#togglePw').onclick = () => {
-  const p = $('#lp'); const show = p.type === 'password';
-  p.type = show ? 'text' : 'password'; $('#togglePw').textContent = show ? 'Hide' : 'Show';
+  const p = $('#lp'); p.type = p.type === 'password' ? 'text' : 'password'; pwSync();
 };
 $('#loginForm').addEventListener('submit', async ev => {
   ev.preventDefault();

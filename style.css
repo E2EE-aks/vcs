@@ -1423,3 +1423,33 @@ html[data-mode="dark"] table.stk tbody tr:nth-child(even),html[data-mode="dark"]
 
 /* no auto-zoom when the keyboard opens: inputs must be at least 16px on phones */
 @media (max-width:860px){input,select,textarea,.ch-comp textarea,.input,.select{font-size:16px !important}}
+
+/* ---- login: E2EE badge + cartoon that covers its eyes while the password is hidden ---- */
+.lg-side{flex-direction:column}
+.lg-e2ee{align-self:center;margin:0 0 16px;padding:9px 18px;border-radius:999px;font-size:calc(13.5px*var(--fs));font-weight:600;color:#e0f2fe;letter-spacing:.2px;text-align:center;
+  background:linear-gradient(110deg,rgba(56,189,248,.16),rgba(139,92,246,.2),rgba(56,189,248,.16));background-size:220% 100%;border:1px solid rgba(125,211,252,.35);
+  box-shadow:0 6px 24px rgba(56,130,246,.25);animation:e2eeShine 5s linear infinite,popIn .6s var(--ease) both}
+.lg-e2ee b{color:#fff;letter-spacing:1px}.lg-e2ee .k{color:#7dd3fc;font-weight:800}
+.lg-e2ee .key{display:inline-block;transform-origin:50% 0;animation:keySwing 2.6s ease-in-out infinite}
+@keyframes e2eeShine{to{background-position:-220% 0}}
+@keyframes keySwing{0%,100%{transform:rotate(-14deg)}50%{transform:rotate(14deg)}}
+.pw .input{padding-right:62px !important}
+#login .pw button.pw-cartoon{width:46px;height:46px;right:8px;padding:0;border-radius:50%;background:none;line-height:0;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:transform .15s}
+#login .pw button.pw-cartoon:active{transform:translateY(-50%) scale(.92)}
+.pw-cartoon svg{width:100%;height:100%;display:block;overflow:visible}
+.pw-cartoon svg *{transform-box:fill-box;transform-origin:center}
+.pw-hand{transition:transform .45s cubic-bezier(.34,1.56,.64,1)}
+.pw-m2{opacity:0;transition:opacity .2s}.pw-m1{transition:opacity .2s}
+.pw-eyes{animation:pwBlink 4.2s infinite}
+@keyframes pwBlink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.1)}}
+/* password hidden (default): both hands cover the eyes. Password shown: hands move away and the eyes look around */
+.pw-cartoon[aria-pressed="true"] .pw-hl{transform:translate(-15px,19px) rotate(-30deg)}
+.pw-cartoon[aria-pressed="true"] .pw-hr{transform:translate(15px,19px) rotate(30deg)}
+.pw-cartoon[aria-pressed="true"] .pw-m1{opacity:0}.pw-cartoon[aria-pressed="true"] .pw-m2{opacity:1}
+.pw-cartoon[aria-pressed="true"] .pw-pupils{animation:pwLook 2.4s ease-in-out infinite}
+@keyframes pwLook{0%,100%{transform:translateX(-2px)}50%{transform:translateX(2px)}}
+.pw-cartoon[aria-pressed="false"]{animation:pwBob 3s ease-in-out infinite}
+@keyframes pwBob{0%,100%{transform:translateY(-50%)}50%{transform:translateY(calc(-50% - 2px))}}
+#login .btn.block#loginBtn{position:relative;overflow:hidden}
+#login .btn.block#loginBtn::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.28),transparent);transform:skewX(-20deg);animation:btnShine 4.5s ease-in-out infinite}
+@keyframes btnShine{0%,60%{left:-60%}100%{left:130%}}
