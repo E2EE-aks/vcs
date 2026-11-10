@@ -1,7 +1,0 @@
-GitHub se ye 6 files DELETE karo:
-ep-view.js
-nettools-view.js
-nettools-server.js
-browser-view.js
-KsBrowserPlugin.java
-KsBrowserActivity.java
