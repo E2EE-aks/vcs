@@ -175,3 +175,4 @@ body.btm-sheet .sbx{display:none}
 #btmSheet .sbf .input,#btmSheet .sbf .select{width:55%;flex:none}
 #btmSheet .sbf input[type=range]{width:50%}
 #btmSheet .btn.block{margin-top:6px;width:100%}
+#btmBar .bi .lic-ico,#btmBar .bemo .lic-ico{width:var(--bb-ic,26px);height:var(--bb-ic,26px);border-radius:24%}

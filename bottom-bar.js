@@ -25,7 +25,7 @@
   function info(b){
     var ic = b.querySelector('.ico'), txt = '';
     [].forEach.call(b.childNodes, function(n){ if (n.nodeType === 3) txt += n.nodeValue; });
-    return { id: b.dataset.v, ic: ic ? ic.textContent : '•', lb: txt.trim() || b.dataset.v };
+    return { id: b.dataset.v, ic: ic ? (ic.textContent || '📄') : '•', lb: txt.trim() || b.dataset.v };
   }
   function usable(b){ return b && !b.classList.contains('hidden') && !b.classList.contains('th-off') && !b.classList.contains('ks-del'); }
 
@@ -211,10 +211,13 @@
     try { me = S.me || {}; nm = (me.name || me.username || 'U').trim().charAt(0).toUpperCase() || 'U'; if (me.id && typeof avSrc === 'function') src = avSrc(me.id) || ''; } catch (e) {}
     return '<span class="bav"' + (src ? ' style="background-image:url(&quot;' + esc(src) + '&quot;)"' : '') + '>' + (src ? '' : esc(nm)) + '</span>';
   }
+  var LICIMG = '<img class="lic-ico" src="lic-icon.png" alt="LIC">';
+  function icH(i){ return i.id === 'lic' && !(cfg.icons.lic || '').trim() ? LICIMG : esc(i.ic); }
   function iconFor(id, emo){
     var o = (cfg.icons[id] || '').trim();
     if (o) return '<span class="bemo">' + esc(o) + '</span>';
     if (id === 'profile') return avatarIcon();
+    if (id === 'lic') return '<span class="bemo">' + LICIMG + '</span>';
     return ICON[id] || '<span class="bemo">' + esc(emo || '•') + '</span>';
   }
   var lastHtml = '';
@@ -265,7 +268,7 @@
     var n = 0;
     optIds().forEach(function(id){
       if (place(id) !== 'more') return; var i = optInfo(id); if (!i) return;
-      h += '<button type="button" style="--i:' + (n++) + '" data-go="' + esc(i.id) + '"><span>' + esc(i.ic) + '</span><small>' + esc(i.lb) + '</small></button>';
+      h += '<button type="button" style="--i:' + (n++) + '" data-go="' + esc(i.id) + '"><span>' + icH(i) + '</span><small>' + esc(i.lb) + '</small></button>';
     });
     if (!n) h += '<div class="mg-none" style="grid-column:1/-1">Nothing here. Tap ✎ to move options into More.</div>';
     sheet.innerHTML = h + '</div></div>';
@@ -276,9 +279,9 @@
     var seg = function(id, p){ return segOpts.map(function(o){ return '<button type="button" class="' + (p === o[0] ? 'on' : '') + '" data-mv="' + esc(id) + '|' + esc(o[0]) + '">' + esc(o[1]) + '</button>'; }).join(''); };
     var addRow = function(i){
       var p = place(i.id);
-      if (p === 'deleted'){ del += '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b><button type="button" class="mg-rs" data-res="' + esc(i.id) + '">↩ Restore</button></div>'; return; }
+      if (p === 'deleted'){ del += '<div class="mg-r"><span class="mg-i">' + icH(i) + '</span><b>' + esc(i.lb) + '</b><button type="button" class="mg-rs" data-res="' + esc(i.id) + '">↩ Restore</button></div>'; return; }
       if (p === 'bar') nBar++;
-      var r = '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b>' +
+      var r = '<div class="mg-r"><span class="mg-i">' + icH(i) + '</span><b>' + esc(i.lb) + '</b>' +
         (LOCK.indexOf(i.id) > -1 ? '<span class="mg-lock">always on bar</span>' : '<span class="mg-seg">' + seg(i.id, p) + '</span>') +
         (NODEL.indexOf(i.id) > -1 ? '<span class="mg-d0"></span>' : '<button type="button" class="mg-d" data-del="' + esc(i.id) + '" aria-label="Delete">🗑</button>') + '</div>';
       if (i.id.indexOf('set:') === 0) setRows += r; else if (i.id.indexOf('x:') === 0) toolRows += r; else rows += r;

@@ -279,3 +279,9 @@ html[data-mode="dark"] .pa{background:#1e293b;color:#e2e8f0;border-color:rgba(14
 .lvc-x{white-space:pre-wrap;word-break:break-word;font-size:14.5px;line-height:1.4}
 .lvc-t{display:block;text-align:right;font-size:10.5px;color:var(--muted);margin-top:2px}
 .lvc-pick{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;margin:10px 0}
+
+/* LIC tab icon (picture) + green "Policy active" tag */
+.lic-ico{width:1.35em;height:1.35em;object-fit:cover;border-radius:22%;display:block;margin:0 auto}
+.nav .ico .lic-ico{width:22px;height:22px}
+.tag.ok{background:#dcfce7;color:#166534}
+html[data-mode="dark"] .tag.ok{background:#14361f;color:#86efac}

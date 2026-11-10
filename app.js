@@ -1717,6 +1717,8 @@ function thVars(dark){
   });
   return V;
 }
+const LIC_IMG = '<img class="lic-ico" src="lic-icon.png" alt="LIC">';        // the LIC tab icon (picture instead of an emoji)
+const icoOf = b => { const i = b.querySelector('.ico'); return i && i.querySelector('.lic-ico') ? LIC_IMG : ((i || {}).textContent || '•'); };
 const TH_ORIG = new WeakMap();
 function thOrig(b){
   if (!TH_ORIG.has(b)){ const ic = b.querySelector('.ico'); TH_ORIG.set(b, { l:ic ? (ic.nextSibling && ic.nextSibling.nodeValue || '').trim() : '', i:ic ? ic.textContent : '' }); }
@@ -1732,7 +1734,7 @@ function thMenu(){
     const v = b.dataset.v, ic = b.querySelector('.ico'); if (!ic) return;
     const o = thOrig(b), lab = (T.menu.label[v] || '').trim() || o.l;
     if (ic.nextSibling && ic.nextSibling.nodeType === 3) ic.nextSibling.nodeValue = lab;
-    ic.textContent = T.menu.icon[v] || o.i;
+    if (v === 'lic' && !T.menu.icon[v]) ic.innerHTML = LIC_IMG; else ic.textContent = T.menu.icon[v] || o.i;
     b.classList.toggle('th-off', v !== 'settings' && T.menu.hide.includes(v));
     if (TITLES[v]) TITLES[v][0] = (T.menu.label[v] || '').trim() || TH_T0[v];
   });
@@ -2330,12 +2332,12 @@ function dashSearch(q){
   if (!q){ box.classList.add('hidden'); box.innerHTML = ''; return; }
   const words = q.split(/\s+/), hit = t => { t = String(t || '').toLowerCase(); return words.every(w => t.includes(w)); };
   const groups = [], add = (title, rows) => { if (rows.length) groups.push([title, rows.slice(0, 8)]); };
-  const row = (ic, a, b, act) => `<button type="button" class="dsrch-r" onclick="${act}"><span class="dsrch-i">${esc(ic)}</span><span class="dsrch-t"><b>${esc(a)}</b><small>${esc(b || '')}</small></span></button>`;
+  const row = (ic, a, b, act) => `<button type="button" class="dsrch-r" onclick="${act}"><span class="dsrch-i">${ic === LIC_IMG ? ic : esc(ic)}</span><span class="dsrch-t"><b>${esc(a)}</b><small>${esc(b || '')}</small></span></button>`;
   const pages = [];
   document.querySelectorAll('#nav button[data-v]').forEach(b => {
     if (b.classList.contains('hidden') || b.classList.contains('th-off') || b.classList.contains('ks-del')) return;
     const v = b.dataset.v, t = TITLES[v] || [v, ''];
-    if (hit(t[0] + ' ' + t[1] + ' ' + v)) pages.push(row((b.querySelector('.ico') || {}).textContent || '•', t[0], t[1], `go('${v}')`));
+    if (hit(t[0] + ' ' + t[1] + ' ' + v)) pages.push(row(icoOf(b), t[0], t[1], `go('${v}')`));
   });
   add('Pages', pages);
   const sets = Object.keys(SET_DEF).filter(k => hit(SET_DEF[k][1] + ' ' + SET_DEF[k][2])).map(k => row(SET_DEF[k][0], SET_DEF[k][1], 'Settings · ' + SET_DEF[k][2], `go('profile');setOpen('${k}')`));
@@ -3718,26 +3720,27 @@ function licDateFmt(iso){
 }
 /* live countdown to End Date (treated as 23:59:59 that day), ticking down to the second */
 function licCountdown(endIso){
-  if (!endIso) return { text:'—', cls:'' };
+  if (!endIso) return { text:'—', cls:'', status:'Deactivated' };          // no maturity (end) date -> policy deactivate
   const end = new Date(endIso + 'T23:59:59');
   const left = end.getTime() - Date.now();
-  if (isNaN(end.getTime())) return { text:'—', cls:'' };
-  if (left <= 0){
+  if (isNaN(end.getTime())) return { text:'—', cls:'', status:'Deactivated' };
+  if (left <= 0){                                                          // time left is over -> policy completed
     const ago = Math.floor(-left / 86400000);
-    return { text:'⏹ Expired' + (ago ? ' · ' + ago + 'd ago' : ''), cls:'bad', status:'Expired' };
+    return { text:'✅ Completed' + (ago ? ' · ' + ago + 'd ago' : ''), cls:'good', status:'Completed' };
   }
   const s = Math.floor(left / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
   const p2 = n => String(n).padStart(2, '0');
   const text = (d ? d + 'd ' : '') + p2(h) + 'h ' + p2(m) + 'm ' + p2(sec) + 's';
-  if (d <= 7) return { text, cls:'bad', status:'Expiring soon' };
-  if (d <= 30) return { text, cls:'warn', status:'Expiring soon' };
+  if (d <= 7) return { text, cls:'bad', status:'Active' };                 // maturity still to come -> policy active
+  if (d <= 30) return { text, cls:'warn', status:'Active' };
   return { text, cls:'good', status:'Active' };
 }
+const LIC_STATUS = { Completed:['Policy completed ✅', 'Policy completed', 'adm'], Active:['Policy active 🟢', 'Policy active', 'ok'], Deactivated:['Policy deactivate 🔴', 'Policy deactivate', 'off'] };
 function licStatusTag(endIso){
   const c = licCountdown(endIso);
   if (!c.status) return '';
-  const cls = c.status === 'Expired' ? 'off' : c.status === 'Expiring soon' ? 'main' : 'adm';
-  return `<span class="tag ${cls}">${c.status}</span>`;
+  const s = LIC_STATUS[c.status];
+  return `<span class="tag ${s[2]}">${s[0]}</span>`;
 }
 /* the extra fields you added yourself, as small "label: value" lines */
 function licMore(x){
@@ -3863,7 +3866,7 @@ async function licCopy(id){
     x.endDate && 'Ending Date: ' + x.endDate,
     x.dueDate && 'Premium Due Date: ' + x.dueDate + (x.freq ? ' (repeats ' + LIC_FREQ[x.freq] + ')' : ''),
     rn.due && 'Next Renewal: ' + rn.due + ' (' + rn.text + ')',
-    c.status && 'Status: ' + c.status + (c.status !== 'Expired' ? ' (' + c.text + ' left)' : '')
+    c.status && 'Status: ' + LIC_STATUS[c.status][1] + (c.status === 'Active' ? ' (' + c.text + ' left)' : '')
   ].filter(Boolean).join('\n');
   if (!txt) return toast('Nothing to copy', true);
   (await copyText(txt)) ? toast('Customer data copied') : toast('Could not copy — please copy it manually', true);
@@ -4528,7 +4531,7 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
     const head = `<div class="tg-top"><button type="button" class="tg-av" ${found.photo ? 'onclick="setOpen(\'photo\')"' : ''} aria-label="Profile photo"><span class="tg-pic" style="${img ? `background-image:url('${esc(img)}')` : ''}">${img ? '' : esc(nm.trim().charAt(0).toUpperCase())}</span><span class="tg-cam">${cam}</span></button>
       <div class="tg-name">${esc(nm)}</div><div class="tg-sub">${esc(role)}${me.username ? ' • @' + esc(me.username) : ''}</div></div>`;
     const navItem = v => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (!b || b.classList.contains('hidden') || b.classList.contains('th-off') || b.classList.contains('ks-del')) return ''; if (window.bbPlace && bbPlace(v) !== 'profile') return '';
-      const ic = (b.querySelector('.ico') || {}).textContent || '•', t = TITLES[v] || [v, ''];
+      const ic = icoOf(b), t = TITLES[v] || [v, ''];
       return `<button type="button" class="tg-item" data-q="${esc((t[0] + ' ' + t[1]).toLowerCase())}" onclick="go('${v}')"><span class="tg-ic" style="--c:${TGC[v] || '#3b82f6'}">${ic}</span><span class="tg-tx"><b>${esc(t[0])}</b><small>${esc(t[1])}</small></span></button>`; };
     const setHere = k => !window.bbPlace || bbPlace('set:' + k) === 'profile';
     const cards = groups.map(([g, keys]) => { const ks0 = keys.filter(k => found[k]); ks0.forEach(k => used.add(k)); const ks = ks0.filter(setHere);
@@ -5079,7 +5082,7 @@ function pdfPasswords(P, d, first){
     body:d.pw.map((x, i) => [i + 1, x.url, x.user, x.pass].map(PT)),
     styles:{ fontSize:9 }, columnStyles:{ 0:{ cellWidth:12, halign:'center' }, 1:{ cellWidth:95 }, 2:{ cellWidth:80 }, 3:{ cellWidth:80 } } });
 }
-function licStatusPlain(endDate){ return licCountdown(endDate).status || '—'; }
+function licStatusPlain(endDate){ const s = licCountdown(endDate).status; return s ? LIC_STATUS[s][1] : '—'; }
 function xlLic(wb, d){
   const fx = S.d.licFields || [], cols = 14 + fx.length;
   const ws = xSheet(wb, 'LIC Policies', cols, [5, 24, 18, 22, 14, 16, 22, 16, 12, 12, 12, 14, 12, 16, ...fx.map(() => 20)], 'KS — LIC Policies', `${d.lic.length} policies  |  Generated ${STAMP()}`, 4);
@@ -5098,7 +5101,7 @@ function xlLic(wb, d){
     xCell(row.getCell(11), xDate(x.endDate), { h:'left', fill:z, fmt:x.endDate ? 'dd-mmm-yyyy' : '@' });
     xCell(row.getCell(12), rn.due ? xDate(rn.due) : '—', { h:'left', fill:z, fmt:rn.due ? 'dd-mmm-yyyy' : '@' });
     const st = licStatusPlain(x.endDate);
-    xCell(row.getCell(13), st, { h:'center', fill:z, bold:true, color:st === 'Expired' ? X.bad : st === 'Expiring soon' ? 'FFB45309' : X.good });
+    xCell(row.getCell(13), st, { h:'center', fill:z, bold:true, color:st === 'Policy deactivate' ? X.bad : st === 'Policy completed' ? X.brand : X.good });
     xCell(row.getCell(14), licYearly(x) || (x.freq ? '' : 'One-time'), { h:'right', fill:z, fmt:XM() });
     fx.forEach((n, k) => xCell(row.getCell(15 + k), (x.extra || {})[n] || '', { h:'left', fill:z })); });
   const endCol = (n => { let t = ''; while (n > 0){ const m = (n - 1) % 26; t = String.fromCharCode(65 + m) + t; n = Math.floor((n - 1) / 26); } return t; })(14 + fx.length);
@@ -5486,11 +5489,11 @@ async function cfgNoteCopy(did, nid){
   const b = src.cloneNode(true);
   b.dataset.v = 'lic'; b.classList.remove('active', 'hidden');
   const ic = b.querySelector('svg, img, i');
-  if (ic){ const sp = document.createElement('span'); sp.textContent = '📄'; ic.replaceWith(sp); }
+  if (ic){ const sp = document.createElement('span'); sp.innerHTML = LIC_IMG; ic.replaceWith(sp); }
   const tn = []; const tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
   while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
   if (ic){ if (tn.length) tn[tn.length - 1].nodeValue = 'LIC'; else b.append(' LIC'); }
-  else if (tn.length >= 2){ tn[0].nodeValue = '📄'; tn[tn.length - 1].nodeValue = 'LIC'; }
+  else if (tn.length >= 2){ tn[0].parentNode.innerHTML = LIC_IMG; tn[tn.length - 1].nodeValue = 'LIC'; }
   else if (tn.length === 1) tn[0].nodeValue = '📄 LIC';
   else b.textContent = '📄 LIC';
   src.after(b);     // right after "Updates" = right above "Settings"
