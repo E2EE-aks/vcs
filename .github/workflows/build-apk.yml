@@ -208,10 +208,12 @@ jobs:
       - name: Re-package the APK (new name + package id)
         run: |
           set -e
+          trap 'echo "::error::Clone failed at: $BASH_COMMAND"' ERR
+          echo "APK: $APK ($(stat -c%s "$APK" 2>/dev/null || echo missing) bytes)"
           case "$APK" in /*|*..*) echo "Bad apk path"; exit 1 ;; esac
           [ -f "$APK" ] || { echo "Missing apk: $APK"; exit 1; }
           curl -sSL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
-          java -jar apktool.jar d -f -o dec "$APK"
+          java -jar apktool.jar d -f -o dec "$APK" 2>&1 | tail -40; [ -f dec/AndroidManifest.xml ] || { echo "::error::apktool could not open this APK (split/bundle, protected or obfuscated app)"; exit 1; }
           python3 - <<'PY'
           import os, re, glob
           D = 'dec'
@@ -247,7 +249,7 @@ jobs:
           open(yp, 'w', encoding='utf-8').write(y)
           print('package', old, '->', new)
           PY
-          java -jar apktool.jar b -o unsigned.apk dec
+          java -jar apktool.jar b -o unsigned.apk dec 2>&1 | tail -40; [ -f unsigned.apk ] || { echo "::error::apktool could not rebuild this APK (protected / obfuscated apps usually cannot be repacked)"; exit 1; }
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
           keytool -genkeypair -keystore ks.jks -storepass android -keypass android -alias key -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Clone" >/dev/null 2>&1
