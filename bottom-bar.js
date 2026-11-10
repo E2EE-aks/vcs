@@ -38,7 +38,36 @@
     o.place = (c.place && typeof c.place === 'object') ? c.place : {}; return o;
   }
   var cfg = loadCfg();
-  function saveCfg(){ try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) {} try { if (window.thPush) thPush(); } catch (e) {} }
+  var legacyPlace = Object.keys(cfg.place).length ? JSON.parse(JSON.stringify(cfg.place)) : null;   // old shared placement (first user only)
+  cfg.place = {};
+  /* Design (size, colours, icons) = ONE for everybody, set by the admin. Placement of options (Bar / More / Profile / Left / Right) = each user's OWN,
+     saved in that user's account on the server (and on this phone), so it is the same after every login. */
+  function stripPlace(c){ var o = {}; Object.keys(c).forEach(function(k){ if (k !== 'place') o[k] = c[k]; }); return o; }
+  function saveCfg(){ try { localStorage.setItem(KEY, JSON.stringify(stripPlace(cfg))); } catch (e) {} try { if (window.thPush) thPush(); } catch (e) {} }
+  var curUid = null, plT = null;
+  function uid(){ try { return (S.me && S.me.id && !S.me.viewing) ? String(S.me.id) : ''; } catch (e) { return ''; } }
+  function plKey(u){ return 'ks_bb_pl_' + u; }
+  function pushPlace(){
+    clearTimeout(plT);
+    plT = setTimeout(function(){
+      try { if (typeof callServer === 'function' && S.token && curUid) callServer({ action: 'saveMyMenu', token: S.token, menu: JSON.stringify(cfg.place) }).catch(function(){}); } catch (e) {}
+    }, 800);
+  }
+  function savePlace(){ if (!curUid) return; try { localStorage.setItem(plKey(curUid), JSON.stringify(cfg.place)); } catch (e) {} pushPlace(); }
+  function syncUser(){
+    var u = uid(); if (u === curUid) return; curUid = u;
+    if (!u){ cfg.place = {}; return; }
+    var p = null; try { p = JSON.parse(localStorage.getItem(plKey(u)) || 'null'); } catch (e) {}
+    if (!p || typeof p !== 'object'){ p = legacyPlace || {}; legacyPlace = null; }
+    cfg.place = p;
+    try {
+      if (typeof callServer === 'function' && S.token) callServer({ action: 'getMyMenu', token: S.token }).then(function(r){
+        if (u !== curUid || !r || !r.ok) return;
+        if (r.menu){ var m = null; try { m = JSON.parse(r.menu); } catch (e) {} if (m && typeof m === 'object'){ cfg.place = m; try { localStorage.setItem(plKey(u), r.menu); } catch (e) {} lastHtml = ''; draw(); } }
+        else if (Object.keys(cfg.place).length) pushPlace();
+      }).catch(function(){});
+    } catch (e) {}
+  }
 
   /* ---------- where every option lives: bar | more | profile | deleted ---------- */
   var LOCK = ['dashboard', 'profile'];                 // always on the bar
@@ -140,6 +169,7 @@
   }
   var lastHtml = '';
   function draw(){
+    syncUser();
     var h = '';
     applyPlace();
     barIds().forEach(function(id){
@@ -208,7 +238,7 @@
   function redrawManage(){ var c = sheet.querySelector('.bs-card'), t = c ? c.scrollTop : 0; drawManage(); c = sheet.querySelector('.bs-card'); if (c) c.scrollTop = t; }
   function say(m){ try { if (typeof toast === 'function') toast(m); } catch (e) {} }
   function commit(){
-    saveCfg(); sides.left.html = sides.right.html = ''; applyPlace(); lastHtml = ''; draw(); requestAnimationFrame(gap);
+    saveCfg(); savePlace(); sides.left.html = sides.right.html = ''; applyPlace(); lastHtml = ''; draw(); requestAnimationFrame(gap);
     if (!sheet.classList.contains('hidden')) redrawManage();
     try { if (typeof S !== 'undefined' && S.view === 'profile') refreshView(); } catch (e) {}
   }
@@ -308,10 +338,10 @@
 
   /* ---------- Profile › Bottom bar card ---------- */
   function cssHex(name, fb){ var x = ''; try { x = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); } catch (e) {} return /^#[0-9a-f]{6}$/i.test(x) ? x : fb; }
-  window.bbGet = function(){ try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } };
+  window.bbGet = function(){ try { var r = localStorage.getItem(KEY) || ''; if (!r) return ''; return JSON.stringify(stripPlace(JSON.parse(r) || {})); } catch (e) { return ''; } };
   window.bbSet = function(j){                       // design sent by the admin
-    try { if (j) localStorage.setItem(KEY, j); else localStorage.removeItem(KEY); } catch (e) {}
-    try { cfg = loadCfg(); applyCfg(); lastHtml = ''; draw(); } catch (e) {}
+    try { if (j) localStorage.setItem(KEY, JSON.stringify(stripPlace(JSON.parse(j) || {}))); else localStorage.removeItem(KEY); } catch (e) {}
+    try { var pl = cfg.place; cfg = loadCfg(); cfg.place = pl; applyCfg(); lastHtml = ''; draw(); } catch (e) {}
   };
   window.bbManage = function(){ openSheet(true, 'manage'); };
   window.bbCard = function(){
@@ -351,7 +381,7 @@
   document.addEventListener('click', function(e){
     var r = e.target.closest && e.target.closest('[data-bbreset]');
     if (r){ cfg[r.dataset.bbreset] = ''; saveCfg(); applyCfg(); refreshView(); return; }
-    if (e.target.closest && e.target.closest('[data-bbfull]')){ cfg = JSON.parse(JSON.stringify(DEF)); saveCfg(); applyCfg(); lastHtml = ''; draw(); refreshView(); }
+    if (e.target.closest && e.target.closest('[data-bbfull]')){ var pl0 = cfg.place; cfg = JSON.parse(JSON.stringify(DEF)); cfg.place = pl0; saveCfg(); applyCfg(); lastHtml = ''; draw(); refreshView(); }
   });
 
   window.addEventListener('resize', function(){ requestAnimationFrame(function(){ gap(); moveInd(true); }); });

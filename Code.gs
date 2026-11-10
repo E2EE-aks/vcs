@@ -293,6 +293,8 @@ function route_(req) {
       case 'saveSettings':      out = saveSettings_(req); break;
       case 'saveLoginCfg':      out = saveLoginCfg_(req); break;
       case 'saveTheme':         out = saveTheme_(req); break;
+      case 'saveMyMenu':        out = saveMyMenu_(req); break;
+      case 'getMyMenu':         out = { ok: true, menu: String(PropertiesService.getScriptProperties().getProperty('MYMENU_' + CTX.uid) || '') }; break;
       case 'getTheme':          out = { ok: true, theme: String(PropertiesService.getScriptProperties().getProperty('GLOBAL_THEME') || '') }; break;
       case 'saveStatuses':      out = saveStatuses_(req); break;
       case 'addStatus':         out = addStatus_(req); break;
@@ -1675,6 +1677,16 @@ function saveTheme_(req) {
   if (j.length > 30000) fail_('The design is too large.');
   try { var o = JSON.parse(j); if (!o || typeof o !== 'object') throw 0; } catch (e) { fail_('The design data is not valid.'); }
   PropertiesService.getScriptProperties().setProperty('GLOBAL_THEME', j);
+  return { ok: true };
+}
+
+// Each user's own placement of menu options (Bar / More / Profile / Left / Right) - private to that user, same after every login.
+function saveMyMenu_(req) {
+  if (CTX.viewing) fail_('Not allowed.', 'PERM');
+  var j = String(req.menu || '');
+  if (j.length > 6000) fail_('The menu data is too large.');
+  try { var o = JSON.parse(j); if (!o || typeof o !== 'object') throw 0; } catch (e) { fail_('The menu data is not valid.'); }
+  PropertiesService.getScriptProperties().setProperty('MYMENU_' + CTX.uid, j);
   return { ok: true };
 }
 
