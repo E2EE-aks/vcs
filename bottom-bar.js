@@ -100,13 +100,15 @@
     if (setCache.key !== key || !setCache.list.length){ try { setCache.list = ksSetList() || []; setCache.key = key; } catch (e) { setCache.list = []; } }
     return setCache.list;
   }
+  function extraOpts(){ try { return (typeof ksExtraList === 'function' && ksExtraList()) || []; } catch (e) { return []; } }
   function optInfo(id){
+    if (id.indexOf('x:') === 0){ var x = extraOpts().filter(function(o){ return o.id === id; })[0]; return x ? { id: id, ic: x.ic, lb: x.lb } : null; }
     if (id.indexOf('set:') === 0){ var o = setOpts().filter(function(x){ return x.id === id; })[0]; return o ? { id: id, ic: o.ic, lb: o.lb } : null; }
     var b = navBtn(id); return usable(b) ? info(b) : null;
   }
   function optIds(){
     var ids = []; [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ if (HIDE.indexOf(b.dataset.v) < 0) ids.push(b.dataset.v); });
-    setOpts().forEach(function(o){ ids.push(o.id); }); return ids;
+    setOpts().forEach(function(o){ ids.push(o.id); }); extraOpts().forEach(function(o){ ids.push(o.id); }); return ids;
   }
   function barIds(){
     var ids = [];
@@ -115,8 +117,8 @@
     return ids;
   }
   function sideIds(sid){ return optIds().filter(function(id){ return place(id) === sid && optInfo(id); }); }
-  function curId(){ var cur = ''; try { cur = S.view || ''; if (cur === 'profile' && S.setSec && optInfo('set:' + S.setSec) && place('set:' + S.setSec) !== 'profile') cur = 'set:' + S.setSec; } catch (e) {} return cur; }
-  function navTo(id){ if (id.indexOf('set:') === 0){ if (typeof ksOpenSet === 'function') ksOpenSet(id.slice(4)); } else if (typeof go === 'function') go(id); }
+  function curId(){ var cur = ''; try { cur = S.view || ''; if (cur === 'livechat') cur = 'x:live'; if (cur === 'profile' && S.setSec && optInfo('set:' + S.setSec) && place('set:' + S.setSec) !== 'profile') cur = 'set:' + S.setSec; } catch (e) {} return cur; }
+  function navTo(id){ if (id.indexOf('x:') === 0){ if (typeof ksOpenX === 'function') ksOpenX(id.slice(2)); } else if (id.indexOf('set:') === 0){ if (typeof ksOpenSet === 'function') ksOpenSet(id.slice(4)); } else if (typeof go === 'function') go(id); }
   function applyPlace(){ [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ b.classList.toggle('ks-del', place(b.dataset.v) === 'deleted'); }); }
 
   var bar = document.createElement('nav'); bar.id = 'btmBar'; bar.className = 'hidden'; bar.setAttribute('aria-label', 'Main');
@@ -167,6 +169,21 @@
     var g = t.closest('[data-go]'); if (!g) return;
     closeSides(); openSheet(false); navTo(g.dataset.go);
   }
+  /* swipe the open side bar toward its edge to close it; the phone Back button / edge swipe closes it too (ksBack calls bbCloseTop) */
+  (function(){
+    var sx = 0, sy = 0, on = null;
+    document.addEventListener('touchstart', function(e){ var el = e.target.closest && e.target.closest('.sbx.open'); on = el || null; if (el){ sx = e.touches[0].clientX; sy = e.touches[0].clientY; } }, { passive: true });
+    document.addEventListener('touchend', function(e){
+      if (!on) return; var t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy, el = on; on = null;
+      if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+      if ((el.dataset.side === 'left' && dx < 0) || (el.dataset.side === 'right' && dx > 0)) closeSides();
+    }, { passive: true });
+  })();
+  window.bbCloseTop = function(){
+    if (Object.keys(sides).some(function(k){ return sides[k].open; })){ closeSides(); return true; }
+    if (sheet && !sheet.classList.contains('hidden')){ openSheet(false); return true; }
+    return false;
+  };
   document.addEventListener('click', function(e){
     if (Object.keys(sides).some(function(k){ return sides[k].open; }) && !(e.target.closest && e.target.closest('.sbx'))) closeSides();
   });
@@ -254,7 +271,7 @@
     sheet.innerHTML = h + '</div></div>';
   }
   function drawManage(){
-    var rows = '', setRows = '', del = '', nBar = 0, sbs = sbList();
+    var rows = '', setRows = '', toolRows = '', del = '', nBar = 0, sbs = sbList();
     var segOpts = [['bar', 'Bar'], ['more', 'More'], ['profile', 'Profile']].concat(sbs.map(function(x){ return [x.id, x.name || 'Side bar']; }));
     var seg = function(id, p){ return segOpts.map(function(o){ return '<button type="button" class="' + (p === o[0] ? 'on' : '') + '" data-mv="' + esc(id) + '|' + esc(o[0]) + '">' + esc(o[1]) + '</button>'; }).join(''); };
     var addRow = function(i){
@@ -264,19 +281,21 @@
       var r = '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b>' +
         (LOCK.indexOf(i.id) > -1 ? '<span class="mg-lock">always on bar</span>' : '<span class="mg-seg">' + seg(i.id, p) + '</span>') +
         (NODEL.indexOf(i.id) > -1 ? '<span class="mg-d0"></span>' : '<button type="button" class="mg-d" data-del="' + esc(i.id) + '" aria-label="Delete">🗑</button>') + '</div>';
-      if (i.id.indexOf('set:') === 0) setRows += r; else rows += r;
+      if (i.id.indexOf('set:') === 0) setRows += r; else if (i.id.indexOf('x:') === 0) toolRows += r; else rows += r;
     };
     [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
       if (b.classList.contains('hidden') || b.classList.contains('th-off') || HIDE.indexOf(b.dataset.v) > -1) return;
       addRow(info(b));
     });
     setOpts().forEach(function(o){ addRow({ id: o.id, ic: o.ic, lb: o.lb }); });
+    extraOpts().forEach(function(o){ addRow({ id: o.id, ic: o.ic, lb: o.lb }); });
     var sbh = '<div class="bs-sub">Side bars</div><div class="mg-l">' + sbs.map(function(x){
       return '<div class="mg-r"><span class="mg-i">' + (x.side === 'left' ? '‹' : '›') + '</span><b>' + esc(x.name || 'Side bar') + '</b><small class="mg-n">' + sideIds(x.id).length + ' options · ' + x.side + '</small><button type="button" class="mg-d" data-sbedit="' + esc(x.id) + '" aria-label="Customize side bar" title="Customize">✎</button></div>';
     }).join('') + (sbs.length < MAXSBS ? '<button type="button" class="btn block" data-sbadd="1">＋ Add side bar</button>' : '') + '</div>';
     sheet.innerHTML = '<div class="bs-card"><div class="bs-h"><b>Manage menu</b><span class="bs-hb"><button type="button" data-back="1" aria-label="Back to More" title="Back">‹</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div>' +
       '<p class="muted" style="font-size:12.5px;margin:0 0 10px">Choose where each option lives: <b>Bar</b> (bottom bar, max ' + MAXBAR + ' — now ' + nBar + '), <b>More</b>, <b>Profile</b> or a <b>side bar</b> (opens with the arrow on the screen edge). Tap ✎ on a side bar to customize it. 🗑 deletes an option (you can restore it below). Your choices are saved in your own account.</p>' +
       sbh + '<div class="bs-sub">Options</div><div class="mg-l">' + rows + '</div>' +
+      (toolRows ? '<div class="bs-sub">Chat tools</div><div class="mg-l">' + toolRows + '</div>' : '') +
       (setRows ? '<div class="bs-sub">Settings options</div><div class="mg-l">' + setRows + '</div>' : '') +
       (del ? '<div class="bs-sub">Deleted</div><div class="mg-l">' + del + '</div>' : '') + '</div>';
   }

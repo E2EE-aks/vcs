@@ -557,6 +557,7 @@ function applyAccess(){
   hide('dashboard', chatOnly);
   hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', !(S.me && S.me.primary)); hide('pay', !(S.me && S.me.primary));
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary)) || (S.view === 'pay' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
+  if (S.view === 'livechat' && !(S.me && S.me.primary)) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
 /* view-only users: take the edit controls off the screen (the server blocks edits anyway) */
@@ -1564,6 +1565,7 @@ async function updDelete(id){
 
 /* ---------- navigation ---------- */
 const TITLES = {
+  livechat:['Live Chat','Chats between your users — live'],
   dashboard:['Dashboard','Today: attendance, expenses and work'],
   attendance:['Attendance','Mark and review attendance day by day'],
   expenses:['Expenses','Track income and spending'],
@@ -2204,14 +2206,14 @@ function render(){
   if (!S.d) return;
   const v = $('#view');
   updateEmpSel(); updateAsSel();
-  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, pay:vPay, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), settings:vSettings, profile:vProfile})[S.view]();
+  let html = ({dashboard:vDashboard, attendance:vAttendance, expenses:vExpenses, work:vWork, timetable:vTimetable, chat:vChat, passwords:vPasswords, links:vLinks, lic:vLic, vcs:vVcs, rack:vRack, logins:vLogins, pay:vPay, deploy:vDeploy, updates:vUpdates, version:vVersion, config:vConfig, mail:vMail, telegram:(typeof vTelegram === 'function' ? vTelegram : () => ''), whatsapp:(typeof vWhatsapp === 'function' ? vWhatsapp : () => ''), music:(typeof vMusic === 'function' ? vMusic : () => ''), youtube:(typeof vYoutube === 'function' ? vYoutube : () => ''), websites:(typeof vWebsites === 'function' ? vWebsites : () => ''), settings:vSettings, profile:vProfile, livechat:vLiveChat})[S.view]();
   if (S.view === 'attendance') html += statusCardHtml();
     if (S.view === 'dashboard' && isAdmin() && !S.as) html += recentLoginsCard();
   v.innerHTML = banner() + ((S.view === 'dashboard' || S.view === 'profile') ? tmpCountdownHtml() + payCountdownHtml() : '') + html;
   applyRO(v);
   startTmp(); startPay(); startLic();
   const setAfter = () => { bindSettings(); bindBio(); bindTheme(); bindDrive(); bindHist(); bindTrash(); bindDchat(); if (window.lcBind) lcBind(); };
-  const after = ({settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion, telegram:() => { if (window.tgAfter) tgAfter(); }, whatsapp:() => { if (window.waAfter) waAfter(); }, music:() => { if (window.musicAfter) musicAfter(); }, youtube:() => { if (window.youtubeAfter) youtubeAfter(); }, websites:() => { if (window.websitesAfter) websitesAfter(); }})[S.view]; if (after) after();
+  const after = ({livechat:bindLiveChat, settings:setAfter, profile:setAfter, attendance:bindStatusForms, logins:bindLogins, chat:bindChat, deploy:bindDeploy, updates:bindUpdates, version:bindVersion, telegram:() => { if (window.tgAfter) tgAfter(); }, whatsapp:() => { if (window.waAfter) waAfter(); }, music:() => { if (window.musicAfter) musicAfter(); }, youtube:() => { if (window.youtubeAfter) youtubeAfter(); }, websites:() => { if (window.websitesAfter) websitesAfter(); }})[S.view]; if (after) after();
   liveSync();                                   // VCS Processing: connect while its card is open, disconnect otherwise
 }
 
@@ -4535,7 +4537,8 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
     const DEFP = ['vcs', 'version', 'logins', 'deploy', 'updates', 'profile', 'settings'];
     const moved = window.bbPlace ? [...document.querySelectorAll('#nav [data-v]')].map(x => x.dataset.v).filter(v => !DEFP.includes(v) && bbPlace(v) === 'profile').map(navItem).join('') : '';
     const manageRow = window.bbManage ? `<section class="tg-grp"><div class="tg-card"><button type="button" class="tg-item" data-q="manage menu move delete bar more profile left right sidebar" onclick="bbManage()"><span class="tg-ic" style="--c:#0ea5e9">🧩</span><span class="tg-tx"><b>Manage menu</b><small>Move options between Bar, More, Profile and side bars, add side bars, or delete options</small></span></button></div></section>` : '';
-    const movedHtml = manageRow + (moved ? `<section class="tg-grp"><div class="tg-gl">Moved here</div><div class="tg-card">${moved}</div></section>` : '');
+    const movedX = (window.bbPlace && window.ksExtraList) ? ksExtraList().filter(o => bbPlace(o.id) === 'profile').map(o => `<button type="button" class="tg-item" data-q="${esc(o.lb.toLowerCase())}" onclick="ksOpenX('${o.id.slice(2)}')"><span class="tg-ic" style="--c:#3b82f6">${o.ic}</span><span class="tg-tx"><b>${esc(o.lb)}</b></span></button>`).join('') : '';
+    const movedHtml = manageRow + ((moved || movedX) ? `<section class="tg-grp"><div class="tg-gl">Moved here</div><div class="tg-card">${moved}${movedX}</div></section>` : '');
     const left = Object.keys(found).filter(k => !used.has(k) && setHere(k));
     return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards + movedHtml +
       (left.length ? `<section class="tg-grp"><div class="tg-gl">More</div><div class="tg-card">${left.map(tgItem).join('')}</div></section>` : '') + '<div class="empty-state hidden" id="setNone">No setting matches your search</div>';
@@ -6865,6 +6868,91 @@ function trashView(i){
   w.innerHTML = `<div class="cv-bar"><button class="ch-sbtn" data-x type="button">✕</button><a class="ch-sbtn" href="${esc(u + '&dl=1&n=photo')}" download>⬇ Save</a></div><img src="${esc(u)}" alt="">`;
   w.onclick = e => { if (e.target === w || e.target.closest('[data-x]')) w.remove(); };
   document.body.appendChild(w);
+}
+
+
+/* ---------- Ludo / Trash / Daily Chats / Live Chat as menu options ---------- */
+window.ksExtraList = function(){
+  if (!S || !S.me) return [];
+  const out = [];
+  try { if (S.chat && ((S.chat.users || []).length || (S.chat.groups || []).length)) out.push({ id:'x:ludo', ic:'🎲', lb:'Ludo' }); } catch(e){}
+  if (S.me.primary) out.push({ id:'x:live', ic:'💬', lb:'Live Chat' }, { id:'x:trash', ic:'🗑️', lb:'Trash' }, { id:'x:dchat', ic:'📄', lb:'Daily Chats' });
+  return out;
+};
+window.ksOpenX = k => { if (k === 'ludo') ludoPick(); else if (k === 'live') go('livechat'); else if (k === 'trash' || k === 'dchat') chatAdminOpen(k); };
+function ludoPick(){
+  const list = (S.chat.groups || []).map(g => ({ id:g.id, n:'👥 ' + (g.name || 'Group') })).concat((S.chat.users || []).map(u => ({ id:u.id, n:(u.name || u.username) })));
+  if (!list.length) return toast('No one to play with yet', true);
+  const w = openModal(`<h3>🎲 Play Ludo with…</h3><p class="sub">Choose a person or a group (2 to 4 players).</p><div class="lvc-pick">${list.map(x => `<button type="button" class="btn ghost" data-id="${esc(x.id)}">${esc(x.n)}</button>`).join('')}</div><div class="foot"><button type="button" class="btn ghost" data-x>Close</button></div>`);
+  w.onclick = e => {
+    if (e.target === w || e.target.closest('[data-x]')){ w.remove(); return; }
+    const b = e.target.closest('[data-id]'); if (!b) return;
+    S.chat.with = b.dataset.id; w.remove(); ludoDial();
+  };
+}
+
+/* ---------- Live Chat: every chat between your users, shown like a chat room (main admin) ---------- */
+S.lvc = { convs:null, sel:'all', err:'', sig:'', busy:false, timer:null };
+function vLiveChat(){
+  return `<div class="lvc"><div class="lvc-bar"><div class="lvc-chips" id="lvChips"></div><button class="btn ghost sm" type="button" onclick="lvcLoad(true)" aria-label="Refresh">↻</button></div>
+    <div class="lvc-room"><div class="lvc-head" id="lvHead"></div><div class="lvc-msgs" id="lvMsgs"><div class="empty-state">Loading…</div></div></div></div>`;
+}
+function bindLiveChat(){
+  if (!(S.me && S.me.primary)) return;
+  lvcLoad(true);
+  clearInterval(S.lvc.timer);
+  S.lvc.timer = setInterval(() => { if (S.view !== 'livechat' || !document.querySelector('#lvMsgs')){ clearInterval(S.lvc.timer); S.lvc.timer = null; return; } if (!document.hidden) lvcLoad(); }, 3000);
+}
+async function lvcLoad(force){
+  const L = S.lvc; if (L.busy) return; L.busy = true;
+  try{
+    const r = await api('chatLiveAll'), convs = r.convs || [], sig = JSON.stringify(convs.map(c => [c.key, c.count, c.last]));
+    L.err = '';
+    if (force || sig !== L.sig || !L.convs){ L.sig = sig; L.convs = convs; lvcDraw(); }
+  }catch(e){ L.err = (e && e.message) || 'Could not load chats'; if (!L.convs) lvcDraw(); if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) handleErr(e); }
+  finally{ L.busy = false; }
+  lvcMedia();
+}
+const lvColor = n => { let h = 0; String(n).split('').forEach(c => { h = (h * 31 + c.charCodeAt(0)) % 360; }); return `hsl(${h} 62% 38%)`; };
+const lvDay = ms => { const d = new Date(ms), t = new Date(), y = new Date(Date.now() - 864e5), same = (a, b) => a.toDateString() === b.toDateString(); return same(d, t) ? 'Today' : same(d, y) ? 'Yesterday' : d.toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }); };
+async function lvcMedia(){
+  const L = S.lvc, mu = S.dlive.mu, ids = [];
+  (L.convs || []).forEach(c => c.items.slice(-60).forEach(m => { if (m.m && m.m.i && mu[m.m.i] === undefined) ids.push(m.m.i); }));
+  if (!ids.length) return;
+  ids.forEach(i => mu[i] = null);
+  try{
+    const r = await chatApi('chatMediaTicket', { ids });
+    ids.forEach(i => { const t = r.tickets && r.tickets[i]; mu[i] = t ? API_URL + '/chat/media?' + new URLSearchParams({ id:i, u:t.u, e:t.e, k:t.k }).toString() : ''; });
+  }catch(e){ ids.forEach(i => delete mu[i]); return; }
+  lvcDraw();
+}
+function lvcDraw(){
+  const msgs = document.querySelector('#lvMsgs'), chips = document.querySelector('#lvChips'), head = document.querySelector('#lvHead'); if (!msgs) return;
+  const L = S.lvc;
+  if (L.err && !L.convs){ msgs.innerHTML = `<div class="empty-state"><b style="color:#b91c1c">${esc(L.err)}</b></div>`; return; }
+  if (!L.convs){ msgs.innerHTML = '<div class="empty-state">Loading…</div>'; return; }
+  if (L.sel !== 'all' && !L.convs.some(c => c.key === L.sel)) L.sel = 'all';
+  chips.innerHTML = `<button type="button" class="lvc-chip ${L.sel === 'all' ? 'on' : ''}" data-k="all">💬 All</button>` + L.convs.map(c => `<button type="button" class="lvc-chip ${L.sel === c.key ? 'on' : ''}" data-k="${esc(c.key)}">${esc(c.name)}</button>`).join('');
+  chips.onclick = e => { const b = e.target.closest('[data-k]'); if (!b) return; L.sel = b.dataset.k; lvcDraw(); const m = document.querySelector('#lvMsgs'); if (m) m.scrollTop = m.scrollHeight; };
+  const cur = L.sel === 'all' ? null : L.convs.find(c => c.key === L.sel);
+  let items;
+  if (cur) items = cur.items.map(m => ({ ...m, tag:'' }));
+  else items = [].concat(...L.convs.map(c => c.items.map(m => ({ ...m, tag:c.name })))).sort((a, b) => a.t - b.t).slice(-200);
+  const who = [...new Set(items.map(m => m.f))];
+  head.innerHTML = cur ? `<b>${esc(cur.name)}</b><small>${who.length} ${who.length === 1 ? 'person' : 'people'} chatting · ${cur.count} messages · last 24 hours</small>` : `<b>💬 All chats</b><small>${L.convs.length} conversation${L.convs.length === 1 ? '' : 's'} · newest at the bottom</small>`;
+  if (!items.length){ msgs.innerHTML = '<div class="empty-state">No chats between users right now.</div>'; return; }
+  const left = cur && !cur.group ? who[0] : null;
+  const atEnd = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 80, first = !msgs.dataset.drawn;
+  let day = '', h = '', last = '';
+  items.forEach(m => {
+    const d = lvDay(m.t); if (d !== day){ day = d; h += `<div class="lvc-day"><span>${esc(d)}</span></div>`; last = ''; }
+    const side = (left === null || m.f === left) ? 'l' : 'r', c = lvColor(m.f);
+    const media = m.m ? dlvcMediaHtml(m) : '';
+    h += `<div class="lvc-m ${side}"><div class="lvc-b" style="--c:${c}">${last === m.f + m.tag ? '' : `<div class="lvc-n" style="color:${c}">${esc(m.f)}</div>`}${!cur && m.tag && last !== m.f + m.tag ? `<div class="lvc-tag">${esc(m.tag)}</div>` : ''}${media}${m.x ? `<div class="lvc-x">${esc(m.x)}</div>` : ''}<span class="lvc-t">${esc(dcTime(m.t))}${m.e ? ' · edited' : ''}</span></div></div>`;
+    last = m.f + m.tag;
+  });
+  msgs.innerHTML = h; msgs.dataset.drawn = '1';
+  if (atEnd || first) msgs.scrollTop = msgs.scrollHeight;
 }
 
 /* ---------- Daily Chats: chats older than 24 hours, saved day by day, downloadable as PDF (main admin) ---------- */

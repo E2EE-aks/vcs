@@ -256,3 +256,26 @@ html[data-mode="dark"] .pa{background:#1e293b;color:#e2e8f0;border-color:rgba(14
 .dsrch-t small{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsrch .set-search{max-width:none}
 .dsrch .set-search .input{padding-left:40px!important;width:100%}
+
+/* Live Chat room */
+.lvc{display:flex;flex-direction:column;gap:10px}
+.lvc-bar{display:flex;gap:8px;align-items:center}
+.lvc-chips{display:flex;gap:6px;overflow-x:auto;flex:1;padding-bottom:4px;scrollbar-width:none}
+.lvc-chips::-webkit-scrollbar{display:none}
+.lvc-chip{flex:none;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:7px 13px;font:600 13px/1 inherit;font-family:inherit;cursor:pointer;white-space:nowrap}
+.lvc-chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+.lvc-room{border:1px solid var(--line);border-radius:18px;overflow:hidden;background:var(--card);display:flex;flex-direction:column}
+.lvc-head{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:2px}
+.lvc-head small{color:var(--muted);font-size:12px}
+.lvc-msgs{height:calc(100vh - 290px);min-height:320px;overflow-y:auto;padding:10px 10px 14px;background:color-mix(in srgb,var(--brand) 5%,var(--bg,#f4f6fb));display:flex;flex-direction:column;gap:4px}
+.lvc-day{text-align:center;margin:8px 0 4px}
+.lvc-day span{background:color-mix(in srgb,var(--ink) 10%,transparent);color:var(--muted);font-size:11.5px;font-weight:600;padding:3px 10px;border-radius:999px}
+.lvc-m{display:flex}
+.lvc-m.r{justify-content:flex-end}
+.lvc-b{max-width:82%;background:var(--card);border:1px solid var(--line);border-left:3px solid var(--c);border-radius:4px 14px 14px 14px;padding:6px 10px 4px;box-shadow:0 1px 2px rgba(15,23,42,.06)}
+.lvc-m.r .lvc-b{border-left:1px solid var(--line);border-right:3px solid var(--c);border-radius:14px 4px 14px 14px;background:color-mix(in srgb,var(--brand) 10%,var(--card))}
+.lvc-n{font-weight:700;font-size:12.5px}
+.lvc-tag{font-size:10.5px;color:var(--muted);margin-bottom:1px}
+.lvc-x{white-space:pre-wrap;word-break:break-word;font-size:14.5px;line-height:1.4}
+.lvc-t{display:block;text-align:right;font-size:10.5px;color:var(--muted);margin-top:2px}
+.lvc-pick{display:flex;flex-direction:column;gap:6px;max-height:50vh;overflow-y:auto;margin:10px 0}

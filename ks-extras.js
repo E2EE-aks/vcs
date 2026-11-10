@@ -42,6 +42,7 @@
     if (!opts().swipe) return false;
     var ov = document.querySelectorAll('.overlay');
     if (ov.length){ var top = ov[ov.length - 1], no = top.querySelector('[data-no],[data-x]'); if (no) no.click(); else top.remove(); return true; }
+    if (window.bbCloseTop && bbCloseTop()) return true;                       // open side bar / More sheet
     if (document.body.classList.contains('menu-open')){ setMenu(false); return true; }
     var qa = $('#qaSheet'); if (qa && !qa.classList.contains('hidden')){ qa.click(); return true; }
     if ($('#ksTray.show')){ fx.tray(false); return true; }
