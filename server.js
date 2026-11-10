@@ -1338,7 +1338,7 @@ function start(app, env) {
     if (rq.method === 'GET') return send(200, { ok: true, app: 'Attendance & Expense Tracker API', time: new Date().toISOString() });
     let body = '';
     let lim = 2e6;
-    rq.on('data', c => { body += c; if (body.length < 800 && /"action"\s*:\s*"deployUpload"/.test(body)) lim = 135e6; if (body.length > lim) rq.destroy(); });
+    rq.on('data', c => { body += c; if (lim === 2e6 && /"action"\s*:\s*"deployUpload"/.test(body.slice(0, 800))) lim = 135e6; if (body.length > lim) rq.destroy(); });   // look only at the START of the body: the first network chunk is usually bigger than 800 bytes, so the old check never matched and every upload over 2 MB was cut off
     rq.on('end', async () => { let out; try { out = await app.handle(body); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
   }));
 }

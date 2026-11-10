@@ -58,13 +58,13 @@ function callServer(body){
         .apiCall(JSON.stringify(body));
     });
   }
-  const rid = liveCliStart(body.action); body._rid = rid; let http = 0;      // _rid lets the VCS Processing card match browser and server
+  const rid = liveCliStart(body.action); body._rid = rid; let http = 0; const payload = JSON.stringify(body);      // _rid lets the VCS Processing card match browser and server
   return fetch(API_URL, {
     method:'POST',
     headers:{'Content-Type':'text/plain;charset=utf-8'},   // avoids CORS pre-flight
-    body: JSON.stringify(body)
+    body: payload
   }).then(r => { http = r.status; return r.json(); }).then(j => { liveCliEnd(rid, true, { http }); return j; })
-    .catch(e => { liveCliEnd(rid, false, { http, kind:(e && e.name === 'SyntaxError') ? 'parse' : 'net', err:(e && e.message) || 'failed' }); throw new Error('Cannot reach the server. Check the Apps Script deployment (Anyone can access).'); });
+    .catch(e => { liveCliEnd(rid, false, { http, kind:(e && e.name === 'SyntaxError') ? 'parse' : 'net', err:(e && e.message) || 'failed' }); throw new Error(payload.length > 1500000 ? 'The upload did not reach the server (' + (payload.length / 1048576).toFixed(1) + ' MB). The connection dropped or the server refused the size — check your internet and try again.' : 'Cannot reach the server. Check the Apps Script deployment (Anyone can access).'); });
 }
 async function api(action, payload = {}){
   busy(true);
