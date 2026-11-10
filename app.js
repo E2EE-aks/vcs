@@ -2336,7 +2336,7 @@ function dashSearch(q){
     if (hit(t[0] + ' ' + t[1] + ' ' + v)) pages.push(row((b.querySelector('.ico') || {}).textContent || '•', t[0], t[1], `go('${v}')`));
   });
   add('Pages', pages);
-  const sets = Object.keys(SET_DEF).filter(k => hit(SET_DEF[k][1] + ' ' + SET_DEF[k][2])).map(k => row(SET_DEF[k][0], SET_DEF[k][1], 'Settings · ' + SET_DEF[k][2], `go('settings');setOpen('${k}')`));
+  const sets = Object.keys(SET_DEF).filter(k => hit(SET_DEF[k][1] + ' ' + SET_DEF[k][2])).map(k => row(SET_DEF[k][0], SET_DEF[k][1], 'Settings · ' + SET_DEF[k][2], `go('profile');setOpen('${k}')`));
   add('Settings', sets);
   const D = S.d || {}, P = perms ? perms() : {};
   if (P.exp !== 'none') add('Expenses', (D.expenses || []).filter(x => hit([x.date, x.category, x.note, x.amount].join(' '))).sort((a, b) => String(b.date).localeCompare(String(a.date)))
@@ -4423,6 +4423,18 @@ function setKeyed(grid){
     const k = m && !found[m[0]] ? m[0] : 'x' + i; found[k] = 1; return [k, c];
   });
 }
+/* every settings tile (Appearance, Employees, Users…) as its own menu option, so it can be moved Bar / More / Profile / side bar */
+window.ksSetList = function(){
+  if (!S || !S.d) return [];
+  const grid = vSettingsGrid(), out = [];
+  setKeyed(grid).forEach(([k, c]) => {
+    if (SET_GONE.includes(k)) return;
+    const t = ((c.querySelector('h3') || {}).textContent || '').trim(), d = SET_DEF[k] || [t.split(' ')[0] || '•', t.replace(/^\S+\s*/, '') || 'More', ''];
+    out.push({ id:'set:' + k, ic:d[0], lb:d[1] });
+  });
+  return out;
+};
+window.ksOpenSet = k => { go('profile'); setOpen(k); };
 function vSettings(){
   const grid = vSettingsGrid();
   setKeyed(grid).forEach(([k, c]) => { if (PROFILE_KEYS.includes(k) || SET_GONE.includes(k)) c.remove(); });
@@ -4516,14 +4528,15 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
     const navItem = v => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (!b || b.classList.contains('hidden') || b.classList.contains('th-off') || b.classList.contains('ks-del')) return ''; if (window.bbPlace && bbPlace(v) !== 'profile') return '';
       const ic = (b.querySelector('.ico') || {}).textContent || '•', t = TITLES[v] || [v, ''];
       return `<button type="button" class="tg-item" data-q="${esc((t[0] + ' ' + t[1]).toLowerCase())}" onclick="go('${v}')"><span class="tg-ic" style="--c:${TGC[v] || '#3b82f6'}">${ic}</span><span class="tg-tx"><b>${esc(t[0])}</b><small>${esc(t[1])}</small></span></button>`; };
-    const cards = groups.map(([g, keys]) => { const ks = keys.filter(k => found[k]); ks.forEach(k => used.add(k));
+    const setHere = k => !window.bbPlace || bbPlace('set:' + k) === 'profile';
+    const cards = groups.map(([g, keys]) => { const ks0 = keys.filter(k => found[k]); ks0.forEach(k => used.add(k)); const ks = ks0.filter(setHere);
       const extra = /Version Control/.test(g) ? navItem('vcs') + navItem('version') + navItem('logins') + navItem('deploy') + navItem('updates') : '';
       return (ks.length || extra) ? `<section class="tg-grp"><div class="tg-gl">${esc(g)}</div><div class="tg-card">${extra}${ks.map(tgItem).join('')}</div></section>` : ''; }).join('');
     const DEFP = ['vcs', 'version', 'logins', 'deploy', 'updates', 'profile', 'settings'];
     const moved = window.bbPlace ? [...document.querySelectorAll('#nav [data-v]')].map(x => x.dataset.v).filter(v => !DEFP.includes(v) && bbPlace(v) === 'profile').map(navItem).join('') : '';
-    const manageRow = window.bbManage ? `<section class="tg-grp"><div class="tg-card"><button type="button" class="tg-item" data-q="manage menu move delete bar more profile left right sidebar" onclick="bbManage()"><span class="tg-ic" style="--c:#0ea5e9">🧩</span><span class="tg-tx"><b>Manage menu</b><small>Move options between Bar, More, Profile, Left bar and Right bar, or delete them</small></span></button></div></section>` : '';
+    const manageRow = window.bbManage ? `<section class="tg-grp"><div class="tg-card"><button type="button" class="tg-item" data-q="manage menu move delete bar more profile left right sidebar" onclick="bbManage()"><span class="tg-ic" style="--c:#0ea5e9">🧩</span><span class="tg-tx"><b>Manage menu</b><small>Move options between Bar, More, Profile and side bars, add side bars, or delete options</small></span></button></div></section>` : '';
     const movedHtml = manageRow + (moved ? `<section class="tg-grp"><div class="tg-gl">Moved here</div><div class="tg-card">${moved}</div></section>` : '');
-    const left = Object.keys(found).filter(k => !used.has(k));
+    const left = Object.keys(found).filter(k => !used.has(k) && setHere(k));
     return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards + movedHtml +
       (left.length ? `<section class="tg-grp"><div class="tg-gl">More</div><div class="tg-card">${left.map(tgItem).join('')}</div></section>` : '') + '<div class="empty-state hidden" id="setNone">No setting matches your search</div>';
   };

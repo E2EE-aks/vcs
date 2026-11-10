@@ -71,71 +71,104 @@
 
   /* ---------- where every option lives: bar | more | profile | deleted ---------- */
   var LOCK = ['dashboard', 'profile'];                 // always on the bar
-  var NODEL = ['dashboard', 'profile', 'settings'];    // can't be deleted
-  var MAXBAR = 6, MAXSIDE = 10;
+  var NODEL = ['dashboard', 'profile'];                // can't be deleted
+  var HIDE = ['settings'];                             // removed from every menu (its options now live as separate items)
+  var MAXBAR = 6, MAXSIDE = 10, MAXSBS = 6;
   var DEFPLACE = { dashboard: 'bar', profile: 'bar', chat: 'bar', telegram: 'bar', whatsapp: 'bar', mail: 'bar', settings: 'profile', vcs: 'profile', version: 'profile', logins: 'profile', deploy: 'profile', updates: 'profile' };
+  var ARROWS = { chev: ['›', '‹'], dbl: ['»', '«'], tri: ['▶', '◀'], menu: ['☰', '☰'] };
+  function normSb(x){ return { id: x.id, name: String(x.name == null ? '' : x.name).slice(0, 14), side: x.side === 'right' ? 'right' : 'left', arrow: ARROWS[x.arrow] ? x.arrow : 'chev', top: isFinite(+x.top) ? Math.max(5, Math.min(80, +x.top)) : 34 }; }
+  function sbList(){                                   // the side bars: Left + Right always, plus the ones the user added
+    var l = Array.isArray(cfg.place._sbs) ? cfg.place._sbs.filter(function(x){ return x && /^[a-z0-9]{2,12}$/.test(String(x.id)); }).map(normSb) : [];
+    [['left', '‹ Left'], ['right', 'Right ›']].forEach(function(d, n){ if (!l.some(function(x){ return x.id === d[0]; })) l.splice(n, 0, { id: d[0], name: d[1], side: d[0], arrow: 'chev', top: 34 }); });
+    return l.slice(0, MAXSBS);
+  }
+  function sbGet(id){ if (!id || id === 'bar' || id === 'more' || id === 'profile' || id === 'deleted') return null; return sbList().filter(function(x){ return x.id === id; })[0] || null; }
   function place(id){
     if (LOCK.indexOf(id) > -1) return 'bar';
     var p = cfg.place[id];
     if (p === 'deleted' && NODEL.indexOf(id) > -1) p = '';
-    if (p === 'bar' || p === 'more' || p === 'profile' || p === 'left' || p === 'right' || p === 'deleted') return p;
-    return DEFPLACE[id] || 'more';
+    if (p === 'bar' || p === 'more' || p === 'profile' || p === 'deleted') return p;
+    if (p && sbGet(p)) return p;
+    return DEFPLACE[id] || (id.indexOf('set:') === 0 ? 'profile' : 'more');
   }
   window.bbPlace = place;
+  /* settings options (Appearance, Employees, Users…) are menu options too — they come from app.js (ksSetList) */
+  var setCache = { key: '', list: [] };
+  function setOpts(){
+    var key = ''; try { key = S.me ? [S.me.id, S.me.role, JSON.stringify(S.me.perms || {})].join('|') : ''; } catch (e) {}
+    if (!key || typeof ksSetList !== 'function') return [];
+    if (setCache.key !== key || !setCache.list.length){ try { setCache.list = ksSetList() || []; setCache.key = key; } catch (e) { setCache.list = []; } }
+    return setCache.list;
+  }
+  function optInfo(id){
+    if (id.indexOf('set:') === 0){ var o = setOpts().filter(function(x){ return x.id === id; })[0]; return o ? { id: id, ic: o.ic, lb: o.lb } : null; }
+    var b = navBtn(id); return usable(b) ? info(b) : null;
+  }
+  function optIds(){
+    var ids = []; [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ if (HIDE.indexOf(b.dataset.v) < 0) ids.push(b.dataset.v); });
+    setOpts().forEach(function(o){ ids.push(o.id); }); return ids;
+  }
   function barIds(){
     var ids = [];
     FIXED.forEach(function(f){ if (place(f[0]) === 'bar') ids.push(f[0]); });
-    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ var id = b.dataset.v; if (ids.indexOf(id) < 0 && place(id) === 'bar') ids.push(id); });
+    optIds().forEach(function(id){ if (ids.indexOf(id) < 0 && place(id) === 'bar') ids.push(id); });
     return ids;
   }
+  function sideIds(sid){ return optIds().filter(function(id){ return place(id) === sid && optInfo(id); }); }
+  function curId(){ var cur = ''; try { cur = S.view || ''; if (cur === 'profile' && S.setSec && optInfo('set:' + S.setSec) && place('set:' + S.setSec) !== 'profile') cur = 'set:' + S.setSec; } catch (e) {} return cur; }
+  function navTo(id){ if (id.indexOf('set:') === 0){ if (typeof ksOpenSet === 'function') ksOpenSet(id.slice(4)); } else if (typeof go === 'function') go(id); }
   function applyPlace(){ [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ b.classList.toggle('ks-del', place(b.dataset.v) === 'deleted'); }); }
 
   var bar = document.createElement('nav'); bar.id = 'btmBar'; bar.className = 'hidden'; bar.setAttribute('aria-label', 'Main');
   var sheet = document.createElement('div'); sheet.id = 'btmSheet'; sheet.className = 'hidden';
   document.body.appendChild(bar); document.body.appendChild(sheet);
 
-  /* ---------- Left / Right side bars (slide out with an arrow) ---------- */
-  var sides = {};
-  ['left', 'right'].forEach(function(sd){
-    var el = document.createElement('div'); el.className = 'sbx hidden'; el.dataset.side = sd; el.id = 'sb-' + sd;
-    document.body.appendChild(el); sides[sd] = { el: el, open: false, html: '' };
-  });
-  function sideIds(sd){
-    var ids = [];
-    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ var id = b.dataset.v; if (place(id) === sd && usable(b)) ids.push(id); });
-    return ids;
+  /* ---------- Side bars (Left / Right + the ones you add): slide out with an arrow ---------- */
+  var sides = {}, vOff = true;
+  function syncSideEls(){
+    var keep = {};
+    sbList().forEach(function(sb){
+      keep[sb.id] = 1;
+      if (!sides[sb.id]){
+        var el = document.createElement('div'); el.className = 'sbx hidden'; el.id = 'sb-' + sb.id;
+        el.addEventListener('click', sideTap); document.body.appendChild(el); sides[sb.id] = { el: el, open: false, html: '' };
+      }
+      var S0 = sides[sb.id]; S0.sb = sb; S0.el.dataset.side = sb.side; S0.el.style.setProperty('--sbtop', sb.top + '%');
+    });
+    Object.keys(sides).forEach(function(k){ if (!keep[k]){ sides[k].el.remove(); delete sides[k]; } });
   }
-  function arrowOf(sd){ var o = sides[sd].open; return (sd === 'left') === o ? '‹' : '›'; }
+  function arrowOf(sb, open){ var a = ARROWS[sb.arrow] || ARROWS.chev; return (sb.side === 'left') === !!open ? a[1] : a[0]; }
   function drawSides(){
-    ['left', 'right'].forEach(function(sd){
-      var S0 = sides[sd], ids = sideIds(sd), h = '';
+    syncSideEls();
+    var cur = curId();
+    Object.keys(sides).forEach(function(k){
+      var S0 = sides[k], sb = S0.sb, ids = sideIds(k), h = '';
       ids.forEach(function(id){
-        var b = navBtn(id), i = info(b), badge = '';
+        var i = optInfo(id), badge = '';
         if (id === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
         h += '<button type="button" data-go="' + esc(id) + '"><span class="bi">' + iconFor(id, i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
       });
-      var html = ids.length ? '<div class="sb-panel">' + h + '</div><button type="button" class="sb-arrow" data-sbt="' + sd + '" aria-label="' + (sd === 'left' ? 'Left' : 'Right') + ' bar">' + arrowOf(sd) + '</button>' : '';
+      var html = ids.length ? '<div class="sb-panel">' + h + '</div><button type="button" class="sb-arrow" data-sbt="' + esc(k) + '" aria-label="' + esc(sb.name || 'Side bar') + '">' + arrowOf(sb, S0.open) + '</button>' : '';
       if (html !== S0.html){ S0.el.innerHTML = html; S0.html = html; }
       S0.el.classList.toggle('empty', !ids.length);
       S0.el.classList.toggle('open', S0.open && ids.length > 0);
-      var cur = ''; try { cur = S.view || ''; } catch (e) {}
+      S0.el.classList.toggle('hidden', vOff);
       [].forEach.call(S0.el.querySelectorAll('[data-go]'), function(b){ b.classList.toggle('on', b.dataset.go === cur); });
     });
   }
-  function toggleSide(sd, on){
-    ['left', 'right'].forEach(function(k){ sides[k].open = (k === sd) ? (on === undefined ? !sides[k].open : on) : false; });
-    sides.left.html = sides.right.html = ''; drawSides();
+  function toggleSide(id, on){
+    Object.keys(sides).forEach(function(k){ sides[k].open = (k === id) ? (on === undefined ? !sides[k].open : on) : false; });
+    drawSides();
   }
-  function closeSides(){ if (sides.left.open || sides.right.open) toggleSide('', false); }
+  function closeSides(){ var any = Object.keys(sides).some(function(k){ return sides[k].open; }); if (any) toggleSide('', false); }
   function sideTap(e){
     e.stopPropagation(); var t = e.target, a = t.closest('[data-sbt]');
     if (a){ toggleSide(a.dataset.sbt); return; }
     var g = t.closest('[data-go]'); if (!g) return;
-    closeSides(); openSheet(false); if (typeof go === 'function') go(g.dataset.go);
+    closeSides(); openSheet(false); navTo(g.dataset.go);
   }
-  ['left', 'right'].forEach(function(sd){ sides[sd].el.addEventListener('click', sideTap); });
   document.addEventListener('click', function(e){
-    if ((sides.left.open || sides.right.open) && !(e.target.closest && e.target.closest('.sbx'))) closeSides();
+    if (Object.keys(sides).some(function(k){ return sides[k].open; }) && !(e.target.closest && e.target.closest('.sbx'))) closeSides();
   });
 
   function vert(){ return cfg.pos === 'left' || cfg.pos === 'right'; }
@@ -173,8 +206,8 @@
     var h = '';
     applyPlace();
     barIds().forEach(function(id){
-      var b = navBtn(id); if (!usable(b)) return;
-      var i = info(b), badge = '';
+      var i = optInfo(id); if (!i) return;
+      var badge = '';
       if (id === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
       h += '<button type="button" data-go="' + id + '"><span class="bi">' + iconFor(id, i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
@@ -186,10 +219,11 @@
     mark(); remember(); moveInd(fresh);
   }
   function mark(){
-    var cur = ''; try { cur = S.view || ''; } catch (e) {}
+    var cur = curId();
+    var inSide = !!sbGet(place(cur));
     var inFixed = barIds().indexOf(cur) > -1, inProf = cur === 'profile' || (!inFixed && place(cur) === 'profile');
     [].forEach.call(bar.querySelectorAll('[data-go]'), function(b){ b.classList.toggle('on', b.dataset.go === 'profile' ? inProf : b.dataset.go === cur); });
-    var a = $('#btmAll'); if (a) a.classList.toggle('on', !!cur && !inFixed && !inProf);
+    var a = $('#btmAll'); if (a) a.classList.toggle('on', !!cur && !inFixed && !inProf && !inSide);
   }
 
   /* ---------- accounts on this phone (for Switch user) ---------- */
@@ -212,46 +246,84 @@
   function drawSheet(){
     var h = '<div class="bs-card"><div class="bs-h"><b>More</b><span class="bs-hb"><button type="button" class="bs-ed" data-manage="1" aria-label="Manage menu" title="Manage menu">✎</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div><div class="bs-g">';
     var n = 0;
-    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
-      if (!usable(b) || place(b.dataset.v) !== 'more') return; var i = info(b);
+    optIds().forEach(function(id){
+      if (place(id) !== 'more') return; var i = optInfo(id); if (!i) return;
       h += '<button type="button" style="--i:' + (n++) + '" data-go="' + esc(i.id) + '"><span>' + esc(i.ic) + '</span><small>' + esc(i.lb) + '</small></button>';
     });
     if (!n) h += '<div class="mg-none" style="grid-column:1/-1">Nothing here. Tap ✎ to move options into More.</div>';
     sheet.innerHTML = h + '</div></div>';
   }
   function drawManage(){
-    var rows = '', del = '', nBar = 0;
-    var seg = function(id, p){ return [['bar', 'Bar'], ['more', 'More'], ['profile', 'Profile'], ['left', '‹ Left'], ['right', 'Right ›']].map(function(o){ return '<button type="button" class="' + (p === o[0] ? 'on' : '') + '" data-mv="' + esc(id) + '|' + o[0] + '">' + o[1] + '</button>'; }).join(''); };
-    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
-      if (b.classList.contains('hidden') || b.classList.contains('th-off')) return;
-      var i = info(b), p = place(i.id);
+    var rows = '', setRows = '', del = '', nBar = 0, sbs = sbList();
+    var segOpts = [['bar', 'Bar'], ['more', 'More'], ['profile', 'Profile']].concat(sbs.map(function(x){ return [x.id, x.name || 'Side bar']; }));
+    var seg = function(id, p){ return segOpts.map(function(o){ return '<button type="button" class="' + (p === o[0] ? 'on' : '') + '" data-mv="' + esc(id) + '|' + esc(o[0]) + '">' + esc(o[1]) + '</button>'; }).join(''); };
+    var addRow = function(i){
+      var p = place(i.id);
       if (p === 'deleted'){ del += '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b><button type="button" class="mg-rs" data-res="' + esc(i.id) + '">↩ Restore</button></div>'; return; }
       if (p === 'bar') nBar++;
-      rows += '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b>' +
+      var r = '<div class="mg-r"><span class="mg-i">' + esc(i.ic) + '</span><b>' + esc(i.lb) + '</b>' +
         (LOCK.indexOf(i.id) > -1 ? '<span class="mg-lock">always on bar</span>' : '<span class="mg-seg">' + seg(i.id, p) + '</span>') +
         (NODEL.indexOf(i.id) > -1 ? '<span class="mg-d0"></span>' : '<button type="button" class="mg-d" data-del="' + esc(i.id) + '" aria-label="Delete">🗑</button>') + '</div>';
+      if (i.id.indexOf('set:') === 0) setRows += r; else rows += r;
+    };
+    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
+      if (b.classList.contains('hidden') || b.classList.contains('th-off') || HIDE.indexOf(b.dataset.v) > -1) return;
+      addRow(info(b));
     });
+    setOpts().forEach(function(o){ addRow({ id: o.id, ic: o.ic, lb: o.lb }); });
+    var sbh = '<div class="bs-sub">Side bars</div><div class="mg-l">' + sbs.map(function(x){
+      return '<div class="mg-r"><span class="mg-i">' + (x.side === 'left' ? '‹' : '›') + '</span><b>' + esc(x.name || 'Side bar') + '</b><small class="mg-n">' + sideIds(x.id).length + ' options · ' + x.side + '</small><button type="button" class="mg-d" data-sbedit="' + esc(x.id) + '" aria-label="Customize side bar" title="Customize">✎</button></div>';
+    }).join('') + (sbs.length < MAXSBS ? '<button type="button" class="btn block" data-sbadd="1">＋ Add side bar</button>' : '') + '</div>';
     sheet.innerHTML = '<div class="bs-card"><div class="bs-h"><b>Manage menu</b><span class="bs-hb"><button type="button" data-back="1" aria-label="Back to More" title="Back">‹</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div>' +
-      '<p class="muted" style="font-size:12.5px;margin:0 0 10px">Choose where each option lives: <b>Bar</b> (bottom bar, max ' + MAXBAR + ' — now ' + nBar + '), <b>More</b>, <b>Profile</b>, <b>‹ Left</b> bar or <b>Right ›</b> bar (open with the arrow on the screen edge). 🗑 deletes an option (you can restore it below).</p>' +
-      '<div class="mg-l">' + rows + '</div>' + (del ? '<div class="bs-sub">Deleted</div><div class="mg-l">' + del + '</div>' : '') + '</div>';
+      '<p class="muted" style="font-size:12.5px;margin:0 0 10px">Choose where each option lives: <b>Bar</b> (bottom bar, max ' + MAXBAR + ' — now ' + nBar + '), <b>More</b>, <b>Profile</b> or a <b>side bar</b> (opens with the arrow on the screen edge). Tap ✎ on a side bar to customize it. 🗑 deletes an option (you can restore it below). Your choices are saved in your own account.</p>' +
+      sbh + '<div class="bs-sub">Options</div><div class="mg-l">' + rows + '</div>' +
+      (setRows ? '<div class="bs-sub">Settings options</div><div class="mg-l">' + setRows + '</div>' : '') +
+      (del ? '<div class="bs-sub">Deleted</div><div class="mg-l">' + del + '</div>' : '') + '</div>';
   }
+  var editSb = '';
+  function drawSbEdit(){
+    var sb = sbGet(editSb); if (!sb){ drawManage(); return; }
+    var opt = function(v, l, cur){ return '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + l + '</option>'; };
+    var builtin = sb.id === 'left' || sb.id === 'right';
+    sheet.innerHTML = '<div class="bs-card"><div class="bs-h"><b>Customize side bar</b><span class="bs-hb"><button type="button" data-backm="1" aria-label="Back" title="Back">‹</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div>' +
+      '<div class="sbf"><label>Name</label><input class="input" data-sbf="name" maxlength="14" value="' + esc(sb.name) + '"></div>' +
+      '<div class="sbf"><label>Side of the screen</label><select class="select" data-sbf="side">' + opt('left', 'Left', sb.side) + opt('right', 'Right', sb.side) + '</select></div>' +
+      '<div class="sbf"><label>Arrow icon</label><select class="select" data-sbf="arrow">' + opt('chev', 'Arrow  ‹ ›', sb.arrow) + opt('dbl', 'Double arrow  « »', sb.arrow) + opt('tri', 'Triangle  ◀ ▶', sb.arrow) + opt('menu', 'Menu  ☰', sb.arrow) + '</select></div>' +
+      '<div class="sbf"><label>Arrow &amp; bar height <b id="sbTopV">' + sb.top + '%</b></label><input type="range" data-sbf="top" min="5" max="80" value="' + sb.top + '"></div>' +
+      '<p class="muted" style="font-size:12px;margin:8px 0">Options in this side bar: ' + sideIds(sb.id).length + '. Move options here from Manage menu.</p>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn ghost" data-sbreset="' + esc(sb.id) + '">' + (builtin ? '↺ Reset this side bar' : '🗑 Delete this side bar') + '</button></div></div>';
+  }
+  function sbMut(fn){
+    var l = sbList().map(function(x){ return JSON.parse(JSON.stringify(x)); }); fn(l);
+    cfg.place._sbs = l; savePlace(); drawSides();
+  }
+  function onSbf(e){
+    var t = e.target, k = t && t.getAttribute && t.getAttribute('data-sbf'); if (!k || !editSb) return;
+    sbMut(function(l){
+      var sb = l.filter(function(x){ return x.id === editSb; })[0]; if (!sb) return;
+      if (k === 'top'){ sb.top = +t.value; var lab = document.getElementById('sbTopV'); if (lab) lab.textContent = t.value + '%'; }
+      else if (k === 'name') sb.name = t.value.slice(0, 14);
+      else sb[k] = t.value;
+    });
+  }
+  sheet.addEventListener('input', onSbf); sheet.addEventListener('change', onSbf);
   function redrawManage(){ var c = sheet.querySelector('.bs-card'), t = c ? c.scrollTop : 0; drawManage(); c = sheet.querySelector('.bs-card'); if (c) c.scrollTop = t; }
   function say(m){ try { if (typeof toast === 'function') toast(m); } catch (e) {} }
   function commit(){
-    saveCfg(); savePlace(); sides.left.html = sides.right.html = ''; applyPlace(); lastHtml = ''; draw(); requestAnimationFrame(gap);
+    saveCfg(); savePlace(); applyPlace(); lastHtml = ''; draw(); requestAnimationFrame(gap);
     if (!sheet.classList.contains('hidden')) redrawManage();
     try { if (typeof S !== 'undefined' && S.view === 'profile') refreshView(); } catch (e) {}
   }
   function setPlace(id, to){
-    var def = DEFPLACE[id] || 'more';
+    var def = DEFPLACE[id] || (id.indexOf('set:') === 0 ? 'profile' : 'more');
     if (LOCK.indexOf(id) > -1) return;
     if (to === 'bar' && place(id) !== 'bar'){
-      var n = barIds().filter(function(x){ return x !== id && usable(navBtn(x)); }).length;
+      var n = barIds().filter(function(x){ return x !== id && optInfo(x); }).length;
       if (n >= MAXBAR){ say('Bottom bar is full (max ' + MAXBAR + '). Move another option out of the bar first.'); return; }
     }
-    if ((to === 'left' || to === 'right') && place(id) !== to){
+    if (sbGet(to) && place(id) !== to){
       var m = sideIds(to).filter(function(x){ return x !== id; }).length;
-      if (m >= MAXSIDE){ say((to === 'left' ? 'Left' : 'Right') + ' bar is full (max ' + MAXSIDE + ').'); return; }
+      if (m >= MAXSIDE){ say('This side bar is full (max ' + MAXSIDE + ').'); return; }
     }
     if (to === def) delete cfg.place[id]; else cfg.place[id] = to;
     commit();
@@ -271,7 +343,7 @@
     sheet.innerHTML = h;
   }
   function openSheet(on, kind){
-    if (on){ openedAt = Date.now(); if (kind === 'switch') drawSwitch(); else if (kind === 'manage') drawManage(); else drawSheet(); }
+    if (on){ openedAt = Date.now(); if (kind === 'switch') drawSwitch(); else if (kind === 'manage') drawManage(); else if (kind === 'sbedit') drawSbEdit(); else drawSheet(); }
     sheet.classList.toggle('hidden', !on); document.body.classList.toggle('btm-sheet', !!on);
   }
   function switchTo(id){
@@ -292,6 +364,24 @@
     }
     var rs = t.closest('[data-res]'); if (rs){ delete cfg.place[rs.dataset.res]; commit(); return; }
     if (t.closest('[data-manage]')){ openSheet(true, 'manage'); return; }
+    if (t.closest('[data-backm]')){ openSheet(true, 'manage'); return; }
+    if (t.closest('[data-sbadd]')){
+      var nid = 'sb' + Date.now().toString(36).slice(-6), nn = sbList().length - 1;
+      sbMut(function(l){ l.push({ id: nid, name: 'Side bar ' + nn, side: 'left', arrow: 'chev', top: 55 }); });
+      editSb = nid; openSheet(true, 'sbedit'); return;
+    }
+    var se = t.closest('[data-sbedit]'); if (se){ editSb = se.dataset.sbedit; openSheet(true, 'sbedit'); return; }
+    var sr = t.closest('[data-sbreset]'); if (sr){
+      var rid = sr.dataset.sbreset;
+      if (rid === 'left' || rid === 'right') sbMut(function(l){ l.forEach(function(x, n){ if (x.id === rid) l[n] = { id: rid, name: rid === 'left' ? '‹ Left' : 'Right ›', side: rid, arrow: 'chev', top: 34 }; }); });
+      else {
+        sbMut(function(l){ for (var n = l.length - 1; n >= 0; n--) if (l[n].id === rid) l.splice(n, 1); });
+        Object.keys(cfg.place).forEach(function(k){ if (cfg.place[k] === rid) delete cfg.place[k]; });
+        savePlace(); lastHtml = ''; draw(); say('Side bar deleted');
+      }
+      if (rid === 'left' || rid === 'right') openSheet(true, 'sbedit'); else openSheet(true, 'manage');
+      return;
+    }
     if (t.closest('[data-back]')){ openSheet(true); return; }
     var sw = t.closest('[data-sw]'); if (sw){ switchTo(sw.dataset.sw); return; }
     var ax = t.closest('[data-acx]'); if (ax){ saveAccts(accts().filter(function(x){ return x.id !== ax.dataset.acx; })); drawSwitch(); return; }
@@ -299,7 +389,7 @@
     if (t.closest('[data-all]')){ openSheet(sheet.classList.contains('hidden')); return; }
     var g = t.closest('[data-go]'); if (!g) return;
     if (lpFired && g.dataset.go === 'profile'){ lpFired = false; return; }
-    openSheet(false); if (typeof go === 'function') go(g.dataset.go);
+    openSheet(false); navTo(g.dataset.go);
   }
   bar.addEventListener('click', onTap); sheet.addEventListener('click', onTap);
   bar.addEventListener('contextmenu', function(e){ e.preventDefault(); });
@@ -317,7 +407,7 @@
     var b = document.body, off = app.classList.contains('hidden') || b.classList.contains('vc-open') || b.classList.contains('menu-open') ||
       b.classList.contains('chat-conv') || !!$('.chat.in-conv') || kb;
     bar.classList.toggle('hidden', off);
-    ['left', 'right'].forEach(function(k){ sides[k].el.classList.toggle('hidden', off); });
+    vOff = off; Object.keys(sides).forEach(function(k){ sides[k].el.classList.toggle('hidden', off); });
     if (off) closeSides();
     b.classList.toggle('has-btm', !off);
     if (!off){ gap(); requestAnimationFrame(function(){ moveInd(true); }); }
