@@ -2316,7 +2316,37 @@ function vDashboard(){
       <div style="margin-top:10px"><button class="btn ghost sm" onclick="go('work')">Open Work →</button></div></div>`;
 
   const body = (P.att === 'none' ? '' : attHtml) + (P.exp === 'none' ? '' : expHtml) + (P.work === 'none' ? '' : workHtml);
-  return dashHello() + (body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`);
+  return dashSearchBox() + dashHello() + (body || `<div class="card"><div class="empty-state">No sections are enabled for your account. Please contact the admin.</div></div>`);
+}
+/* ---------- Dashboard search: pages, settings, expenses, work, logins, links ---------- */
+function dashSearchBox(){
+  return `<div class="dsrch"><div class="set-search"><span aria-hidden="true">🔍</span><input id="dsQ" type="search" class="input" placeholder="Search anything…" autocomplete="off" oninput="dashSearch(this.value)"></div><div class="dsrch-res hidden" id="dsRes"></div></div>`;
+}
+function dashSearch(q){
+  const box = document.getElementById('dsRes'); if (!box) return;
+  q = (q || '').trim().toLowerCase();
+  if (!q){ box.classList.add('hidden'); box.innerHTML = ''; return; }
+  const words = q.split(/\s+/), hit = t => { t = String(t || '').toLowerCase(); return words.every(w => t.includes(w)); };
+  const groups = [], add = (title, rows) => { if (rows.length) groups.push([title, rows.slice(0, 8)]); };
+  const row = (ic, a, b, act) => `<button type="button" class="dsrch-r" onclick="${act}"><span class="dsrch-i">${esc(ic)}</span><span class="dsrch-t"><b>${esc(a)}</b><small>${esc(b || '')}</small></span></button>`;
+  const pages = [];
+  document.querySelectorAll('#nav button[data-v]').forEach(b => {
+    if (b.classList.contains('hidden') || b.classList.contains('th-off') || b.classList.contains('ks-del')) return;
+    const v = b.dataset.v, t = TITLES[v] || [v, ''];
+    if (hit(t[0] + ' ' + t[1] + ' ' + v)) pages.push(row((b.querySelector('.ico') || {}).textContent || '•', t[0], t[1], `go('${v}')`));
+  });
+  add('Pages', pages);
+  const sets = Object.keys(SET_DEF).filter(k => hit(SET_DEF[k][1] + ' ' + SET_DEF[k][2])).map(k => row(SET_DEF[k][0], SET_DEF[k][1], 'Settings · ' + SET_DEF[k][2], `go('settings');setOpen('${k}')`));
+  add('Settings', sets);
+  const D = S.d || {}, P = perms ? perms() : {};
+  if (P.exp !== 'none') add('Expenses', (D.expenses || []).filter(x => hit([x.date, x.category, x.note, x.amount].join(' '))).sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    .map(x => row('💸', (x.category || '') + ' · ' + fm(x.amount), [fmtDateNice(x.date), x.note].filter(Boolean).join(' · '), `go('expenses')`)));
+  if (P.work !== 'none') add('Work', (D.work || []).filter(x => hit([x.date, x.name, x.product, x.number].join(' '))).sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    .map(x => row('🛠️', x.name || '—', [fmtDateNice(x.date), x.product, x.number].filter(Boolean).join(' · '), `go('work')`)));
+  if (P.pw !== 'none') add('Passwords', (D.passwords || []).filter(x => hit([x.url, x.user].join(' '))).map(x => row('🔑', x.url || '—', x.user || '', `go('passwords')`)));
+  if (P.link !== 'none') add('Links', (D.links || []).filter(x => hit([x.name, x.type, x.link].join(' '))).map(x => row('🔗', x.name || '—', [x.type, x.link].filter(Boolean).join(' · '), `go('links')`)));
+  box.classList.remove('hidden');
+  box.innerHTML = groups.length ? groups.map(g => `<div class="dsrch-g">${esc(g[0])}</div>${g[1].join('')}`).join('') : '<div class="empty-state">Nothing found</div>';
 }
 function dashHello(){
   const me = S.me || {}, now = new Date(), hr = now.getHours();
@@ -4491,7 +4521,7 @@ function settingsHub(grid, groups = SET_GROUPS, tg = false){
       return (ks.length || extra) ? `<section class="tg-grp"><div class="tg-gl">${esc(g)}</div><div class="tg-card">${extra}${ks.map(tgItem).join('')}</div></section>` : ''; }).join('');
     const DEFP = ['vcs', 'version', 'logins', 'deploy', 'updates', 'profile', 'settings'];
     const moved = window.bbPlace ? [...document.querySelectorAll('#nav [data-v]')].map(x => x.dataset.v).filter(v => !DEFP.includes(v) && bbPlace(v) === 'profile').map(navItem).join('') : '';
-    const manageRow = window.bbManage ? `<section class="tg-grp"><div class="tg-card"><button type="button" class="tg-item" data-q="manage menu move delete bar more profile" onclick="bbManage()"><span class="tg-ic" style="--c:#0ea5e9">🧩</span><span class="tg-tx"><b>Manage menu</b><small>Move options between Bar, More and Profile, or delete them</small></span></button></div></section>` : '';
+    const manageRow = window.bbManage ? `<section class="tg-grp"><div class="tg-card"><button type="button" class="tg-item" data-q="manage menu move delete bar more profile left right sidebar" onclick="bbManage()"><span class="tg-ic" style="--c:#0ea5e9">🧩</span><span class="tg-tx"><b>Manage menu</b><small>Move options between Bar, More, Profile, Left bar and Right bar, or delete them</small></span></button></div></section>` : '';
     const movedHtml = manageRow + (moved ? `<section class="tg-grp"><div class="tg-gl">Moved here</div><div class="tg-card">${moved}</div></section>` : '');
     const left = Object.keys(found).filter(k => !used.has(k));
     return head + `<div class="set-search tg-search"><span aria-hidden="true">🔍</span><input id="setQ" type="search" class="input" placeholder="Search settings…" autocomplete="off" oninput="setFilter(this.value)"></div>` + cards + movedHtml +

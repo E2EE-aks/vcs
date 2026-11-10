@@ -43,13 +43,13 @@
   /* ---------- where every option lives: bar | more | profile | deleted ---------- */
   var LOCK = ['dashboard', 'profile'];                 // always on the bar
   var NODEL = ['dashboard', 'profile', 'settings'];    // can't be deleted
-  var MAXBAR = 6;
+  var MAXBAR = 6, MAXSIDE = 10;
   var DEFPLACE = { dashboard: 'bar', profile: 'bar', chat: 'bar', telegram: 'bar', whatsapp: 'bar', mail: 'bar', settings: 'profile', vcs: 'profile', version: 'profile', logins: 'profile', deploy: 'profile', updates: 'profile' };
   function place(id){
     if (LOCK.indexOf(id) > -1) return 'bar';
     var p = cfg.place[id];
     if (p === 'deleted' && NODEL.indexOf(id) > -1) p = '';
-    if (p === 'bar' || p === 'more' || p === 'profile' || p === 'deleted') return p;
+    if (p === 'bar' || p === 'more' || p === 'profile' || p === 'left' || p === 'right' || p === 'deleted') return p;
     return DEFPLACE[id] || 'more';
   }
   window.bbPlace = place;
@@ -64,6 +64,50 @@
   var bar = document.createElement('nav'); bar.id = 'btmBar'; bar.className = 'hidden'; bar.setAttribute('aria-label', 'Main');
   var sheet = document.createElement('div'); sheet.id = 'btmSheet'; sheet.className = 'hidden';
   document.body.appendChild(bar); document.body.appendChild(sheet);
+
+  /* ---------- Left / Right side bars (slide out with an arrow) ---------- */
+  var sides = {};
+  ['left', 'right'].forEach(function(sd){
+    var el = document.createElement('div'); el.className = 'sbx hidden'; el.dataset.side = sd; el.id = 'sb-' + sd;
+    document.body.appendChild(el); sides[sd] = { el: el, open: false, html: '' };
+  });
+  function sideIds(sd){
+    var ids = [];
+    [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){ var id = b.dataset.v; if (place(id) === sd && usable(b)) ids.push(id); });
+    return ids;
+  }
+  function arrowOf(sd){ var o = sides[sd].open; return (sd === 'left') === o ? '‹' : '›'; }
+  function drawSides(){
+    ['left', 'right'].forEach(function(sd){
+      var S0 = sides[sd], ids = sideIds(sd), h = '';
+      ids.forEach(function(id){
+        var b = navBtn(id), i = info(b), badge = '';
+        if (id === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
+        h += '<button type="button" data-go="' + esc(id) + '"><span class="bi">' + iconFor(id, i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
+      });
+      var html = ids.length ? '<div class="sb-panel">' + h + '</div><button type="button" class="sb-arrow" data-sbt="' + sd + '" aria-label="' + (sd === 'left' ? 'Left' : 'Right') + ' bar">' + arrowOf(sd) + '</button>' : '';
+      if (html !== S0.html){ S0.el.innerHTML = html; S0.html = html; }
+      S0.el.classList.toggle('empty', !ids.length);
+      S0.el.classList.toggle('open', S0.open && ids.length > 0);
+      var cur = ''; try { cur = S.view || ''; } catch (e) {}
+      [].forEach.call(S0.el.querySelectorAll('[data-go]'), function(b){ b.classList.toggle('on', b.dataset.go === cur); });
+    });
+  }
+  function toggleSide(sd, on){
+    ['left', 'right'].forEach(function(k){ sides[k].open = (k === sd) ? (on === undefined ? !sides[k].open : on) : false; });
+    sides.left.html = sides.right.html = ''; drawSides();
+  }
+  function closeSides(){ if (sides.left.open || sides.right.open) toggleSide('', false); }
+  function sideTap(e){
+    e.stopPropagation(); var t = e.target, a = t.closest('[data-sbt]');
+    if (a){ toggleSide(a.dataset.sbt); return; }
+    var g = t.closest('[data-go]'); if (!g) return;
+    closeSides(); openSheet(false); if (typeof go === 'function') go(g.dataset.go);
+  }
+  ['left', 'right'].forEach(function(sd){ sides[sd].el.addEventListener('click', sideTap); });
+  document.addEventListener('click', function(e){
+    if ((sides.left.open || sides.right.open) && !(e.target.closest && e.target.closest('.sbx'))) closeSides();
+  });
 
   function vert(){ return cfg.pos === 'left' || cfg.pos === 'right'; }
   function gap(){ document.body.style.setProperty('--bb-gap', (vert() ? (bar.offsetWidth || 78) + 22 : (bar.offsetHeight || 64) + 36) + 'px'); }
@@ -105,6 +149,7 @@
       h += '<button type="button" data-go="' + id + '"><span class="bi">' + iconFor(id, i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
     h = '<i class="bb-ind"></i>' + h;
+    drawSides();
     h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + iconFor('all') + '</span><small>More</small></button>';
     var fresh = h !== lastHtml;
     if (fresh){ bar.innerHTML = h; lastHtml = h; }
@@ -146,7 +191,7 @@
   }
   function drawManage(){
     var rows = '', del = '', nBar = 0;
-    var seg = function(id, p){ return [['bar', 'Bar'], ['more', 'More'], ['profile', 'Profile']].map(function(o){ return '<button type="button" class="' + (p === o[0] ? 'on' : '') + '" data-mv="' + esc(id) + '|' + o[0] + '">' + o[1] + '</button>'; }).join(''); };
+    var seg = function(id, p){ return [['bar', 'Bar'], ['more', 'More'], ['profile', 'Profile'], ['left', '‹ Left'], ['right', 'Right ›']].map(function(o){ return '<button type="button" class="' + (p === o[0] ? 'on' : '') + '" data-mv="' + esc(id) + '|' + o[0] + '">' + o[1] + '</button>'; }).join(''); };
     [].forEach.call(nav.querySelectorAll('button[data-v]'), function(b){
       if (b.classList.contains('hidden') || b.classList.contains('th-off')) return;
       var i = info(b), p = place(i.id);
@@ -157,13 +202,13 @@
         (NODEL.indexOf(i.id) > -1 ? '<span class="mg-d0"></span>' : '<button type="button" class="mg-d" data-del="' + esc(i.id) + '" aria-label="Delete">🗑</button>') + '</div>';
     });
     sheet.innerHTML = '<div class="bs-card"><div class="bs-h"><b>Manage menu</b><span class="bs-hb"><button type="button" data-back="1" aria-label="Back to More" title="Back">‹</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div>' +
-      '<p class="muted" style="font-size:12.5px;margin:0 0 10px">Choose where each option lives: <b>Bar</b> (bottom bar, max ' + MAXBAR + ' — now ' + nBar + '), <b>More</b>, or <b>Profile</b>. 🗑 deletes an option (you can restore it below).</p>' +
+      '<p class="muted" style="font-size:12.5px;margin:0 0 10px">Choose where each option lives: <b>Bar</b> (bottom bar, max ' + MAXBAR + ' — now ' + nBar + '), <b>More</b>, <b>Profile</b>, <b>‹ Left</b> bar or <b>Right ›</b> bar (open with the arrow on the screen edge). 🗑 deletes an option (you can restore it below).</p>' +
       '<div class="mg-l">' + rows + '</div>' + (del ? '<div class="bs-sub">Deleted</div><div class="mg-l">' + del + '</div>' : '') + '</div>';
   }
   function redrawManage(){ var c = sheet.querySelector('.bs-card'), t = c ? c.scrollTop : 0; drawManage(); c = sheet.querySelector('.bs-card'); if (c) c.scrollTop = t; }
   function say(m){ try { if (typeof toast === 'function') toast(m); } catch (e) {} }
   function commit(){
-    saveCfg(); applyPlace(); lastHtml = ''; draw(); requestAnimationFrame(gap);
+    saveCfg(); sides.left.html = sides.right.html = ''; applyPlace(); lastHtml = ''; draw(); requestAnimationFrame(gap);
     if (!sheet.classList.contains('hidden')) redrawManage();
     try { if (typeof S !== 'undefined' && S.view === 'profile') refreshView(); } catch (e) {}
   }
@@ -173,6 +218,10 @@
     if (to === 'bar' && place(id) !== 'bar'){
       var n = barIds().filter(function(x){ return x !== id && usable(navBtn(x)); }).length;
       if (n >= MAXBAR){ say('Bottom bar is full (max ' + MAXBAR + '). Move another option out of the bar first.'); return; }
+    }
+    if ((to === 'left' || to === 'right') && place(id) !== to){
+      var m = sideIds(to).filter(function(x){ return x !== id; }).length;
+      if (m >= MAXSIDE){ say((to === 'left' ? 'Left' : 'Right') + ' bar is full (max ' + MAXSIDE + ').'); return; }
     }
     if (to === def) delete cfg.place[id]; else cfg.place[id] = to;
     commit();
@@ -238,6 +287,8 @@
     var b = document.body, off = app.classList.contains('hidden') || b.classList.contains('vc-open') || b.classList.contains('menu-open') ||
       b.classList.contains('chat-conv') || !!$('.chat.in-conv') || kb;
     bar.classList.toggle('hidden', off);
+    ['left', 'right'].forEach(function(k){ sides[k].el.classList.toggle('hidden', off); });
+    if (off) closeSides();
     b.classList.toggle('has-btm', !off);
     if (!off){ gap(); requestAnimationFrame(function(){ moveInd(true); }); }
     if (app.classList.contains('hidden')) openSheet(false);
