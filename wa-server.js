@@ -15,7 +15,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 module.exports = function makeWhatsApp(o) {
-  const { env, warn, sign } = o;
+  const { env, warn, sign, withWb, enc, dec } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
   const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll']);
@@ -41,6 +41,83 @@ module.exports = function makeWhatsApp(o) {
   const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), blueMap: new Map(), hideAll: true, lid: new Map(), stat: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
   const hasSaved = uid => { try { const c = JSON.parse(fs.readFileSync(path.join(udir(uid), 'creds.json'), 'utf8')); return !!(c && c.me); } catch (e) { return false; } };   // only a really linked login counts (half-finished QR logins are ignored)
   const wipe = uid => { try { fs.rmSync(udir(uid), { recursive: true, force: true }); } catch (e) {} };
+
+  /* ---------- the WhatsApp login survives a redeploy / restart ----------
+     On Render's free plan the disk is wiped on every deploy, so the login files would vanish and you would be logged out.
+     Fix: a copy of the login (creds + keys + a slim chat list) is kept ENCRYPTED in the sheet properties (like Telegram's session)
+     and put back automatically when the files are missing.  It is deleted only when YOU log out (or WhatsApp itself logs this device out). */
+  const zlib = require('zlib');
+  const PROPS = () => globalThis.PropertiesService.getScriptProperties();
+  const BK_CHUNK = 40000, BK_MAX = 40;                      // sheet cells hold 50 000 characters; at most 40 cells per user
+  const bkPre = uid => 'WA_BK_' + String(uid).replace(/[^\w-]/g, '_') + '_';
+  function slimStore(txt) {                                  // keep the chat list small enough for the sheet
+    try {
+      const j = JSON.parse(txt), msgs = {}, top = (j.chats || []).slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 60);
+      top.forEach(c => { const l = (j.msgs || {})[c.id]; if (l) msgs[c.id] = l.slice(-15).map(m => { const x = Object.assign({}, m); delete x.thumb; return x; }); });
+      return JSON.stringify({ chats: j.chats || [], contacts: j.contacts || [], lids: j.lids || {}, blueMap: j.blueMap || {}, hideAll: j.hideAll, msgs });
+    } catch (e) { return ''; }
+  }
+  function packFiles(uid, withStore) {
+    const d = udir(uid), files = {};
+    let names; try { names = fs.readdirSync(d); } catch (e) { return ''; }
+    names.forEach(n => {
+      try {
+        let c = fs.readFileSync(path.join(d, n), 'utf8');
+        if (n === 'store.json') { if (!withStore) return; c = slimStore(c); if (!c) return; }
+        files[n] = c;
+      } catch (e) {}
+    });
+    if (!files['creds.json']) return '';
+    return zlib.gzipSync(Buffer.from(JSON.stringify(files), 'utf8')).toString('base64');
+  }
+  async function backup(uid) {
+    const s = st(uid);
+    if (!withWb || !enc || !hasSaved(uid) || s.bkBusy) return;
+    s.bkBusy = true;
+    try {
+      let raw = packFiles(uid, true);
+      if (Math.ceil(raw.length * 1.4 / BK_CHUNK) > BK_MAX) raw = packFiles(uid, false);      // too big -> keep the login only
+      if (!raw || raw === s.bkLast) return;
+      const blob = enc(raw), chunks = []; for (let i = 0; i < blob.length; i += BK_CHUNK) chunks.push(blob.slice(i, i + BK_CHUNK));
+      if (chunks.length > BK_MAX) { warn('WhatsApp backup too big', chunks.length); return; }
+      await withWb(() => {
+        if (!hasSaved(uid)) return;                           // logged out meanwhile -> do not bring the backup back
+        const P = PROPS(), k = bkPre(uid), old = Number(P.getProperty(k + 'n') || 0);
+        chunks.forEach((c, i) => P.setProperty(k + i, c));
+        for (let i = chunks.length; i < old; i++) P.setProperty(k + i, '');
+        P.setProperty(k + 'n', String(chunks.length));
+      });
+      s.bkLast = raw;
+    } catch (e) { warn('WhatsApp backup', e && e.message); }
+    finally { s.bkBusy = false; }
+  }
+  function scheduleBackup(uid, ms) {
+    const s = st(uid); if (s.bkT || !withWb) return;
+    s.bkT = setTimeout(() => { s.bkT = null; backup(uid); }, ms);
+  }
+  async function forgetBackup(uid) {
+    const s = st(uid); s.bkLast = ''; if (s.bkT) { clearTimeout(s.bkT); s.bkT = null; }
+    if (!withWb) return;
+    try { await withWb(() => { const P = PROPS(), k = bkPre(uid), n = Number(P.getProperty(k + 'n') || 0); if (!n) return; for (let i = 0; i < n; i++) P.setProperty(k + i, ''); P.setProperty(k + 'n', '0'); }); }
+    catch (e) { warn('WhatsApp backup delete', e && e.message); }
+  }
+  function restore(uid) {                                    // files missing (fresh deploy)? put the saved login back
+    if (!withWb || !dec || hasSaved(uid)) return Promise.resolve(false);
+    const s = st(uid); if (s.restoring) return s.restoring;
+    s.restoring = (async () => {
+      try {
+        const raw = await withWb(() => { const P = PROPS(), k = bkPre(uid), n = Number(P.getProperty(k + 'n') || 0); let b = ''; for (let i = 0; i < n; i++) b += P.getProperty(k + i) || ''; return b; });
+        if (!raw) return false;
+        const gz = dec(raw); if (!gz) return false;
+        const files = JSON.parse(zlib.gunzipSync(Buffer.from(gz, 'base64')).toString('utf8'));
+        fs.mkdirSync(udir(uid), { recursive: true });
+        Object.keys(files).forEach(n => { if (/[\\/]|\.\./.test(n)) return; fs.writeFileSync(path.join(udir(uid), n), files[n]); });
+        return hasSaved(uid);
+      } catch (e) { warn('WhatsApp restore', e && e.message); return false; }
+      finally { s.restoring = null; }
+    })();
+    return s.restoring;
+  }
 
   /* ---------- the chat list + messages survive a server restart (store.json, no media inside) ---------- */
   function loadStore(uid, s) {
@@ -236,13 +313,13 @@ module.exports = function makeWhatsApp(o) {
       getMessage: async () => undefined }, useVer ? { version } : {}));
     s.sock = sock;
     const wd = setTimeout(() => { if (s.gen === gen && s.status === 'starting') { s.err = 'WhatsApp did not answer in time. Tap “Show QR code” to try again.'; try { sock.end(undefined); } catch (e) {} } }, 30000);   // no QR in 30 s -> give up with a message
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', () => { Promise.resolve(saveCreds()).catch(() => {}).then(() => scheduleBackup(uid, 5000)); });   // keep the sheet copy of the login up to date
     sock.ev.on('connection.update', async u => {
       if (s.gen !== gen) return;
       const { connection, lastDisconnect, qr } = u;
       if (qr) { try { s.qr = await qrLib().toDataURL(qr, { margin: 1, width: 320 }); s.status = 'qr'; s.err = ''; clearTimeout(wd); } catch (e) { warn('WhatsApp QR error', e && e.message); s.err = 'Could not draw the QR code: ' + String((e && e.message) || e).slice(0, 100); } }
       if (connection === 'open') {
-        clearTimeout(wd); s.err = '';
+        clearTimeout(wd); s.err = ''; scheduleBackup(uid, 8000);
         setTimeout(() => { if (s.gen === gen && s.status === 'open' && s.contacts.size < 8) syncContacts(s); }, 20000);   // few contacts so far -> ask the phone for them
         s.status = 'open'; s.qr = ''; s.tries = 0;
         const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
@@ -253,7 +330,7 @@ module.exports = function makeWhatsApp(o) {
         clearTimeout(wd);
         s.sock = null; s.qr = '';
         const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
-        if (code === DisconnectReason.loggedOut) { s.status = 'idle'; s.wantOn = false; s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.stat.clear(); s.media.clear(); s.name = s.number = ''; s.loaded = false; wipe(uid); return; }
+        if (code === DisconnectReason.loggedOut) { s.status = 'idle'; s.wantOn = false; s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.stat.clear(); s.media.clear(); s.name = s.number = ''; s.loaded = false; wipe(uid); forgetBackup(uid); return; }
         s.status = 'idle';
         const why = lastDisconnect && lastDisconnect.error && lastDisconnect.error.message ? String(lastDisconnect.error.message).slice(0, 80) : '';
         if (code !== DisconnectReason.restartRequired) { s.vi = (s.vi || 0) + 1; s.err = 'WhatsApp closed the connection (code ' + (code || '?') + (why ? ': ' + why : '') + ') · Baileys ' + libVer() + ' · Node ' + process.version + (s.tries >= 2 ? ' · trying another way…' : ''); warn('WhatsApp close', code, why); }
@@ -314,11 +391,12 @@ module.exports = function makeWhatsApp(o) {
     const s = st(uid); s.wantOn = false; s.gen++;
     const sock = s.sock; s.sock = null; s.qr = ''; s.status = 'idle';
     if (sock) { try { if (logout) await sock.logout(); else sock.end(undefined); } catch (e) { try { sock.end(undefined); } catch (x) {} } }
-    if (logout) { s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.stat.clear(); s.media.clear(); s.name = s.number = ''; s.loaded = false; if (s.saveT) { clearTimeout(s.saveT); s.saveT = null; } wipe(uid); }
+    if (logout) { s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.stat.clear(); s.media.clear(); s.name = s.number = ''; s.loaded = false; if (s.saveT) { clearTimeout(s.saveT); s.saveT = null; } wipe(uid); await forgetBackup(uid); }
   }
   async function ready(uid) {                         // a connected socket, restoring a saved login after a server restart
     const s = st(uid);
     if (s.status === 'open' && s.sock) return s;
+    if (!s.sock && !hasSaved(uid)) await restore(uid);
     if (!s.sock && hasSaved(uid)) { await open(uid); }
     return s;
   }
@@ -345,6 +423,7 @@ module.exports = function makeWhatsApp(o) {
     const a = req.action, uid = authUid(req.token), s = st(uid);
     if (a === 'waStatus') {
       try { L(); } catch (e) { return { ok: true, configured: false, error: e.message }; }
+      if (s.status === 'idle' && !s.sock && !hasSaved(uid)) await restore(uid);               // fresh deploy: bring the saved login back
       if (s.status === 'idle' && !s.sock && hasSaved(uid) && s.tries < 6) { open(uid).catch(e => warn('WhatsApp resume', e && e.message)); }
       return { ok: true, configured: true, status: s.status, qr: s.status === 'qr' ? s.qr : '', connected: s.status === 'open', name: s.name, number: s.number, error: s.status === 'idle' && !s.wantOn ? s.err : '' };
     }
@@ -352,7 +431,7 @@ module.exports = function makeWhatsApp(o) {
       L(); qrLib();
       if (s.status === 'open') return { ok: true, status: 'open' };
       s.tries = 0; s.err = ''; if (req.full) s.vi = 0;                         // re-link: use the "Desktop" identity so WhatsApp sends the full old history
-      if (!s.sock && s.status !== 'starting') { if (!hasSaved(uid)) wipe(uid); await open(uid); }   // a half-finished old login is thrown away so a fresh QR appears
+      if (!s.sock && s.status !== 'starting') { if (!hasSaved(uid)) await restore(uid); if (!hasSaved(uid)) wipe(uid); await open(uid); }   // a half-finished old login is thrown away so a fresh QR appears
       const t0 = Date.now(); while (Date.now() - t0 < 9000 && (s.status === 'starting' || (s.status === 'idle' && s.wantOn))) await new Promise(r => setTimeout(r, 250));   // wait for the first QR
       return { ok: true, status: s.status, qr: s.status === 'qr' ? s.qr : '', error: s.status === 'idle' && !s.wantOn ? s.err : '' };
     }
@@ -509,5 +588,13 @@ module.exports = function makeWhatsApp(o) {
     h['Content-Length'] = size; return { code: 200, headers: h, body: c.buf };
   }
 
+  /* every few minutes: copy changed login keys to the sheet; on a deploy (SIGTERM) do a last copy before the process ends */
+  setInterval(() => { users.forEach((s, uid) => { if (s.status === 'open') backup(uid); }); }, 3 * 60 * 1000).unref();
+  let bye = false;
+  process.once('SIGTERM', () => {
+    if (bye) return; bye = true;
+    const ids = [...users.keys()].filter(u => hasSaved(u));
+    Promise.race([Promise.all(ids.map(u => backup(u))), new Promise(r => setTimeout(r, 9000))]).catch(() => {}).then(() => process.exit(0));
+  });
   return { actions: ACTIONS, route, upload, media, max: MAX };
 };

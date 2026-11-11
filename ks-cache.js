@@ -1,58 +1,52 @@
-/* KS · "Clear cache" button next to every Log out button.
-   Tap → the saved copy of the website (service-worker cache + browser copy of the app files) is deleted and the newest version is loaded.
-   You stay signed in and your settings are kept — nothing in the browser's own data (login, theme, chat drafts…) is touched. */
+/* KS · automatic fresh version (there is no "Clear cache" button any more).
+   The saved copy of the website is cleared by itself - when the site is opened / reloaded / logged in, when you come back to it,
+   and whenever you tap something (at most once every 15 s).  If a newer version of any app file is on the server, the page
+   reloads itself once so the latest version runs.  Your login, settings and drafts are never touched (only caches are cleared),
+   and WhatsApp / Telegram stay linked - they live on the server and are not affected by this. */
 (function(){
   'use strict';
-  var st = document.createElement('style');
-  st.textContent = '.cc-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line,#e2e8f0);background:var(--soft,#f1f5f9);color:var(--ink,#1e293b);border-radius:12px;font-weight:700;cursor:pointer;flex:none;transition:.15s;font:inherit;font-weight:700}' +
-    '.cc-btn:hover{background:var(--brand,#4f46e5);color:#fff;border-color:var(--brand,#4f46e5)}.cc-btn:active{transform:scale(.95)}' +
-    '.cc-btn.icon{width:42px;height:42px;padding:0;font-size:19px}.cc-btn.txt{padding:7px 14px;font-size:calc(13.5px*var(--fs,1))}' +
-    '.cc-btn.busy{pointer-events:none;opacity:.7}.cc-btn.busy .cc-i{display:inline-block;animation:spin .8s linear infinite}' +
-    '.side-user .cc-btn.icon{width:40px;height:40px}';
-  document.head.appendChild(st);
+  var GAP = 15000, last = 0, busy = false, base = null, reloading = false;
 
-  var busy = false;
-  function say(m, bad){ try { if (typeof toast === 'function') toast(m, bad); } catch (e) {} }
+  function files(){
+    var urls = {}; urls[location.pathname] = 1;
+    [].forEach.call(document.querySelectorAll('script[src],link[rel="stylesheet"][href],link[rel="manifest"][href]'), function(n){
+      var u = new URL(n.getAttribute('src') || n.getAttribute('href'), location.href); if (u.origin === location.origin) urls[u.pathname + u.search] = 1;
+    });
+    urls[new URL('sw.js', location.href).pathname] = 1;
+    return Object.keys(urls);
+  }
+  /* a fingerprint (ETag / date / size) of every app file, asked straight from the server */
+  async function stamp(){
+    var out = {};
+    await Promise.all(files().map(function(u){
+      return fetch(u, { method: 'HEAD', cache: 'no-store' }).then(function(r){
+        if (r.ok) out[u] = [r.headers.get('etag') || '', r.headers.get('last-modified') || '', r.headers.get('content-length') || ''].join('|');
+      }).catch(function(){});
+    }));
+    return out;
+  }
+  async function clearCaches(){
+    if (window.caches){ var ks = await caches.keys(); await Promise.all(ks.filter(function(k){ return k !== 'ks-prefs'; }).map(function(k){ return caches.delete(k); })); }
+    if (navigator.serviceWorker){ var rg = await navigator.serviceWorker.getRegistration(); if (rg) rg.update().catch(function(){}); }   // the service worker stays registered (push notifications keep working)
+  }
+  function typing(){ var a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA)$/.test(a.tagName) && a.value && a.type !== 'button'); }
 
-  async function clearIt(btns){
-    if (busy) return; busy = true;
-    btns.forEach(function(b){ b.classList.add('busy'); });
-    say('Clearing cache…');
+  async function run(){
+    var now = Date.now(); if (busy || reloading || now - last < GAP) return;
+    busy = true; last = now;
     try {
-      /* 1) the browser's own copy of the app files: fetch them fresh */
-      var urls = {};
-      urls[location.pathname] = 1;
-      [].forEach.call(document.querySelectorAll('script[src],link[rel="stylesheet"][href],link[rel="manifest"][href]'), function(n){
-        var u = new URL(n.getAttribute('src') || n.getAttribute('href'), location.href); if (u.origin === location.origin) urls[u.pathname + u.search] = 1;
-      });
-      ['sw.js', 'manifest.json'].forEach(function(f){ urls[new URL(f, location.href).pathname] = 1; });
-      await Promise.all(Object.keys(urls).map(function(u){ return fetch(u, { cache: 'reload' }).catch(function(){}); }));
-      /* 2) the service worker's saved copies (the small "ks-prefs" notification settings are kept) */
-      if (window.caches){ var ks = await caches.keys(); await Promise.all(ks.filter(function(k){ return k !== 'ks-prefs'; }).map(function(k){ return caches.delete(k); })); }
-      /* 3) the service worker itself: removed now, it registers again (fresh) when the page reloads */
-      if (navigator.serviceWorker){ var rg = await navigator.serviceWorker.getRegistrations(); await Promise.all(rg.map(function(r){ return r.unregister(); })); }
-      say('Cache cleared — loading the latest version…');
-    } catch (e) { say('Cache cleared (some parts could not be removed)', true); }
-    setTimeout(function(){ location.reload(); }, 700);
+      await clearCaches();
+      var cur = await stamp(); if (!Object.keys(cur).length) return;          // offline
+      if (!base){ base = cur; return; }
+      var changed = Object.keys(cur).some(function(u){ return base[u] && cur[u] && base[u] !== cur[u]; });
+      if (changed && !typing()){ reloading = true; location.reload(); }       // a new version is live -> load it (not while you are typing a message)
+    } catch (e) {} finally { busy = false; }
   }
 
-  function make(src){
-    var icon = src.classList.contains('icon');
-    var b = document.createElement('button'); b.type = 'button';
-    b.className = 'cc-btn ' + (icon ? 'icon' : 'txt'); b.title = 'Clear cache — load the latest version'; b.setAttribute('aria-label', 'Clear cache');
-    b.innerHTML = '<span class="cc-i" aria-hidden="true">🧹</span>' + (icon ? '' : '<span>Clear cache</span>');
-    src.parentNode.insertBefore(b, src);          // right beside (before) Log out
-    return b;
-  }
-  var pairs = ['logoutBtn', 'logoutBtn2', 'logoutBtn3'].map(function(id){ var s = document.getElementById(id); return s ? { s: s, b: make(s) } : null; }).filter(Boolean);
-  if (!pairs.length) return;
-  var all = pairs.map(function(p){ return p.b; });
-  all.forEach(function(b){ b.addEventListener('click', function(){ clearIt(all); }); });
-
-  /* each Clear-cache button is shown exactly when its Log-out button is shown */
-  function sync(){ pairs.forEach(function(p){ var hide = getComputedStyle(p.s).display === 'none' || !!p.s.closest('.hidden'); p.b.style.display = hide ? 'none' : ''; }); }
-  sync(); window.addEventListener('resize', sync);
-  pairs.forEach(function(p){ new MutationObserver(sync).observe(p.s, { attributes: true, attributeFilter: ['style', 'class'] }); });
-  var app = document.getElementById('app'); if (app) new MutationObserver(sync).observe(app, { attributes: true, attributeFilter: ['class'] });
-  setInterval(sync, 1500);
+  setTimeout(run, 1200);                                                       // site opened / reloaded / logged in
+  document.addEventListener('click', run, true);                               // any tap (tab, button, option)
+  document.addEventListener('submit', run, true);                              // login
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) run(); });
+  window.addEventListener('pageshow', run);
+  window.addEventListener('online', run);
 })();

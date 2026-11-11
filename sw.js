@@ -1,6 +1,6 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v71';
+const CACHE = 'ks-shell-v72';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-motion.css', 'ks-motion.js', 'ks-cache.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'status-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
 
 self.addEventListener('install', e => {
@@ -16,8 +16,7 @@ self.addEventListener('fetch', e => {
   if (r.method !== 'GET') return;
   const u = new URL(r.url);
   if (u.origin !== self.location.origin) return;           // the API on Render is never touched here
-  // versioned files (?v=) never change under the same URL -> serve them from the saved copy instantly; pages stay network-first
-  if (u.search.indexOf('v=') > -1 && r.mode !== 'navigate') return e.respondWith(cacheFirst(r, u));
+  // every app file is fetched fresh from the server first (even ?v= ones), so a new deploy shows up at once - the saved copy is only for when there is no network
   e.respondWith(netFirst(r, u));
 });
 async function cacheFirst(req, u) {
@@ -29,7 +28,7 @@ async function cacheFirst(req, u) {
 async function netFirst(req, u) {
   const cache = await caches.open(CACHE);
   try {
-    const res = await Promise.race([fetch(req), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 3500))]);
+    const res = await Promise.race([req.mode === 'navigate' ? fetch(req) : fetch(req, { cache: 'no-cache' }), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 6000))]);
     if (res && res.ok && res.type === 'basic') {
       const copy = res.clone();
       cache.keys().then(async ks => {                       // keep one copy per file (drop older ?v= versions)
