@@ -41,6 +41,8 @@
     '#waRoot .wa-end{flex:none;text-align:right;font-size:12px;opacity:.9}',
     '#waRoot .wa-end em{display:inline-block;margin-top:4px;min-width:20px;padding:1px 6px;border-radius:10px;background:var(--wa-g);color:#fff;font-style:normal;font-weight:700}',
     '#waRoot .wa-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px;padding:20px;opacity:.75}',
+    '#waRoot .wa-blue{font-size:13px;white-space:nowrap;opacity:.75}',
+    '#waRoot .wa-blue.on{opacity:1;color:#027eb5;font-weight:700}',
     '#waRoot .wa-head{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--card,#fff);border-bottom:1px solid var(--line)}',
     '#waRoot .wa-back{display:none}',
     '#waRoot .wa-msgs{flex:1 1 0;min-height:0;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;overflow-y:auto;padding:12px 8%;display:flex;flex-direction:column;gap:3px}',
@@ -254,7 +256,7 @@
     if (m.dataset.k !== 'c:' + c.id || force){
       m.dataset.k = 'c:' + c.id; G.sigM = '';
       m.innerHTML = '<div class="wa-head"><button class="wa-ic wa-back" onclick="waBack()">←</button>' + avatar(c, 'sm') +
-        '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small class="muted">' + esc(c.number || (c.group ? 'Group' : '')) + '</small></div><button class="wa-ic" title="Video call" onclick="waCall(1)">🎥</button><button class="wa-ic" title="Voice call" onclick="waCall(0)">📞</button></div>' +
+        '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small class="muted">' + esc(c.number || (c.group ? 'Group' : '')) + '</small></div><button class="wa-ic wa-blue' + (c.blue ? ' on' : '') + '" id="waBlueBtn" title="' + (c.blue ? 'Blue tick: SHOWN to this contact (tap to hide)' : 'Blue tick: HIDDEN from this contact (tap to show)') + '" onclick="waBlue()">' + (c.blue ? '👁 ✓✓' : '🙈 ✓✓') + '</button><button class="wa-ic" title="Video call" onclick="waCall(1)">🎥</button><button class="wa-ic" title="Voice call" onclick="waCall(0)">📞</button></div>' +
         '<div class="wa-msgs" id="waMsgs"></div>' +
         '<div class="wa-comp">' + (G.emoji ? emojiHtml() : '') + '<button class="wa-ic" title="Emoji" onclick="waEmoji()">😊</button><button class="wa-ic" title="Photo / video" onclick="waPick(0)">📷</button><button class="wa-ic" title="Document / file" onclick="waPick(1)">📎</button>' +
         '<textarea class="input" id="waIn" rows="1" placeholder="Type a message" oninput="this.style.height=\'auto\';this.style.height=Math.min(this.scrollHeight,120)+\'px\'" onkeydown="waKey(event)"></textarea>' +
@@ -378,6 +380,16 @@
     G.open = Object.assign({}, c); G.msgs = []; G.sigL = ''; paintSide(true); paintMain(true);
     try { var r = await api('waHistory', { chat:id }); if (!G.open || G.open.id !== id) return; G.msgs = r.items; Object.assign(G.open, r.chat); c.unread = 0; G.sigL = ''; paintSide(true); paintMain(true); var t = $('#waIn'); if (t && !/Mobi|Android/i.test(navigator.userAgent)) t.focus(); }
     catch(e){ G.open = null; handleErr(e); paintSide(true); paintMain(true); }
+  };
+  window.waBlue = async function(){                       // show / hide blue tick for the open contact
+    var c = G.open; if (!c) return; var on = !c.blue;
+    try {
+      var r = await api('waBlue', { chat:c.id, on:on });
+      c.blue = !!r.blue;
+      G.chats.forEach(function(x){ if (x.id === c.id) x.blue = c.blue; });
+      toast(c.blue ? 'Blue tick ON: ' + title(c) + ' will see when you read' : 'Blue tick HIDDEN: ' + title(c) + ' will not see when you read');
+      paintMain(true);
+    } catch(e){ handleErr(e); }
   };
   window.waBack = function(){ G.open = null; G.emoji = false; G.sigL = ''; paintSide(true); paintMain(true); };
   async function poll(){

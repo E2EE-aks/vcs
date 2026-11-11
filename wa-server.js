@@ -38,7 +38,7 @@ module.exports = function makeWhatsApp(o) {
 
   /* per user: sock, status (idle|starting|qr|open), qr, name, number, chats Map, msgs Map, raw Map (media only, in memory) */
   const users = new Map();
-  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), lid: new Map(), stat: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
+  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), blueOn: new Set(), lid: new Map(), stat: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
   const hasSaved = uid => { try { const c = JSON.parse(fs.readFileSync(path.join(udir(uid), 'creds.json'), 'utf8')); return !!(c && c.me); } catch (e) { return false; } };   // only a really linked login counts (half-finished QR logins are ignored)
   const wipe = uid => { try { fs.rmSync(udir(uid), { recursive: true, force: true }); } catch (e) {} };
 
@@ -50,6 +50,7 @@ module.exports = function makeWhatsApp(o) {
       (j.chats || []).forEach(c => s.chats.set(c.id, c));
       (j.contacts || []).forEach(c => s.contacts.set(c.id, c));
       Object.keys(j.lids || {}).forEach(k => s.lid.set(k, j.lids[k]));
+      (j.blueOn || []).forEach(k => s.blueOn.add(k));
       Object.keys(j.msgs || {}).forEach(k => s.msgs.set(k, j.msgs[k]));
     } catch (e) {}
   }
@@ -60,7 +61,7 @@ module.exports = function makeWhatsApp(o) {
       try {
         const msgs = {}; s.msgs.forEach((v, k) => { msgs[k] = v.slice(-80).map(m => { const x = Object.assign({}, m); delete x.thumb; return x; }); });
         fs.mkdirSync(udir(uid), { recursive: true });
-        fs.writeFileSync(path.join(udir(uid), 'store.json'), JSON.stringify({ chats: [...s.chats.values()], contacts: [...s.contacts.values()], lids: Object.fromEntries(s.lid), msgs }));
+        fs.writeFileSync(path.join(udir(uid), 'store.json'), JSON.stringify({ chats: [...s.chats.values()], contacts: [...s.contacts.values()], lids: Object.fromEntries(s.lid), blueOn: [...s.blueOn], msgs }));
       } catch (e) {}
     }, 4000);
   }
@@ -115,6 +116,9 @@ module.exports = function makeWhatsApp(o) {
     a = bareJid(a); b = bareJid(b);
     if (isLid(a) && isPn(b)) s.lid.set(a, b); else if (isPn(a) && isLid(b)) s.lid.set(b, a);
   }
+  /* blue tick (read receipt) is HIDDEN for everyone by default; only chats in s.blueOn get read receipts sent */
+  const blueKey = (s, jid) => pnOf(s, jid) || bareJid(jid);
+  const blueShow = (s, jid) => s.blueOn.has(blueKey(s, jid));
   const pnOf = (s, jid) => isPn(jid) ? bareJid(jid) : (isLid(jid) ? (s.lid.get(bareJid(jid)) || '') : '');
   function addContact(s, c) {                           // the phone's address book (for the Select contact screen)
     if (!c || !c.id) return;
@@ -331,7 +335,7 @@ module.exports = function makeWhatsApp(o) {
   const link = (uid, jid, id, kind) => { const p = [uid, jid, id, kind, Date.now() + 6 * 3600e3].join('|'); return '/wa/media?s=' + Buffer.from(p).toString('base64url') + '.' + sign('wam:' + p); };
   const chatView = (uid, c) => {
     const s = st(uid), pn = pnOf(s, c.id), ct = (pn && s.contacts.get(pn)) || s.contacts.get(c.id), num = c.group ? '' : (pn ? '+' + pn.split('@')[0] : numOf(c.id));
-    return ({ id: c.id, name: c.name || (ct && (ct.name || ct.pn)) || c.pn || (c.group ? 'Group' : num || 'WhatsApp contact'), number: num, group: !!c.group, unread: c.unread || 0, at: c.at, last: c.last, out: !!c.out, av: link(uid, c.id, 0, 'a') });
+    return ({ id: c.id, name: c.name || (ct && (ct.name || ct.pn)) || c.pn || (c.group ? 'Group' : num || 'WhatsApp contact'), number: num, group: !!c.group, unread: c.unread || 0, at: c.at, last: c.last, out: !!c.out, blue: blueShow(s, c.id), av: link(uid, c.id, 0, 'a') });
   };
   const msgView = (uid, jid, m) => { const x = Object.assign({}, m); delete x.key; if (m.media) x.url = link(uid, jid, m.id, 'm'); return x; };
 
@@ -393,8 +397,18 @@ module.exports = function makeWhatsApp(o) {
       jids.forEach(j => (r.msgs.get(j) || []).forEach(m => { if (!seen.has(m.id)) { seen.add(m.id); all.push(msgView(uid, j, m)); } }));
       all.sort((x, y) => x.at - y.at);
       const list = r.msgs.get(jid) || [];
-      jids.forEach(j => { const cc = r.chats.get(j); if (cc && cc.unread) { cc.unread = 0; const l = r.msgs.get(j) || []; const last = [...l].reverse().find(m => !m.out && m.key); try { if (last) r.sock.readMessages([last.key]).catch(() => {}); } catch (e) {} } });
+      jids.forEach(j => { const cc = r.chats.get(j); if (cc && cc.unread) { cc.unread = 0; const l = r.msgs.get(j) || []; const last = [...l].reverse().find(m => !m.out && m.key); try { if (last && blueShow(r, j)) r.sock.readMessages([last.key]).catch(() => {}); } catch (e) {} } });
       return { ok: true, chat: chatView(uid, c || chatOf(r, jid)), items: all.slice(-200) };
+    }
+    if (a === 'waBlue') {                                  // show / hide blue tick for one contact
+      const jid = toJid(req.chat), k = blueKey(r, jid), on = !!req.on;
+      if (on) r.blueOn.add(k); else r.blueOn.delete(k);
+      if (on) {                                             // turning ON: tell this person about the messages you already saw
+        const jids = [jid]; const pn = pnOf(r, jid); if (pn && pn !== jid) jids.push(pn); r.lid.forEach((v, kk) => { if (v === pn && kk !== jid) jids.push(kk); });
+        jids.forEach(j => { const l = r.msgs.get(j) || []; const last = [...l].reverse().find(m => !m.out && m.key); try { if (last) r.sock.readMessages([last.key]).catch(() => {}); } catch (e) {} });
+      }
+      saveSoon(uid, r);
+      return { ok: true, blue: blueShow(r, jid) };
     }
     if (a === 'waSend') {
       const text = String(req.text || '').slice(0, 4000); if (!text.trim()) fail('Write a message first.');
