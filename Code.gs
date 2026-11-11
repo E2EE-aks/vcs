@@ -180,7 +180,7 @@ var WRITE_ACTIONS = {
 var NEED = {
   setAttendance: 'att',
   addExpense: 'exp', updateExpense: 'exp', deleteExpense: 'exp', saveLgAccount: 'exp', deleteLgAccount: 'exp', addLgEntry: 'exp', updateLgEntry: 'exp', deleteLgEntry: 'exp', addCategory: 'exp', updateCategory: 'exp', deleteCategory: 'exp',
-  requestDelete: 'exp',
+
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
   addPw: 'pw', updatePw: 'pw', deletePw: 'pw',
   addLink: 'link', updateLink: 'link', deleteLink: 'link',
@@ -274,6 +274,7 @@ function route_(req) {
     if (ADMIN_ONLY[a]) needAdmin_();
     if (USER_MGR[a]) needUserMgr_();
     // Only an admin deletes ledger / expense entries directly. Everybody else asks (requestDelete) and the main admin approves in the VCS Management chat.
+    if ((a === 'deleteLic' || a === 'deleteLicGroup') && CTX.role !== 'admin') fail_('Deleting needs the admin\'s approval. Use "Request delete" - the admin gets a message from VCS Management and can approve it.', 'PERM');
     if ((a === 'deleteExpense' || a === 'deleteLgEntry') && CTX.role !== 'admin') fail_('Deleting needs the admin\'s approval. Use "Request delete" - the admin gets a message and can approve it.', 'PERM');
   }
 
@@ -2186,7 +2187,19 @@ function lgNameOf_(id) {
 }
 function requestDelete_(req) {
   var kind = String(req.kind || ''), id = String(req.id || ''), desc = '';
-  if (kind === 'exp') {
+  need_(kind.indexOf('lic') === 0 ? 'lic' : 'exp');                  // LIC requests need LIC access, expense / ledger requests need Expenses access
+  if (kind === 'lic') {
+    var lp = readLic_().filter(function (x) { return x.id === id; })[0];
+    if (!lp) fail_('Policy not found. Please refresh.');
+    desc = 'LIC policy: ' + (lp.name || '-') + (lp.policyNo ? ' | No. ' + lp.policyNo : '') + (lp.policyName ? ' | ' + lp.policyName : '');
+  } else if (kind === 'licg') {
+    var lg = readLicGroups_().filter(function (g) { return g.id === id; })[0];
+    if (!lg) fail_('Group not found. Please refresh.');
+    desc = 'LIC group: ' + lg.name + ' (its policies stay, only the group is removed)';
+  } else if (kind === 'licf') {
+    if (readLicFields_().indexOf(id) < 0) fail_('Field not found. Please refresh.');
+    desc = 'LIC extra field: ' + id + ' (its saved values are deleted from every policy)';
+  } else if (kind === 'exp') {
     var sh = ownedSheet_('EXP', 6), row = findExpenseRow_(sh, id);
     if (row < 0) fail_('Entry not found. Please refresh.');
     var v = sh.getRange(row, 1, 1, 4).getValues()[0];
@@ -2212,7 +2225,13 @@ function decideDelete_(req) {
   var ok = req.approve === true || req.approve === 'true';
   if (ok) {
     var keep = CTX.owner; CTX.owner = r.o;                         // delete from the USER's data, not the admin's
-    try { if (r.k === 'exp') deleteExpense_({ id: r.i }); else deleteLgEntry_({ id: r.i }); }
+    try {
+      if (r.k === 'exp') deleteExpense_({ id: r.i });
+      else if (r.k === 'lic') deleteLic_({ id: r.i });
+      else if (r.k === 'licg') deleteLicGroup_({ id: r.i });
+      else if (r.k === 'licf') saveLicFields_({ fields: readLicFields_().filter(function (n) { return n !== r.i; }).map(function (n) { return { o: n, n: n }; }) });
+      else deleteLgEntry_({ id: r.i });
+    }
     catch (e) { if (!/not found/i.test(String(e && e.message))) { CTX.owner = keep; throw e; } }   // already gone = fine
     finally { CTX.owner = keep; }
   }
@@ -2833,6 +2852,11 @@ function saveLicFields_(req) {
     seen[n.toLowerCase()] = 1; names.push(n); olds.push(o);
   });
   if (names.length > 20) fail_('At most 20 extra fields are allowed.');
+  if (CTX.role !== 'admin') {                                    // removing a field needs the admin's approval (requestDelete, kind 'licf')
+    var keptOld = {}; olds.forEach(function (o) { if (o) keptOld[o] = 1; });
+    var gone = readLicFields_().filter(function (n) { return !keptOld[n]; });
+    if (gone.length) fail_('Removing a field needs the admin\'s approval. Use "Request delete" on it.', 'PERM');
+  }
   var sh = licSheet_(), last = sh.getLastRow();
   if (last >= 2) {
     var own = sh.getRange(2, 8, last - 1, 1).getValues(), js = sh.getRange(2, 14, last - 1, 1).getValues(), changed = false;

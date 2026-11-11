@@ -2602,7 +2602,7 @@ function entryEditForm(x){
   };
 }
 /* A normal user cannot delete: the request goes to the main admin (chat "VCS Management" with Approve / Decline). Admins delete directly. */
-async function delRequest(kind, id, what){ if (!can('exp')) return deny();
+async function delRequest(kind, id, what){ if (!can(String(kind).indexOf('lic') === 0 ? 'lic' : 'exp')) return deny();
   if (!await confirmBox('Send delete request to admin?', `${what}\n\nIt is deleted only after the admin approves it.`, 'Send request', false)) return;
   try { await api('requestDelete', { kind, id }); toast('Request sent to the admin ✔'); } catch(e){ handleErr(e); }
 }
@@ -3814,7 +3814,7 @@ function licListHtml(){
           ${f('Next renewal', rn.due ? `${licDateFmt(rn.due)} <span class="lic-rn ${rn.cls}" data-lic-id="${id}">${esc(rn.text)}</span>` : dash)}
         </div>
         ${more ? `<div class="lic-sec">More details</div><div class="lic-more">${more}</div>` : ''}
-        <div class="lic-act"><button class="btn soft" onclick="licCopy('${id}')" title="Copy all of this customer's data">📋 Copy</button><button class="btn ghost" onclick="licForm('${id}')">✏️ Edit</button><button class="btn ghost lic-del" onclick="licDel('${id}')">🗑 Delete</button></div>
+        <div class="lic-act"><button class="btn soft" onclick="licCopy('${id}')" title="Copy all of this customer's data">📋 Copy</button><button class="btn ghost" onclick="licForm('${id}')">✏️ Edit</button><button class="btn ghost lic-del" onclick="licDel('${id}')" title="${isAdmin() ? 'Delete' : 'The admin must approve'}">${isAdmin() ? '🗑 Delete' : '📨 Request'}</button></div>
       </div></details>`;
   }).join('');
   return `<div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''} · tap a name to open</span></h3>
@@ -3942,6 +3942,7 @@ function licGroups(){
       try{ const r = await api('saveLicGroup', { id, name:n }); S.d.licGroups = r.groups; again(); toast('Renamed'); }catch(e){ handleErr(e); }
     };
     row.querySelector('[data-del]').onclick = async () => {
+      if (!isAdmin()) return delRequest('licg', id, `Group: ${g.name}`);
       if (!await confirmBox('Delete group “' + g.name + '”?', 'Its ' + cnt(id) + ' polic' + (cnt(id) === 1 ? 'y' : 'ies') + ' will stay in your list, just without a group.', 'Delete', true)) return;
       try{ const r = await api('deleteLicGroup', { id }); S.d.licGroups = r.groups; (S.d.lic || []).forEach(x => { if (x.group === id) x.group = ''; }); if (S.lic.g === id) S.lic.g = ''; again(); toast('Group deleted'); }catch(e){ handleErr(e); }
     };
@@ -4135,7 +4136,7 @@ function licFieldsEdit(reopenId){ if (!can('lic')) return deny();
   box.oninput = e => { if (e.target.dataset.i !== undefined) list[+e.target.dataset.i].n = e.target.value; };
   box.onclick = e => {
     const d = e.target.closest('[data-del]'), u = e.target.closest('[data-up]');
-    if (d){ list.splice(+d.dataset.del, 1); draw(); }
+    if (d){ const it = list[+d.dataset.del]; if (!isAdmin() && it && it.o) return delRequest('licf', it.o, `Remove field: ${it.o}`); list.splice(+d.dataset.del, 1); draw(); }
     else if (u && +u.dataset.up > 0){ const i = +u.dataset.up; [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); }
   };
   const add = () => {
@@ -4163,6 +4164,7 @@ function licFieldsEdit(reopenId){ if (!can('lic')) return deny();
 }
 async function licDel(id){ if (!can('lic')) return deny();
   const x = S.d.lic.find(e => e.id === id); if (!x) return;
+  if (!isAdmin()) return delRequest('lic', id, `Policy: ${x.name || x.policyNo || 'This entry'}${x.policyNo ? ' · ' + x.policyNo : ''}`);     // only an admin deletes directly; others ask and the admin approves in VCS Management
   if (!await confirmBox('Delete this policy?', `${x.name || x.policyNo || 'This entry'} will be removed from your sheet.`, 'Delete', true)) return;
   try { await api('deleteLic', { id }); S.d.lic = S.d.lic.filter(e => e.id !== id); render(); toast('Deleted'); } catch(e){ handleErr(e); }
 }
