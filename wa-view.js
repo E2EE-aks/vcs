@@ -129,6 +129,48 @@
     '#waRoot .wa-qrwrap{display:flex;flex-direction:column;align-items:center;gap:10px}',
     '#waRoot .wa-qrwrap img,#waRoot .wa-qrph{width:290px;max-width:78vw;aspect-ratio:1;background:#fff;padding:10px;border-radius:12px;border:1px solid var(--line)}',
     '#waRoot .wa-qrph{display:flex;align-items:center;justify-content:center;opacity:.8;text-align:center;padding:20px;color:#444}',
+    /* ---- iPhone WhatsApp look ---- */
+    '#waRoot{--ios-bg:#fff;--ios-tx:#000;--ios-sub:#6d6d72;--ios-line:#e5e5ea;--ios-pill:rgba(120,120,128,.16);--ios-pill-on:rgba(120,120,128,.30)}',
+    'html[data-mode=dark] #waRoot{--ios-bg:#000;--ios-tx:#fff;--ios-sub:#8e8e93;--ios-line:#2c2c2e;--ios-pill:rgba(120,110,140,.38);--ios-pill-on:rgba(20,20,24,.85)}',
+    '#waRoot .wa-side{background:var(--ios-bg);color:var(--ios-tx)}',
+    '#waRoot .wa-top{border:0;padding:10px 16px 0;justify-content:space-between}',
+    '#waRoot .wa-circ{flex:none;width:44px;height:44px;border-radius:50%;border:0;background:var(--ios-pill);color:var(--ios-tx);font-size:17px;font-weight:800;letter-spacing:1px;cursor:pointer;display:flex;align-items:center;justify-content:center}',
+    '#waRoot .wa-circ.plus{background:rgba(37,211,102,.18);color:#25d366;border:2px solid #25d366;font-size:28px;font-weight:400;letter-spacing:0;line-height:1}',
+    '#waRoot .wa-big{margin:6px 18px 8px;font-size:34px;font-weight:800;letter-spacing:-.5px;line-height:1.15}',
+    '#waRoot .wa-menu{left:14px;right:auto;top:60px}',
+    '#waRoot .wa-srch{border:0;padding:4px 16px 8px}',
+    '#waRoot .wa-srch input{background:var(--ios-pill);color:var(--ios-tx)}',
+    '#waRoot .wa-chips{border:0;padding:2px 16px 8px;overflow-x:auto}',
+    '#waRoot .wa-chips button{background:var(--ios-pill);color:var(--ios-tx);font-weight:600;white-space:nowrap}',
+    '#waRoot .wa-chips button.on{background:rgba(37,211,102,.28);color:#25d366}',
+    '#waRoot .wa-bar{border:0;margin:0 16px 6px;padding:8px 12px;border-radius:14px;background:var(--ios-pill)}',
+    '#waRoot .wa-bar small{color:var(--ios-sub);opacity:1}',
+    '#waRoot .wa-row{position:relative;align-items:center;gap:14px;padding:10px 16px;border:0}',
+    '#waRoot .wa-row::after{content:"";position:absolute;left:86px;right:0;bottom:0;border-bottom:1px solid var(--ios-line)}',
+    '#waRoot .wa-row .wa-av{width:56px;height:56px;font-size:22px}',
+    '#waRoot .wa-row .wa-mid{align-self:stretch;display:flex;flex-direction:column;justify-content:center}',
+    '#waRoot .wa-row .wa-mid b{font-size:17px;font-weight:700}',
+    '#waRoot .wa-row .wa-mid small{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:15px;color:var(--ios-sub);opacity:1;line-height:1.3}',
+    '#waRoot .wa-row .wa-end{align-self:stretch;display:flex;flex-direction:column;align-items:flex-end;font-size:15px;color:var(--ios-sub);opacity:1}',
+    '#waRoot .wa-row .wa-end br{display:none}',
+    '#waRoot .wa-row .wa-end.un{color:var(--wa-g)}',
+    '#waRoot .wa-row .wa-end em{margin-top:6px;min-width:24px;height:24px;line-height:24px;padding:0 7px;border-radius:12px;color:#0b141a;font-size:14px;text-align:center}',
+    '#waRoot .wa-clist .wa-row .wa-av{width:40px;height:40px;font-size:17px}',
+    '#waRoot .wa-clist .wa-row::after{left:66px}',
+    '#waRoot .wa-tabs{flex:none;display:flex;gap:2px;margin:6px 14px calc(8px + env(safe-area-inset-bottom,0px));padding:6px;border-radius:34px;background:var(--ios-pill);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}',
+    '#waRoot .wa-tabs button{flex:1;min-width:0;border:0;background:transparent;color:var(--ios-tx);border-radius:28px;padding:6px 2px 5px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;font-weight:700;cursor:pointer}',
+    '#waRoot .wa-tabs button.on{background:var(--ios-pill-on)}',
+    '#waRoot .wa-tabs .wa-ti{position:relative;font-size:21px;line-height:26px;height:26px;display:flex;align-items:center;justify-content:center}',
+    '#waRoot .wa-tabs em{position:absolute;top:-6px;right:-14px;min-width:18px;height:18px;line-height:18px;padding:0 5px;border-radius:9px;background:var(--wa-g);color:#0b141a;font-size:11px;font-style:normal;font-weight:800;text-align:center}',
+    '#waRoot .wa-tabs em.dot{min-width:10px;width:10px;height:10px;padding:0;top:-2px;right:-6px}',
+    '#waRoot .wa-av.xs{width:26px;height:26px;font-size:12px}',
+    '#waRoot .wa-side:not([data-tab=all]) .wa-chips,#waRoot .wa-side:not([data-tab=all]) .wa-blueall{display:none}',
+    '#waRoot .wa-side[data-tab=calls] .wa-srch,#waRoot .wa-side[data-tab=comm] .wa-srch,#waRoot .wa-side[data-tab=you] .wa-srch{display:none}',
+    '#waRoot .wa-you{display:flex;flex-direction:column;align-items:center;gap:6px;padding:18px 16px;text-align:center}',
+    '#waRoot .wa-you .wa-av{width:96px;height:96px;font-size:38px}',
+    '#waRoot .wa-ys{margin:6px 16px 16px;border-radius:14px;background:var(--ios-pill);overflow:hidden}',
+    '#waRoot .wa-ys button{display:block;width:100%;border:0;border-bottom:1px solid var(--ios-line);background:none;color:inherit;text-align:left;padding:13px 16px;font-size:16px;cursor:pointer}',
+    '#waRoot .wa-ys button.bad{color:#ff453a;border-bottom:0}',
     '@media(max-width:860px){',
     '#waRoot{position:fixed;left:0;right:0;top:0;bottom:calc(var(--bb-gap,0px) - 4px);z-index:100;background:var(--bg,#fff);padding-top:env(safe-area-inset-top,0px)}',
     'body.wa-conv #waRoot{bottom:0;top:var(--vvt,0px);height:var(--vvh,100dvh);padding-top:0}',
@@ -223,21 +265,49 @@
   }
   function shellHtml(){
     return '<div class="wa-app' + (G.open ? ' open' : '') + '" id="waApp"><div class="wa-side">' +
-      '<div class="wa-top"><div class="wa-me"><b class="wa-title">WhatsApp</b></div><button class="wa-plus" title="New chat" onclick="waNewToggle()">💬＋</button><button class="wa-ic" title="Menu" onclick="waMenu(event)">⋮</button></div>' +
+      '<div class="wa-top"><button class="wa-circ" title="Menu" onclick="waMenu(event)">•••</button><button class="wa-circ plus" title="New chat" onclick="waNewToggle()">＋</button></div><h1 class="wa-big" id="waBig">Chats</h1>' +
       '<div class="wa-menu hidden" id="waMenu"><div class="wa-mrow"><span class="wa-av sm" id="waMeAv"></span><div class="wa-mid"><b id="waMeNm"></b><small id="waMeNo"></small></div></div>' +
       '<button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>' +
       '<div class="wa-blueall" id="waBlueAll"></div>' +
       '<div id="waNewBox"></div><div class="wa-srch"><input class="input" id="waSearch" placeholder="🔍  Search or start a new chat" oninput="waFilter(this.value)"></div>' +
-      '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div></div><div class="wa-main" id="waMain"></div></div>';
+      '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div><div class="wa-tabs" id="waTabs"></div></div><div class="wa-main" id="waMain"></div></div>';
   }
   function paintBlueAll(){
     var el = $('#waBlueAll'); if (!el) return; var h = G.hideAll !== false;
     el.innerHTML = '<div class="wa-bar" onclick="waBlueAll()"><span class="wa-bi">' + (h ? '🙈' : '👁') + '</span><div class="wa-mid"><b>Hide blue tick (all contacts)</b><small>' + (h ? 'ON: nobody sees when you read their message' : 'OFF: everyone sees blue tick when you read') + '</small></div><span class="wa-sw' + (h ? ' on' : '') + '"><i></i></span></div>';
   }
+  var TABS = [['status','Updates','◎'],['calls','Calls','📞'],['comm','Communities','👥'],['all','Chats','💬'],['you','You','']];
+  var BIG = { all:'Chats', status:'Updates', calls:'Calls', comm:'Communities', you:'You' };
+  function tabOf(f){ return f === 'unread' || f === 'groups' ? 'all' : f; }
+  function paintTabs(){
+    var side = $('.wa-side'), el = $('#waTabs'), big = $('#waBig'); if (!el) return;
+    var t = tabOf(G.f), un = G.chats.reduce(function(n, c){ return n + (c.unread ? 1 : 0); }, 0), sn = G.stN || 0, me = G.me || {};
+    if (side) side.dataset.tab = t;
+    if (big) big.textContent = BIG[t] || 'Chats';
+    var k = t + '|' + un + '|' + sn + '|' + (me.av || '') + '|' + (me.name || '');
+    if (el.dataset.k === k) return; el.dataset.k = k;
+    el.innerHTML = TABS.map(function(x){
+      var ic = x[0] === 'you' ? avatar({ name:me.name || 'You', av:me.av || '' }, 'xs') : x[2];
+      var badge = x[0] === 'all' && un ? '<em>' + un + '</em>' : (x[0] === 'status' && sn ? '<em class="dot"></em>' : '');
+      return '<button class="' + (x[0] === t ? 'on' : '') + '" onclick="waTab(\'' + x[0] + '\')"><span class="wa-ti">' + ic + badge + '</span><span>' + x[1] + '</span></button>';
+    }).join('');
+  }
+  function tabPage(f){
+    if (f === 'calls') return '<div class="wa-empty"><div style="font-size:52px">📞</div><b style="font-size:18px">Calls</b><div>Calls cannot be placed from a linked device like this one.<br>Incoming and missed calls show up inside the chat.</div></div>';
+    if (f === 'comm') return '<div class="wa-empty"><div style="font-size:52px">👥</div><b style="font-size:18px">Communities</b><div>Your groups are in the Chats tab (use the Groups filter).</div></div>';
+    var me = G.me || {}, st = G.st || {}, nm = me.name || st.name || 'WhatsApp', no = me.number || st.number || '';
+    return '<div class="wa-you">' + avatar({ name:nm, av:me.av || '' }) + '<b style="font-size:20px">' + esc(nm) + '</b><small style="opacity:.7">' + esc(no) + '</small></div>' +
+      '<div class="wa-ys"><button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>';
+  }
+  window.waTab = function(tb){
+    G.f = (tb === 'all' && (G.f === 'unread' || G.f === 'groups')) ? G.f : tb;
+    G.q = ''; var si = $('#waSearch'); if (si) si.value = ''; G.sigL = '';
+    paintSide(true); if (tb === 'status') loadStat();
+  };
   function paintSide(force){
     var app = $('#waApp'); if (!app) return;
     app.classList.toggle('open', !!G.open);
-    paintBlueAll();
+    paintBlueAll(); paintTabs();
     var me = G.me || {}, st = G.st || {}, nm = me.name || st.name || 'WhatsApp', no = me.number || st.number || '';
     var a = $('#waMeAv'); if (a && a.dataset.k !== nm + '|' + (me.av || '')){ a.dataset.k = nm + '|' + (me.av || ''); a.innerHTML = ini(nm) + (me.av ? '<img src="' + esc(url(me.av)) + '" alt="" onerror="this.remove()">' : ''); }
     var n1 = $('#waMeNm'), n2 = $('#waMeNo'); if (n1) n1.textContent = nm; if (n2) n2.textContent = no;
@@ -246,15 +316,16 @@
       if (want){ var i = $('#waCq'); if (i) i.focus(); paintContacts(); if (!G.contacts) loadContacts(); } } }
     var un = G.chats.reduce(function(n, c){ return n + (c.unread ? 1 : 0); }, 0), ch = $('#waChips'), sn = G.stN || 0;
     if (ch && ch.dataset.k !== G.f + '|' + un + '|' + sn){ ch.dataset.k = G.f + '|' + un + '|' + sn;
-      ch.innerHTML = [['all','All'],['unread','Unread' + (un ? ' ' + un : '')],['groups','Groups'],['status','Status' + (sn ? ' ' + sn : '')]].map(function(x){ return '<button class="' + (G.f === x[0] ? 'on' : '') + '" onclick="waChip(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join(''); }
+      ch.innerHTML = [['all','All'],['unread','Unread' + (un ? ' ' + un : '')],['groups','Groups']].map(function(x){ return '<button class="' + (G.f === x[0] ? 'on' : '') + '" onclick="waChip(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join(''); }
     var sig = (G.hist ? G.hist.chats + '/' + G.hist.msgs : '') + '|' + G.f + '|' + G.q + '|' + (G.open ? G.open.id : '') + '|' + G.chats.map(function(c){ return c.id + c.at + c.unread + c.last + c.name; }).join(',') + (G.f === 'status' ? '|S' + (G.stat || []).map(function(g){ return g.id + g.at + g.items.length + g.name; }).join(',') : '');
     if (!force && sig === G.sigL) return; G.sigL = sig;
     var el = $('#waList'); if (!el) return; var top = el.scrollTop, q = G.q.toLowerCase();
+    if (G.f === 'calls' || G.f === 'comm' || G.f === 'you'){ el.innerHTML = tabPage(G.f); el.scrollTop = 0; return; }
     if (G.f === 'status'){ paintStatusList(el, q); el.scrollTop = top; return; }
     var rows = G.chats.filter(function(c){ return (G.f === 'unread' ? c.unread : G.f === 'groups' ? c.group : true) && (!q || (title(c) + ' ' + c.number).toLowerCase().indexOf(q) > -1); }).map(function(c){
       return '<div class="wa-row' + (G.open && G.open.id === c.id ? ' on' : '') + '" data-id="' + esc(c.id) + '" onclick="waOpen(this.dataset.id)">' + avatar(c) +
         '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small>' + (c.out ? 'You: ' : '') + esc(c.last) + '</small></div>' +
-        '<div class="wa-end">' + esc(when(c.at)) + (c.unread ? '<br><em>' + c.unread + '</em>' : '') + '</div></div>'; }).join('');
+        '<div class="wa-end' + (c.unread ? ' un' : '') + '">' + esc(when(c.at)) + (c.unread ? '<br><em>' + c.unread + '</em>' : '') + '</div></div>'; }).join('');
     var emp = !G.loaded ? 'Loading chats…' : (G.q || G.f !== 'all') ? 'No chat matches.<br>Tap 💬 to start a new chat.' : 'No chats yet.' + (G.hist ? '<br><small>WhatsApp has sent ' + G.hist.chats + ' chats and ' + G.hist.msgs + ' messages so far.</small>' : '') + '<br>Old chats come only when a device is linked. Tap below to link again and sync them.<br><button class="btn sm" style="margin-top:8px" onclick="waRelink()">↻ Re-link to sync old chats</button><br><small>You can still tap 💬 and message any contact.</small>';
     el.innerHTML = rows || '<div class="wa-empty">' + emp + '</div>';
     el.scrollTop = top;
@@ -269,7 +340,7 @@
     if (m.dataset.k !== 'c:' + c.id || force){
       m.dataset.k = 'c:' + c.id; G.sigM = '';
       m.innerHTML = '<div class="wa-head"><button class="wa-ic wa-back" onclick="waBack()">←</button>' + avatar(c, 'sm') +
-        '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small class="muted">' + esc(c.number || (c.group ? 'Group' : '')) + '</small></div><button class="wa-ic wa-blue' + (c.blue ? ' on' : '') + '" id="waBlueBtn" title="' + (c.blue ? 'Blue tick: SHOWN to this contact (tap to hide)' : 'Blue tick: HIDDEN from this contact (tap to show)') + '" onclick="waBlue()">' + (c.blue ? '👁 ✓✓' : '🙈 ✓✓') + '</button><button class="wa-ic" title="Video call" onclick="waCall(1)">🎥</button><button class="wa-ic" title="Voice call" onclick="waCall(0)">📞</button></div>' +
+        '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small class="muted">' + esc(c.number || (c.group ? 'Group' : '')) + '</small></div><button class="wa-ic wa-blue' + (c.blue ? ' on' : '') + '" id="waBlueBtn" title="' + (c.blue ? 'Blue tick: SHOWN to this contact (tap to hide)' : 'Blue tick: HIDDEN from this contact (tap to show)') + '" onclick="waBlue()">' + (c.blue ? '👁 ✓✓' : '🙈 ✓✓') + '</button></div>' +
         '<div class="wa-msgs" id="waMsgs"></div>' +
         '<div class="wa-comp">' + (G.emoji ? emojiHtml() : '') + '<button class="wa-ic" title="Emoji" onclick="waEmoji()">😊</button><button class="wa-ic" title="Photo / video" onclick="waPick(0)">📷</button><button class="wa-ic" title="Document / file" onclick="waPick(1)">📎</button>' +
         '<textarea class="input" id="waIn" rows="1" placeholder="Type a message" oninput="this.style.height=\'auto\';this.style.height=Math.min(this.scrollHeight,120)+\'px\'" onkeydown="waKey(event)"></textarea>' +
