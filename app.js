@@ -3783,28 +3783,42 @@ async function licTableAdd(){ if (!can('lic')) return deny();
   if (cur.length >= 20) return toast('Up to 20 extra options. Remove one first.', true);
   try{ const r = await api('saveLicFields', { fields:cur.map(o => ({ o, n:o })).concat([{ o:'', n:'Table No' }]) }); S.d.licFields = r.fields || []; render(); toast('“Table No” added - fill it in each policy'); }catch(e){ handleErr(e); }
 }
+function licTog(el){ S.lic.open = S.lic.open || {}; if (el.open) S.lic.open[el.dataset.id] = 1; else delete S.lic.open[el.dataset.id]; }
 function licListHtml(){
-  const all = S.d.lic || [], list = filteredLic(), total = all.length;
-  const rows = list.map(x => { const c = licCountdown(x.endDate), rn = licRenewInfo(x); return `<tr>
-      <td data-l="Customer Name" style="white-space:normal;word-break:break-word;min-width:150px"><div class="lic-name"><b>${esc(x.name) || '<span class="dim">—</span>'}</b><span class="lic-name-tags">${licStatusTag(x.endDate)}${licGroupTag(x)}</span></div></td>
-      <td data-l="Policy Number" style="white-space:normal;word-break:break-all">${esc(x.policyNo) || '<span class="dim">—</span>'}${x.pic ? ` <img class="pthumb" alt="Policy photo" src="${x.pic}" onclick="picOpen('lic','${esc(x.id)}')">` : ''}${(x.pp || []).map((t, i) => t ? ` <img class="pthumb" alt="Premium photo ${i + 1}" title="Premium photo ${i + 1}" src="${t}" onclick="licPpOpen('${esc(x.id)}',${i + 1})">` : '').join('')}</td>
-      <td data-l="Policy Name" style="white-space:normal;word-break:break-word;min-width:120px">${esc(x.policyName) || '<span class="dim">—</span>'}</td>
-      <td data-l="Premium Amount" class="n">${licAmt(x.amount)}</td>
-      <td data-l="Sum Assured" class="n">${licAmt(x.totalAmount)}</td>
-      <td data-l="Nominee" style="white-space:normal;word-break:break-word">${esc(x.nominee) || '<span class="dim">—</span>'}</td>
-      <td data-l="Customer Mobile" style="white-space:nowrap">${x.phone ? `<a href="tel:${esc(x.phone)}">${esc(x.phone)}</a>` : '<span class="dim">—</span>'}</td>
-      <td data-l="Premium Mode"><span class="tag">${esc(LIC_FREQ[x.freq] || 'One-time')}</span></td>
-      <td data-l="Pay per Year" class="n">${licYearly(x) ? `<b>${esc(licYearlyTxt(x))}</b><br><span class="muted" style="font-size:calc(11.5px*var(--fs))">${LIC_PER_YEAR[x.freq]} × ${esc(licAmt(x.amount))}</span>` : esc(licYearlyTxt(x))}</td>
-      <td data-l="Starting Date">${licDateFmt(x.startDate)}</td>
-      <td data-l="Ending Date">${licDateFmt(x.endDate)}</td>
-      <td data-l="Next Renewal">${rn.due ? `${licDateFmt(rn.due)}<br><span class="lic-rn ${rn.cls}" data-lic-id="${esc(x.id)}" style="font-weight:700;white-space:nowrap">${esc(rn.text)}</span>` : '<span class="dim">—</span>'}</td>
-      <td data-l="Time Left"><span class="lic-cd ${c.cls}" data-end="${esc(x.endDate || '')}" style="font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap">${esc(c.text)}</span></td>
-      ${licMore(x) ? `<td data-l="More details" style="white-space:normal;min-width:140px;font-size:calc(12.5px*var(--fs))">${licMore(x)}</td>` : ''}
-      <td class="n nowrap"><button class="btn soft sm" onclick="licCopy('${esc(x.id)}')" title="Copy all of this customer's data">📋 Copy</button>
-        <button class="btn ghost sm" onclick="licForm('${esc(x.id)}')">Edit</button> <button class="btn ghost sm" onclick="licDel('${esc(x.id)}')">🗑</button></td></tr>`;
+  const all = S.d.lic || [], list = filteredLic(), total = all.length, op = S.lic.open || {};
+  const dash = '<span class="dim">—</span>', f = (k, v, cls) => `<div class="lic-f${cls ? ' ' + cls : ''}"><span class="lk">${k}</span><span class="lv">${v}</span></div>`;
+  const rows = list.map(x => {
+    const c = licCountdown(x.endDate), rn = licRenewInfo(x), id = esc(x.id);
+    const photos = (x.pic ? `<img class="pthumb" alt="Policy photo" src="${x.pic}" onclick="picOpen('lic','${id}')">` : '') + (x.pp || []).map((t, i) => t ? `<img class="pthumb" alt="Premium photo ${i + 1}" title="Premium photo ${i + 1}" src="${t}" onclick="licPpOpen('${id}',${i + 1})">` : '').join('');
+    const more = licMore(x);
+    return `<details class="lic-acc" data-id="${id}" ${op[x.id] ? 'open' : ''} ontoggle="licTog(this)">
+      <summary><span class="lic-sum"><b class="lic-nm">${esc(x.name) || dash}</b><span class="lic-name-tags">${licStatusTag(x.endDate)}${licGroupTag(x)}</span></span><span class="lic-chev" aria-hidden="true"></span></summary>
+      <div class="lic-body">
+        <div class="lic-sec">Policy</div>
+        <div class="lic-grid">
+          ${f('Policy number', esc(x.policyNo) || dash)}
+          ${f('Policy name', esc(x.policyName) || dash)}
+          ${f('Sum assured', licAmt(x.totalAmount))}
+          ${f('Nominee', esc(x.nominee) || dash)}
+          ${f('Mobile', x.phone ? `<a href="tel:${esc(x.phone)}">${esc(x.phone)}</a>` : dash)}
+          ${f('Time left', `<span class="lic-cd ${c.cls}" data-end="${esc(x.endDate || '')}">${esc(c.text)}</span>`)}
+          ${f('Starting date', licDateFmt(x.startDate))}
+          ${f('Ending date', licDateFmt(x.endDate))}
+        </div>
+        ${photos ? `<div class="lic-photos">${photos}</div>` : ''}
+        <div class="lic-sec">Premium</div>
+        <div class="lic-grid lic-prem-box">
+          ${f('Premium amount', licAmt(x.amount))}
+          ${f('Premium mode', esc(LIC_FREQ[x.freq] || 'One-time'))}
+          ${f('Pay per year', licYearly(x) ? `${esc(licYearlyTxt(x))} <span class="lic-sub">${LIC_PER_YEAR[x.freq]} × ${esc(licAmt(x.amount))}</span>` : esc(licYearlyTxt(x)))}
+          ${f('Next renewal', rn.due ? `${licDateFmt(rn.due)} <span class="lic-rn ${rn.cls}" data-lic-id="${id}">${esc(rn.text)}</span>` : dash)}
+        </div>
+        ${more ? `<div class="lic-sec">More details</div><div class="lic-more">${more}</div>` : ''}
+        <div class="lic-act"><button class="btn soft" onclick="licCopy('${id}')" title="Copy all of this customer's data">📋 Copy</button><button class="btn ghost" onclick="licForm('${id}')">✏️ Edit</button><button class="btn ghost lic-del" onclick="licDel('${id}')">🗑 Delete</button></div>
+      </div></details>`;
   }).join('');
-  return `<div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''}</span></h3>
-      ${list.length ? `<div class="tbl-wrap"><table class="stk"><thead><tr><th>Customer Name</th><th>Policy Number</th><th>Policy Name</th><th>Premium Amount</th><th>Sum Assured</th><th>Nominee</th><th>Mobile</th><th>Premium Mode</th><th>Pay per Year</th><th>Starting Date</th><th>Ending Date</th><th>Next Renewal</th><th>Time Left</th>${(S.d.licFields || []).length ? '<th>More details</th>' : ''}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+  return `<div class="card"><h3>LIC policies <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· ${list.length}${list.length !== total ? ' of ' + total : ''} · tap a name to open</span></h3>
+      ${list.length ? `<div class="lic-list">${rows}</div>`
         : `<div class="empty-state">${total ? 'No policies match your search / filter.' : 'No LIC policies yet. Tap “Add policy” to start.'}</div>`}
       <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;

@@ -229,21 +229,48 @@ body.has-btm[data-bbpos="float"] .fab,html.ks-compact body.has-btm[data-bbpos="f
 #btmSheet.bs-live .bs-card{max-height:56vh;border-radius:0 0 20px 20px;box-shadow:0 14px 40px rgba(0,0,0,.3)}
 body.btm-live #btmBar,body.btm-live #btmDp{z-index:170}
 
-/* LIC: premium text size (set by each user: A− / A+ on the LIC page, or More › 🎨) */
-table.stk td[data-l="Premium Amount"],table.stk td[data-l="Premium Mode"],table.stk td[data-l="Pay per Year"],table.stk td[data-l="Next Renewal"]{font-size:calc(1em*var(--lic-fs,1))}
-.lic-ri-main>.muted{font-size:calc(12.5px*var(--fs,1)*var(--lic-fs,1))!important}
-.lic-pill{font-size:calc(12.5px*var(--fs,1)*var(--lic-fs,1))}
-.kpi .val.lic-prem{font-size:calc(20px*var(--fs,1)*var(--lic-fs,1))!important}
-.lic-fs{display:inline-flex;align-items:center;gap:4px}
-.lic-fs b{min-width:44px;text-align:center;font-size:12.5px}
 #btmSheet.bs-live.bs-live-b:not(.hidden){align-items:flex-end}
 #btmSheet.bs-live.bs-live-b .bs-card{border-radius:20px 20px 0 0;box-shadow:0 -14px 40px rgba(0,0,0,.3)}
 
-/* v17: premium text size scales EVERYTHING written about premium (labels, values, tags, headings, reminder lines, KPI) */
-table.stk td[data-l="Premium Amount"]::before,table.stk td[data-l="Premium Mode"]::before,table.stk td[data-l="Pay per Year"]::before,table.stk td[data-l="Next Renewal"]::before{font-size:calc(10.5px*var(--fs,1)*var(--lic-fs,1))}
-table.stk td[data-l="Premium Amount"] *,table.stk td[data-l="Premium Mode"] *,table.stk td[data-l="Pay per Year"] *,table.stk td[data-l="Next Renewal"] *{font-size:inherit}
-table.stk td[data-l="Premium Mode"] .tag{font-size:calc(12px*var(--fs,1)*var(--lic-fs,1))}
-table.stk th:nth-child(4),table.stk th:nth-child(8),table.stk th:nth-child(9),table.stk th:nth-child(12){font-size:calc(1em*var(--lic-fs,1))}
-.lic-ri-main>.muted *{font-size:inherit}
+/* v18: LIC policies = tidy accordion (name + status; tap to open), one consistent type scale, premium block scales with the user's A−/A+ */
+.lic-list{display:flex;flex-direction:column;gap:10px;margin-top:6px}
+.lic-acc{border:1px solid var(--line);border-radius:16px;background:var(--card);overflow:hidden;transition:box-shadow .2s,border-color .2s}
+.lic-acc[open]{border-color:color-mix(in srgb,var(--brand) 40%,var(--line));box-shadow:0 6px 20px rgba(15,23,42,.08)}
+.lic-acc>summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.lic-acc>summary::-webkit-details-marker{display:none}
+.lic-sum{display:flex;flex-direction:column;gap:6px;min-width:0}
+.lic-nm{font-size:calc(16px*var(--fs,1));font-weight:700;line-height:1.3;overflow-wrap:anywhere}
+.lic-name-tags{display:flex;flex-wrap:wrap;gap:6px}
+.lic-name-tags .tag{margin-left:0}
+.lic-chev{flex:none;width:10px;height:10px;border-right:2.5px solid var(--muted);border-bottom:2.5px solid var(--muted);transform:rotate(45deg);margin:0 6px 4px 0;transition:transform .25s}
+.lic-acc[open] .lic-chev{transform:rotate(-135deg);margin-bottom:-4px}
+.lic-body{padding:2px 16px 16px;border-top:1px solid var(--line);animation:licOpen .28s ease both}
+@keyframes licOpen{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.lic-sec{margin:16px 0 8px;font-size:calc(11.5px*var(--fs,1));font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--brand)}
+.lic-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px}
+.lic-f{display:flex;flex-direction:column;gap:3px;min-width:0}
+.lic-f .lk{font-size:calc(11px*var(--fs,1));font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.lic-f .lv{font-size:calc(14.5px*var(--fs,1));font-weight:600;line-height:1.35;overflow-wrap:anywhere;color:var(--ink)}
+.lic-f .lv a{color:var(--brand);text-decoration:none}
+.lic-cd,.lic-rn{font-weight:700;font-variant-numeric:tabular-nums}
+.lic-photos{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.lic-photos .pthumb{width:56px;height:56px;object-fit:cover;border-radius:10px;border:1px solid var(--line);cursor:pointer}
+.lic-prem-box{padding:14px;border-radius:14px;background:color-mix(in srgb,var(--brand) 7%,var(--card));border:1px solid color-mix(in srgb,var(--brand) 18%,var(--line))}
+.lic-prem-box .lk{font-size:calc(11px*var(--fs,1)*var(--lic-fs,1))}
+.lic-prem-box .lv{font-size:calc(14.5px*var(--fs,1)*var(--lic-fs,1));font-weight:700}
+.lic-prem-box .lic-sub{display:block;font-size:calc(11.5px*var(--fs,1)*var(--lic-fs,1));font-weight:500;color:var(--muted)}
+.lic-prem-box .lic-rn{display:block;font-size:calc(13px*var(--fs,1)*var(--lic-fs,1))}
+.lic-more{display:flex;flex-direction:column;gap:6px;font-size:calc(13.5px*var(--fs,1));line-height:1.45;overflow-wrap:anywhere}
+.lic-act{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:18px}
+.lic-act .btn{width:100%;justify-content:center;padding-left:6px;padding-right:6px;white-space:nowrap}
+.lic-del{color:var(--bad)}
+.lic-fs{display:inline-flex;align-items:center;gap:4px}
+.lic-fs b{min-width:44px;text-align:center;font-size:12.5px}
+.lic-remind .lic-ri-main>.muted{font-size:calc(12.5px*var(--fs,1)*var(--lic-fs,1))!important}
+.lic-pill{font-size:calc(12.5px*var(--fs,1)*var(--lic-fs,1))}
+.kpi .val.lic-prem{font-size:calc(20px*var(--fs,1)*var(--lic-fs,1))!important}
 .kpi:has(.val.lic-prem) .lbl{font-size:calc(12px*var(--fs,1)*var(--lic-fs,1))}
 .kpi:has(.val.lic-prem) .hint{font-size:calc(11.5px*var(--fs,1)*var(--lic-fs,1))}
+@media (max-width:360px){.lic-grid{grid-template-columns:1fr}.lic-act{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:reduce){.lic-body{animation:none}}
+body[data-motion="off"] .lic-body{animation:none}
