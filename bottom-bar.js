@@ -44,6 +44,15 @@
      saved in that user's account on the server (and on this phone), so it is the same after every login. */
   function stripPlace(c){ var o = {}; Object.keys(c).forEach(function(k){ if (k !== 'place') o[k] = c[k]; }); return o; }
   function saveCfg(){ try { localStorage.setItem(KEY, JSON.stringify(stripPlace(cfg))); } catch (e) {} try { if (window.thPush) thPush(); } catch (e) {} }
+  /* ---------- MY layout (every user's own, saved in their account + on this phone, restored after every reopen) ----------
+     cfg.place._my = personal design overrides (bar size, icon, font, roundness, colours, labels, orientation, DP-bubble size, LIC premium text size)
+     cfg.place._fl = floating state { x, y (bar centre, 0-1 of screen), bx, by (DP bubble centre), min (1 = collapsed into the DP circle) } */
+  var FALL = { o: 'h', bs: 100, licfs: 100 };
+  function myd(){ var m = cfg.place._my; return (m && typeof m === 'object') ? m : {}; }
+  function eff(k){ var m = myd(); return m[k] !== undefined ? m[k] : (cfg[k] !== undefined ? cfg[k] : FALL[k]); }
+  function setMy(k, v){ if (!cfg.place._my || typeof cfg.place._my !== 'object') cfg.place._my = {}; cfg.place._my[k] = v; savePlace(); }
+  function fl(){ var f = cfg.place._fl; return (f && typeof f === 'object') ? f : {}; }
+  function setFl(k, v){ var f = {}, o = fl(); Object.keys(o).forEach(function(x){ f[x] = o[x]; }); if (v === null || v === undefined) delete f[k]; else f[k] = v; cfg.place._fl = f; savePlace(); }
   var curUid = null, plT = null;
   function uid(){ try { return (S.me && S.me.id && !S.me.viewing) ? String(S.me.id) : ''; } catch (e) { return ''; } }
   function plKey(u){ return 'ks_bb_pl_' + u; }
@@ -56,14 +65,14 @@
   function savePlace(){ if (!curUid) return; try { localStorage.setItem(plKey(curUid), JSON.stringify(cfg.place)); } catch (e) {} pushPlace(); }
   function syncUser(){
     var u = uid(); if (u === curUid) return; curUid = u;
-    if (!u){ cfg.place = {}; return; }
+    if (!u){ cfg.place = {}; try { applyCfg(); } catch (e) {} return; }
     var p = null; try { p = JSON.parse(localStorage.getItem(plKey(u)) || 'null'); } catch (e) {}
     if (!p || typeof p !== 'object'){ p = legacyPlace || {}; legacyPlace = null; }
-    cfg.place = p;
+    cfg.place = p; try { applyCfg(); } catch (e) {}
     try {
       if (typeof callServer === 'function' && S.token) callServer({ action: 'getMyMenu', token: S.token }).then(function(r){
         if (u !== curUid || !r || !r.ok) return;
-        if (r.menu){ var m = null; try { m = JSON.parse(r.menu); } catch (e) {} if (m && typeof m === 'object'){ cfg.place = m; try { localStorage.setItem(plKey(u), r.menu); } catch (e) {} lastHtml = ''; draw(); } }
+        if (r.menu){ var m = null; try { m = JSON.parse(r.menu); } catch (e) {} if (m && typeof m === 'object'){ cfg.place = m; try { localStorage.setItem(plKey(u), r.menu); } catch (e) {} applyCfg(); lastHtml = ''; draw(); vis(); } }
         else if (Object.keys(cfg.place).length) pushPlace();
       }).catch(function(){});
     } catch (e) {}
@@ -123,7 +132,8 @@
 
   var bar = document.createElement('nav'); bar.id = 'btmBar'; bar.className = 'hidden'; bar.setAttribute('aria-label', 'Main');
   var sheet = document.createElement('div'); sheet.id = 'btmSheet'; sheet.className = 'hidden';
-  document.body.appendChild(bar); document.body.appendChild(sheet);
+  var dp = document.createElement('button'); dp.id = 'btmDp'; dp.type = 'button'; dp.className = 'hidden'; dp.setAttribute('aria-label', 'Open menu');
+  document.body.appendChild(bar); document.body.appendChild(dp); document.body.appendChild(sheet);
 
   /* ---------- Side bars (Left / Right + the ones you add): slide out with an arrow ---------- */
   var sides = {}, vOff = true;
@@ -188,8 +198,48 @@
     if (Object.keys(sides).some(function(k){ return sides[k].open; }) && !(e.target.closest && e.target.closest('.sbx'))) closeSides();
   });
 
-  function vert(){ return cfg.pos === 'left' || cfg.pos === 'right'; }
-  function gap(){ document.body.style.setProperty('--bb-gap', (vert() ? (bar.offsetWidth || 78) + 22 : (bar.offsetHeight || 64) + 36) + 'px'); }
+  /* ---------- floating bar: placement, drag (long-press), collapse into the DP circle ---------- */
+  var probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)';
+  document.body.appendChild(probe);
+  function safe(){ var cs = getComputedStyle(probe); return { t: parseFloat(cs.paddingTop) || 0, b: parseFloat(cs.paddingBottom) || 0 }; }
+  function clampN(v, a, b){ return Math.max(a, Math.min(b, v)); }
+  function clampXY(w, h, L, T){
+    var W = window.innerWidth, H = window.innerHeight, m = 8, s = safe();
+    return [clampN(L, m, Math.max(m, W - w - m)), clampN(T, m + s.t, Math.max(m + s.t, H - h - m - s.b))];
+  }
+  function dpSize(){ return Math.round(56 * (+eff('bs') || 100) / 100); }
+  function barPos(w, h){
+    var f = fl(), W = window.innerWidth, H = window.innerHeight, s = safe();
+    if (typeof f.x === 'number' && typeof f.y === 'number') return clampXY(w, h, f.x * W - w / 2, f.y * H - h / 2);
+    return clampXY(w, h, (W - w) / 2, H - h - 12 - s.b);                  // default: bottom centre (where the old bar was)
+  }
+  function dpPos(){
+    var f = fl(), d = dpSize(), W = window.innerWidth, H = window.innerHeight, s = safe();
+    if (typeof f.bx === 'number' && typeof f.by === 'number') return clampXY(d, d, f.bx * W - d / 2, f.by * H - d / 2);
+    return clampXY(d, d, 14, H - d - 26 - s.b);                           // default: bottom-left corner
+  }
+  function dpCenter(){ var p = dpPos(), d = dpSize(); return { x: p[0] + d / 2, y: p[1] + d / 2 }; }
+  function isMin(){ return !!fl().min; }
+  var lastGap = '';
+  function placeAll(){
+    var H = window.innerHeight, el = null, top = 0, hh = 0;
+    if (bar.offsetWidth && !bar.classList.contains('hidden') && !bar.classList.contains('bb-min')){
+      var pb = barPos(bar.offsetWidth, bar.offsetHeight);
+      bar.style.left = pb[0] + 'px'; bar.style.top = pb[1] + 'px'; el = pb; top = pb[1]; hh = bar.offsetHeight;
+    }
+    var pd = dpPos(), d = dpSize();
+    dp.style.left = pd[0] + 'px'; dp.style.top = pd[1] + 'px';
+    if (isMin()){ top = pd[1]; hh = d; el = pd; }
+    var g = '24px', gt = '0px', bt = '0';
+    if (el){
+      if (top > H * 0.5) g = Math.min(Math.round(H - top + 12), Math.round(H * 0.5)) + 'px';
+      else if (top + hh < H * 0.28 && !isMin()){ gt = Math.round(top + hh + 8) + 'px'; bt = '1'; }
+    }
+    var key = g + '|' + gt + '|' + bt;
+    if (key !== lastGap){ lastGap = key; document.body.style.setProperty('--bb-gap', g); document.body.style.setProperty('--bb-gtop', gt); document.body.dataset.bbtop = bt; }
+  }
+  function gap(){ placeAll(); }
   function moveInd(instant){
     var ind = bar.querySelector('.bb-ind'), on = bar.querySelector('button.on'); if (!ind) return;
     if (!on || !bar.offsetWidth){ ind.style.opacity = 0; return; }
@@ -198,13 +248,97 @@
     if (instant){ void ind.offsetWidth; ind.style.transition = ''; }
   }
   function applyCfg(){
-    var s = bar.style;
-    s.setProperty('--bb-s', cfg.scale / 100); s.setProperty('--bb-fs', cfg.fs + 'px'); s.setProperty('--bb-ic', cfg.ic + 'px'); s.setProperty('--bb-r', cfg.r + 'px');
-    ['bg', 'tx', 'on'].forEach(function(k){ if (cfg[k]) s.setProperty('--bb-' + k, cfg[k]); else s.removeProperty('--bb-' + k); });
-    bar.classList.toggle('nolab', !cfg.labels);
-    bar.dataset.pos = cfg.pos; bar.dataset.anim = cfg.anim; document.body.dataset.bbpos = cfg.pos;
-    requestAnimationFrame(function(){ gap(); moveInd(true); });
+    var s = bar.style, ds = dp.style;
+    s.setProperty('--bb-s', eff('scale') / 100); s.setProperty('--bb-fs', eff('fs') + 'px'); s.setProperty('--bb-ic', eff('ic') + 'px'); s.setProperty('--bb-r', eff('r') + 'px');
+    ['bg', 'tx', 'on'].forEach(function(k){
+      var v = eff(k);
+      if (v){ s.setProperty('--bb-' + k, v); if (k === 'on') ds.setProperty('--bb-on', v); }
+      else { s.removeProperty('--bb-' + k); if (k === 'on') ds.removeProperty('--bb-on'); }
+    });
+    ds.setProperty('--bb-ds', (+eff('bs') || 100) / 100);
+    bar.classList.toggle('nolab', !eff('labels'));
+    bar.dataset.pos = 'float'; bar.dataset.o = eff('o') === 'v' ? 'v' : 'h'; bar.dataset.anim = eff('anim'); document.body.dataset.bbpos = 'float';
+    try { document.documentElement.style.setProperty('--lic-fs', ((+eff('licfs') || 100) / 100).toFixed(2)); } catch (e) {}
+    requestAnimationFrame(function(){ placeAll(); moveInd(true); });
   }
+  var noClickUntil = 0;
+  var still = function(){ return document.body.dataset.motion === 'off' || (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches); };
+  function collapse(){
+    if (isMin() || bar.classList.contains('bb-closing')) return;
+    var r = bar.getBoundingClientRect(), c = dpCenter();
+    bar.style.setProperty('--ox', (c.x - r.left) + 'px'); bar.style.setProperty('--oy', (c.y - r.top) + 'px');
+    var done = function(){ bar.classList.remove('bb-closing'); setFl('min', 1); bar.classList.add('bb-min'); vis(); dp.classList.add('bb-pop'); setTimeout(function(){ dp.classList.remove('bb-pop'); }, 600); };
+    closeSides(); openSheet(false);
+    if (still()) return done();
+    bar.classList.add('bb-closing'); setTimeout(done, 330);
+  }
+  function expand(){
+    if (!isMin()) return;
+    setFl('min', 0); bar.classList.remove('bb-min'); dp.classList.add('hidden'); vis();
+    var pb = barPos(bar.offsetWidth || 300, bar.offsetHeight || 64), c = dpCenter();
+    bar.style.left = pb[0] + 'px'; bar.style.top = pb[1] + 'px';
+    bar.style.setProperty('--ox', (c.x - pb[0]) + 'px'); bar.style.setProperty('--oy', (c.y - pb[1]) + 'px');
+    if (still()) return;
+    bar.classList.remove('bb-opening'); void bar.offsetWidth; bar.classList.add('bb-opening');
+    setTimeout(function(){ bar.classList.remove('bb-opening'); }, 800);
+  }
+  /* drag: long-press the bar (anywhere except Profile, which keeps its own long-press = switch user) or press & drag the ⋮ grip; the DP circle drags with a long-press or a quick pull */
+  var dragSt = null, armed = null, lpDrag = null;
+  function dragStart(el, isBar, id, px, py){
+    var r = el.getBoundingClientRect();
+    dragSt = { el: el, isBar: isBar, id: id, ox: px - r.left, oy: py - r.top, w: r.width, h: r.height };
+    noClickUntil = Infinity; el.classList.add('bb-drag');
+    try { el.setPointerCapture(id); } catch (e) {}
+    try { if (navigator.vibrate) navigator.vibrate(18); } catch (e) {}
+    if (isBar) closeSides();
+  }
+  function dragMove(e){
+    if (!dragSt || e.pointerId !== dragSt.id) return;
+    var p = clampXY(dragSt.w, dragSt.h, e.clientX - dragSt.ox, e.clientY - dragSt.oy);
+    dragSt.el.style.left = p[0] + 'px'; dragSt.el.style.top = p[1] + 'px';
+  }
+  function dragEnd(){
+    clearTimeout(lpDrag); armed = null;
+    if (!dragSt) return;
+    var d = dragSt; dragSt = null; d.el.classList.remove('bb-drag');
+    var r = d.el.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
+    var fx = +((r.left + r.width / 2) / W).toFixed(4), fy = +((r.top + r.height / 2) / H).toFixed(4);
+    var f = {}, o = fl(); Object.keys(o).forEach(function(k){ f[k] = o[k]; });
+    if (d.isBar){ f.x = fx; f.y = fy; } else { f.bx = fx; f.by = fy; }
+    cfg.place._fl = f; savePlace();
+    noClickUntil = Date.now() + 350; placeAll(); moveInd(true);
+  }
+  bar.addEventListener('pointerdown', function(e){
+    if (e.button > 0 || dragSt) return;
+    var grip = !!e.target.closest('.bb-grip');
+    if (!grip && e.target.closest('[data-go="profile"]')) return;
+    armed = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, id: e.pointerId, grip: grip };
+    clearTimeout(lpDrag);
+    if (grip) return;
+    lpDrag = setTimeout(function(){ if (armed && !dragSt) dragStart(bar, true, armed.id, armed.lx, armed.ly); }, 420);
+  });
+  bar.addEventListener('pointermove', function(e){
+    if (dragSt){ dragMove(e); return; }
+    if (!armed || e.pointerId !== armed.id) return;
+    armed.lx = e.clientX; armed.ly = e.clientY;
+    var dist = Math.max(Math.abs(e.clientX - armed.x), Math.abs(e.clientY - armed.y));
+    if (armed.grip){ if (dist > 4) dragStart(bar, true, armed.id, armed.x, armed.y); }
+    else if (dist > 10){ clearTimeout(lpDrag); armed = null; }
+  });
+  dp.addEventListener('pointerdown', function(e){
+    if (e.button > 0 || dragSt) return;
+    armed = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, id: e.pointerId, grip: false, dp: true };
+    clearTimeout(lpDrag); lpDrag = setTimeout(function(){ if (armed && !dragSt) dragStart(dp, false, armed.id, armed.lx, armed.ly); }, 350);
+  });
+  dp.addEventListener('pointermove', function(e){
+    if (dragSt){ dragMove(e); return; }
+    if (!armed || !armed.dp || e.pointerId !== armed.id) return;
+    armed.lx = e.clientX; armed.ly = e.clientY;
+    if (Math.max(Math.abs(e.clientX - armed.x), Math.abs(e.clientY - armed.y)) > 8){ clearTimeout(lpDrag); dragStart(dp, false, armed.id, armed.x, armed.y); dragMove(e); }
+  });
+  [bar, dp].forEach(function(el){ ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function(n){ el.addEventListener(n, dragEnd); }); });
+  dp.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+  dp.addEventListener('click', function(e){ e.stopPropagation(); if (Date.now() < noClickUntil) return; expand(); });
 
   function avatarIcon(){
     var me = {}, src = '', nm = 'U';
@@ -220,20 +354,23 @@
     if (id === 'lic') return '<span class="bemo">' + LICIMG + '</span>';
     return ICON[id] || '<span class="bemo">' + esc(emo || '•') + '</span>';
   }
-  var lastHtml = '';
+  var lastHtml = '', dpHtml = '';
   function draw(){
     syncUser();
-    var h = '';
+    var h = '', k = 0, chatB = '';
     applyPlace();
     barIds().forEach(function(id){
       var i = optInfo(id); if (!i) return;
       var badge = '';
       if (id === 'chat'){ var cb = $('#chatBadge'); if (cb && !cb.classList.contains('hidden') && cb.textContent.trim() && cb.textContent.trim() !== '0') badge = '<em>' + esc(cb.textContent.trim()) + '</em>'; }
-      h += '<button type="button" data-go="' + id + '"><span class="bi">' + iconFor(id, i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
+      if (id === 'chat') chatB = badge;
+      h += '<button type="button" style="--k:' + (k++) + '" data-go="' + id + '"><span class="bi">' + iconFor(id, i.ic) + badge + '</span><small>' + esc(i.lb) + '</small></button>';
     });
-    h = '<i class="bb-ind"></i>' + h;
+    h = '<span class="bb-grip" title="Drag to move" aria-label="Drag to move"><i></i></span><i class="bb-ind"></i>' + h;
     drawSides();
-    h += '<button type="button" data-all="1" id="btmAll"><span class="bi">' + iconFor('all') + '</span><small>More</small></button>';
+    h += '<button type="button" style="--k:' + (k++) + '" data-all="1" id="btmAll"><span class="bi">' + iconFor('all') + '</span><small>More</small></button>';
+    h += '<button type="button" class="bb-min" data-min="1" aria-label="Hide bar (show my picture)" title="Hide bar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>';
+    var dh = avatarIcon() + chatB; if (dh !== dpHtml){ dp.innerHTML = dh; dpHtml = dh; }
     var fresh = h !== lastHtml;
     if (fresh){ bar.innerHTML = h; lastHtml = h; }
     mark(); remember(); moveInd(fresh);
@@ -264,7 +401,7 @@
 
   var openedAt = 0;
   function drawSheet(){
-    var h = '<div class="bs-card"><div class="bs-h"><b>More</b><span class="bs-hb"><button type="button" class="bs-ed" data-manage="1" aria-label="Manage menu" title="Manage menu">✎</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div><div class="bs-g">';
+    var h = '<div class="bs-card"><div class="bs-h"><b>More</b><span class="bs-hb"><button type="button" class="bs-ed" data-mine="1" aria-label="Customize my layout" title="Customize my layout">🎨</button><button type="button" class="bs-ed" data-manage="1" aria-label="Manage menu" title="Manage menu">✎</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div><div class="bs-g">';
     var n = 0;
     optIds().forEach(function(id){
       if (place(id) !== 'more') return; var i = optInfo(id); if (!i) return;
@@ -350,6 +487,30 @@
     if (to === def) delete cfg.place[id]; else cfg.place[id] = to;
     commit();
   }
+  /* ---------- Customize my layout (every user, live preview, saved per account) ---------- */
+  function drawMine(){
+    var rng = function(k, l, min, max, unit){ var v = +eff(k); return '<div class="sbf"><label>' + l + ' <b id="myv-' + k + '">' + v + unit + '</b></label><input type="range" data-my="' + k + '" min="' + min + '" max="' + max + '" value="' + v + '"></div>'; };
+    var sel = function(k, l, list){ var cur = eff(k); return '<div class="sbf"><label>' + l + '</label><select class="select" data-my="' + k + '">' + list.map(function(o){ return '<option value="' + o[0] + '"' + (cur === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>'; };
+    var col = function(k, l, d){ var v = eff(k); return '<div class="sbf"><label>' + l + (v ? '' : ' <span class="muted">(auto)</span>') + '</label><span style="display:flex;gap:6px;align-items:center"><input type="color" data-my="' + k + '" value="' + (v || d) + '"><button type="button" class="btn ghost sm" data-myreset="' + k + '">Auto</button></span></div>'; };
+    sheet.innerHTML = '<div class="bs-card"><div class="bs-h"><b>🎨 My layout</b><span class="bs-hb"><button type="button" data-back="1" aria-label="Back to More" title="Back">‹</button><button type="button" data-x="1" aria-label="Close">✕</button></span></div>' +
+      '<p class="muted" style="font-size:12.5px;margin:0 0 10px">Only your account. Changes show live and stay saved when you reopen the app. <b>Long-press the bar</b> (or drag the ⋮ handle) to move it anywhere; tap <b>⌄</b> on the bar to fold it into your picture circle.</p>' +
+      rng('scale', 'Bar size', 70, 150, '%') + rng('ic', 'Icon size', 18, 40, 'px') + rng('fs', 'Text size', 9, 17, 'px') + rng('r', 'Roundness', 0, 36, 'px') + rng('bs', 'My picture circle size', 70, 150, '%') +
+      rng('licfs', 'LIC premium text size', 70, 220, '%') +
+      sel('o', 'Bar direction', [['h', 'Horizontal ↔'], ['v', 'Vertical ↕']]) +
+      sel('anim', 'Icon animation', [['pop', 'Pop'], ['bounce', 'Bounce'], ['wiggle', 'Wiggle'], ['none', 'Off']]) +
+      '<label class="tog" style="margin:6px 0 10px;display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" data-my="labels" ' + (eff('labels') ? 'checked' : '') + '> Show names under icons</label>' +
+      col('bg', 'Bar colour', cssHex('--card', '#ffffff')) + col('tx', 'Text &amp; icon colour', cssHex('--ink', '#1e293b')) + col('on', 'Selected colour', cssHex('--brand', '#4f46e5')) +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn ghost" data-mypos="1">↺ Reset position</button><button type="button" class="btn ghost" data-myfull="1">↺ Reset my layout</button></div></div>';
+  }
+  function onMy(e){
+    var t = e.target, k = t && t.getAttribute && t.getAttribute('data-my'); if (!k) return;
+    var v = t.type === 'checkbox' ? (t.checked ? 1 : 0) : (t.type === 'range' ? +t.value : t.value);
+    setMy(k, v);
+    var lab = document.getElementById('myv-' + k); if (lab) lab.textContent = t.value + ((k === 'scale' || k === 'bs' || k === 'licfs') ? '%' : 'px');
+    applyCfg(); lastHtml = ''; draw();
+  }
+  sheet.addEventListener('input', onMy); sheet.addEventListener('change', onMy);
+  window.ksMy = { get: function(k){ return eff(k); }, set: function(k, v){ setMy(k, v); applyCfg(); } };
   function drawSwitch(){
     remember();
     var cur = curAcct(), list = accts();
@@ -365,8 +526,10 @@
     sheet.innerHTML = h;
   }
   function openSheet(on, kind){
-    if (on){ openedAt = Date.now(); if (kind === 'switch') drawSwitch(); else if (kind === 'manage') drawManage(); else if (kind === 'sbedit') drawSbEdit(); else drawSheet(); }
+    if (on){ openedAt = Date.now(); if (kind === 'switch') drawSwitch(); else if (kind === 'manage') drawManage(); else if (kind === 'sbedit') drawSbEdit(); else if (kind === 'mine') drawMine(); else drawSheet(); }
     sheet.classList.toggle('hidden', !on); document.body.classList.toggle('btm-sheet', !!on);
+    var live = !!on && kind === 'mine'; sheet.classList.toggle('bs-live', live); document.body.classList.toggle('btm-live', live);
+    if (live){ var br = bar.getBoundingClientRect(); sheet.classList.toggle('bs-live-b', !bar.offsetWidth || (br.top + br.height / 2) < window.innerHeight / 2); }   // card goes to the side opposite the bar
   }
   function switchTo(id){
     var a = accts().filter(function(x){ return x.id === id; })[0]; if (!a) return;
@@ -377,6 +540,12 @@
   var lpFired = false;
   function onTap(e){
     var t = e.target;
+    if (Date.now() < noClickUntil) return;
+    if (t.closest('[data-min]')){ collapse(); return; }
+    if (t.closest('[data-mine]')){ openSheet(true, 'mine'); return; }
+    var myr = t.closest('[data-myreset]'); if (myr){ var m0 = myd(); delete m0[myr.dataset.myreset]; cfg.place._my = m0; savePlace(); applyCfg(); openSheet(true, 'mine'); return; }
+    if (t.closest('[data-mypos]')){ var f0 = fl(); delete f0.x; delete f0.y; delete f0.bx; delete f0.by; cfg.place._fl = f0; savePlace(); placeAll(); say('Position reset'); return; }
+    if (t.closest('[data-myfull]')){ delete cfg.place._my; delete cfg.place._fl; savePlace(); applyCfg(); lastHtml = ''; draw(); vis(); openSheet(true, 'mine'); say('Layout reset'); return; }
     if (Date.now() - openedAt < 450 && t === sheet) return;
     if (t === sheet || t.closest('[data-x]')){ openSheet(false); return; }
     var mv = t.closest('[data-mv]'); if (mv){ var q = mv.dataset.mv.split('|'); setPlace(q[0], q[1]); return; }
@@ -429,10 +598,12 @@
     var b = document.body, off = app.classList.contains('hidden') || b.classList.contains('vc-open') || b.classList.contains('menu-open') ||
       b.classList.contains('chat-conv') || !!$('.chat.in-conv') || kb;
     bar.classList.toggle('hidden', off);
+    if (!bar.classList.contains('bb-closing')) bar.classList.toggle('bb-min', isMin());
+    dp.classList.toggle('hidden', off || !isMin());
     vOff = off; Object.keys(sides).forEach(function(k){ sides[k].el.classList.toggle('hidden', off); });
     if (off) closeSides();
     b.classList.toggle('has-btm', !off);
-    if (!off){ gap(); requestAnimationFrame(function(){ moveInd(true); }); }
+    if (!off){ gap(); requestAnimationFrame(function(){ gap(); moveInd(true); }); }
     if (app.classList.contains('hidden')) openSheet(false);
   }
   if (window.visualViewport){
@@ -464,7 +635,7 @@
     return '<div class="card" id="bbCard"><h3>🧭 Bottom bar</h3>' +
       '<p class="muted" style="margin-bottom:12px">Changes show on the bar at once and are saved on this phone. The bar is used on phones and tablets.</p>' +
       rng('scale', 'Bar size', 80, 140, '%') + rng('ic', 'Icon size', 18, 40, 'px') + rng('fs', 'Font size', 9, 17, 'px') + rng('r', 'Roundness', 0, 36, 'px') +
-      '<div class="bb-row bb-colr"><label>Position</label><select class="select bb-sel" data-bbs="pos">' + [['bottom', 'Bottom'], ['top', 'Top'], ['left', 'Left side'], ['right', 'Right side']].map(function(o){ return '<option value="' + o[0] + '"' + (c.pos === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
+      '<p class="muted" style="margin:0 0 10px">Position: long-press the bar and drag it anywhere. Every user can also fine-tune their own bar from More › 🎨.</p>' +
       '<div class="bb-row bb-colr"><label>Animation</label><select class="select bb-sel" data-bbs="anim">' + [['pop', 'Pop'], ['bounce', 'Bounce'], ['wiggle', 'Wiggle'], ['none', 'Off']].map(function(o){ return '<option value="' + o[0] + '"' + (c.anim === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
       '<label class="tog" style="margin:6px 0 10px"><input type="checkbox" data-bb="labels" ' + (c.labels ? 'checked' : '') + '> Show names under icons</label>' +
       col('bg', 'Bar colour', cssHex('--card', '#ffffff')) + col('tx', 'Text &amp; icon colour', cssHex('--ink', '#1e293b')) + col('on', 'Selected colour', cssHex('--brand', '#4f46e5')) +

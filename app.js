@@ -3808,6 +3808,11 @@ function licListHtml(){
       <p class="muted" style="margin-top:12px;font-size:calc(13px*var(--fs))">📋 <b>Copy</b> copies that customer's full data in one tap. <b>Next Renewal</b> comes from the <b>Renewal / Premium Due Date</b> you enter once — it then repeats by itself every month / quarter / half-year / year (per Premium Mode) and counts down the days, months or years left; <b>Time Left</b> counts down live to the policy's ending date. Saved in the “LIC Policies” tab of your Google Sheet — ⬇ Excel / ⬇ PDF export everything.</p>
     </div>`;
 }
+function licFs(d){                                    // premium text size: each user's own, saved in their account (More › 🎨 has the same slider)
+  const cur = +(window.ksMy ? ksMy.get('licfs') : 100) || 100, n = Math.max(70, Math.min(220, cur + d));
+  if (window.ksMy) ksMy.set('licfs', n); else document.documentElement.style.setProperty('--lic-fs', (n / 100).toFixed(2));
+  const e = document.getElementById('licFsV'); if (e) e.textContent = n + '%';
+}
 function vLic(){
   const all = S.d.lic || [], list = filteredLic(), total = all.length;
   const now = Date.now();
@@ -3830,7 +3835,7 @@ function vLic(){
   return `${remindCard}<div class="grid kpis" style="margin-bottom:16px">
       <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
       <div class="card kpi p"><div class="lbl">Total Sum Assured</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(totalAmt))}</div></div>
-      <div class="card kpi p"><div class="lbl">To pay in 1 year</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(yearAmt))}</div><div class="hint">${yearN} running polic${yearN === 1 ? 'y' : 'ies'} · monthly ×12, quarterly ×4, half-yearly ×2, yearly ×1</div></div>
+      <div class="card kpi p"><div class="lbl">To pay in 1 year</div><div class="val lic-prem" style="font-size:calc(20px*var(--fs))">${esc(licAmt(yearAmt))}</div><div class="hint">${yearN} running polic${yearN === 1 ? 'y' : 'ies'} · monthly ×12, quarterly ×4, half-yearly ×2, yearly ×1</div></div>
       <div class="card kpi m"><div class="lbl">Renewal due ≤ 7 days</div><div class="val">${renew7}</div><div class="hint">pay soon</div></div>
       <div class="card kpi w"><div class="lbl">Renewal due ≤ 30 days</div><div class="val">${renew30}</div><div class="hint">upcoming</div></div>
       <div class="card kpi w"><div class="lbl">Maturing ≤ 30 days</div><div class="val">${maturing}</div></div>
@@ -3839,6 +3844,7 @@ function vLic(){
     <div class="card" style="margin-bottom:16px"><div class="actions">
       <input class="input" id="licq" style="width:220px" placeholder="Search name, policy no., mobile, nominee, table no…" value="${esc(S.lic.q)}" oninput="licSearch(this.value)" autocomplete="off" enterkeyhint="search">
       <span style="flex:1"></span>
+      <span class="lic-fs" title="Premium text size"><button type="button" class="btn ghost sm" onclick="licFs(-10)" aria-label="Premium text smaller">A−</button><b id="licFsV">${window.ksMy ? ksMy.get('licfs') : 100}%</b><button type="button" class="btn ghost sm" onclick="licFs(10)" aria-label="Premium text bigger">A+</button></span>
       <button class="btn soft" onclick="licExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="licExport('pdf')">⬇ PDF</button>
       <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
       <button class="btn" onclick="licForm()">＋ Add policy</button></div>${licChips()}${licTableBar()}</div>
