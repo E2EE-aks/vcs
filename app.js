@@ -3761,6 +3761,7 @@ function filteredLic(){
   const toks = (S.lic.q || '').toLowerCase().split(/\s+/).filter(Boolean), t = S.lic.t || '';
   return [...(S.d.lic || [])]
     .filter(x => { const g = S.lic.g || ''; return !g || (g === 'none' ? !x.group : x.group === g); })
+    .filter(x => { const st = S.lic.s || ''; return !st || licCountdown(x.endDate).status === st; })     // status filter: Active / Completed / Deactivated
     .filter(x => !t || (t === '__none' ? !licTblVal(x) : licTblVal(x).toLowerCase() === t.toLowerCase()))
     .filter(x => { if (!toks.length) return true; const h = licHay(x); return toks.every(k => h.hay.includes(k) || (licKey(k) && h.key.includes(licKey(k)))); })     // every word must match (any order)
     .sort((a, b) => (a.endDate || '9999').localeCompare(b.endDate || '9999'));     // soonest-ending first
@@ -3847,7 +3848,7 @@ function vLic(){
       <span class="lic-fs" title="Premium text size"><button type="button" class="btn ghost sm" onclick="licFs(-10)" aria-label="Premium text smaller">A−</button><b id="licFsV">${window.ksMy ? ksMy.get('licfs') : 100}%</b><button type="button" class="btn ghost sm" onclick="licFs(10)" aria-label="Premium text bigger">A+</button></span>
       <button class="btn soft" onclick="licExport('xlsx')">⬇ Excel</button><button class="btn soft" onclick="licExport('pdf')">⬇ PDF</button>
       <button class="btn ghost" onclick="licFieldsEdit()" title="Add or rename your own extra details for every policy">⚙ Extra fields</button>
-      <button class="btn" onclick="licForm()">＋ Add policy</button></div>${licChips()}${licTableBar()}</div>
+      <button class="btn" onclick="licForm()">＋ Add policy</button></div>${licStatusChips()}${licChips()}${licTableBar()}</div>
     <div id="licList">${licListHtml()}</div>`;
 }
 function licSearch(v){            // only the list is redrawn (the search box is never rebuilt, so the keyboard stays open)
@@ -3889,6 +3890,13 @@ function licChips(){
     <button type="button" class="btn ghost sm" onclick="licGroups()" title="Add, rename or delete groups">⚙ Groups</button></div>`;
 }
 function licGroupSel(k){ S.lic.g = k; render(); }
+function licStatusSel(k){ S.lic.s = k || ''; render(); }
+function licStatusChips(){
+  const all = S.d.lic || [], cur = S.lic.s || '', cnt = {};
+  all.forEach(x => { const k = licCountdown(x.endDate).status; cnt[k] = (cnt[k] || 0) + 1; });
+  const chip = (k, label, n) => `<button type="button" class="btn ${cur === k ? '' : 'soft'} sm" onclick="licStatusSel('${k}')">${label} <span style="opacity:.7">${n}</span></button>`;
+  return `<div class="actions" style="margin-top:12px;flex-wrap:wrap;gap:6px"><span class="muted" style="font-size:calc(12.5px*var(--fs))">Status:</span>${chip('', 'All', all.length)}${chip('Active', '🟢 Active', cnt.Active || 0)}${chip('Completed', '✅ Completed', cnt.Completed || 0)}${chip('Deactivated', '🔴 Deactivated', cnt.Deactivated || 0)}</div>`;
+}
 function licAsk(title, val, ok){
   return new Promise(res => {
     const w = openModal(`<h3>${esc(title)}</h3><form id="laf"><div class="field"><input class="input" name="v" maxlength="60" value="${esc(val || '')}" autocomplete="off"></div><div class="foot"><button type="button" class="btn ghost" data-x>Cancel</button><button class="btn" type="submit">${esc(ok || 'Save')}</button></div></form>`);

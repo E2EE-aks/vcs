@@ -238,3 +238,12 @@ table.stk td[data-l="Premium Amount"],table.stk td[data-l="Premium Mode"],table.
 .lic-fs b{min-width:44px;text-align:center;font-size:12.5px}
 #btmSheet.bs-live.bs-live-b:not(.hidden){align-items:flex-end}
 #btmSheet.bs-live.bs-live-b .bs-card{border-radius:20px 20px 0 0;box-shadow:0 -14px 40px rgba(0,0,0,.3)}
+
+/* v17: premium text size scales EVERYTHING written about premium (labels, values, tags, headings, reminder lines, KPI) */
+table.stk td[data-l="Premium Amount"]::before,table.stk td[data-l="Premium Mode"]::before,table.stk td[data-l="Pay per Year"]::before,table.stk td[data-l="Next Renewal"]::before{font-size:calc(10.5px*var(--fs,1)*var(--lic-fs,1))}
+table.stk td[data-l="Premium Amount"] *,table.stk td[data-l="Premium Mode"] *,table.stk td[data-l="Pay per Year"] *,table.stk td[data-l="Next Renewal"] *{font-size:inherit}
+table.stk td[data-l="Premium Mode"] .tag{font-size:calc(12px*var(--fs,1)*var(--lic-fs,1))}
+table.stk th:nth-child(4),table.stk th:nth-child(8),table.stk th:nth-child(9),table.stk th:nth-child(12){font-size:calc(1em*var(--lic-fs,1))}
+.lic-ri-main>.muted *{font-size:inherit}
+.kpi:has(.val.lic-prem) .lbl{font-size:calc(12px*var(--fs,1)*var(--lic-fs,1))}
+.kpi:has(.val.lic-prem) .hint{font-size:calc(11.5px*var(--fs,1)*var(--lic-fs,1))}
