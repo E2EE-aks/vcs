@@ -5,7 +5,7 @@
 (function(){
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
-  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} } };
+  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} }, stat:[], stN:0, sv:null };
   var POLL = null;
 
   try { TITLES.whatsapp = ['WhatsApp', 'Your WhatsApp, linked with a QR code — chat with anyone']; } catch(e){}
@@ -95,6 +95,24 @@
     '#waRoot .wa-chk.on{background:var(--wa-g);border-color:var(--wa-g)}',
     '#waRoot .wa-sys{align-self:center;max-width:80%;text-align:center;font-size:12.5px;padding:4px 12px;border-radius:8px;background:var(--card,#fff);box-shadow:0 1px 1px rgba(0,0,0,.1);opacity:.95}',
     '#waRoot .wa-sys.miss{color:#d33}',
+    '#waRoot .wa-av.ring{box-shadow:0 0 0 2px var(--card,#fff),0 0 0 4px var(--wa-g)}',
+    '.wa-sv{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.94);color:#fff;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}',
+    '.wa-sv .svh{display:flex;align-items:center;gap:10px;padding:10px 12px}',
+    '.wa-sv .svh .wa-av{flex:none;width:40px;height:40px;border-radius:50%;background:#6a7f8a;color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative}',
+    '.wa-sv .svh .wa-av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}',
+    '.wa-sv .svh .m{flex:1;min-width:0;line-height:1.25}.wa-sv .svh .m b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.wa-sv .svh .m small{opacity:.75}',
+    '.wa-sv .svbars{display:flex;gap:4px;padding:0 12px}.wa-sv .svbars i{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.3)}.wa-sv .svbars i.on{background:#fff}',
+    '.wa-sv .svx{flex:none;width:38px;height:38px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;font-size:18px;cursor:pointer}',
+    '.wa-sv .svb{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:8px;position:relative}',
+    '.wa-sv .svb img,.wa-sv .svb video{max-width:100%;max-height:100%;border-radius:8px;object-fit:contain}',
+    '.wa-sv .svb audio{width:min(420px,92%)}',
+    '.wa-sv .svt{width:min(520px,100%);min-height:60%;display:flex;align-items:center;justify-content:center;text-align:center;padding:26px;border-radius:14px;font-size:24px;line-height:1.4;white-space:pre-wrap;word-break:break-word;background:#128c7e}',
+    '.wa-sv .svn{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,.18);color:#fff;font-size:22px;cursor:pointer}',
+    '.wa-sv .svn.l{left:8px}.wa-sv .svn.r{right:8px}',
+    '.wa-sv .svcap{padding:6px 16px;text-align:center;max-height:18vh;overflow:auto;white-space:pre-wrap;word-break:break-word}',
+    '.wa-sv .svf{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:10px 12px calc(14px + env(safe-area-inset-bottom,0px))}',
+    '.wa-sv .svf a,.wa-sv .svf button{display:inline-block;border:0;border-radius:22px;padding:10px 18px;background:#25d366;color:#0b141a;font-weight:800;font-size:15px;text-decoration:none;cursor:pointer}',
+    '.wa-sv .svf .g{background:rgba(255,255,255,.18);color:#fff}',
     /* login screen, like WhatsApp Web */
     '#waRoot .wa-login{display:grid;grid-template-columns:1.2fr 1fr;gap:28px;align-items:center;padding:26px;border:1px solid var(--line);border-radius:14px;background:var(--card,#fff)}',
     '#waRoot .wa-login h2{margin:0 0 14px;font-size:26px;font-weight:400}',
@@ -149,7 +167,7 @@
   /* ---------- entry points used by app.js ---------- */
   window.vWhatsapp = function(){ return '<div id="waRoot"><div class="card"><div class="empty-state">Loading…</div></div></div>'; };
   window.waAfter = function(){ G.sigL = G.sigM = ''; draw(); };
-  window.waReset = function(){ document.body.classList.remove('wa-conv'); clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} } }; };
+  window.waReset = function(){ document.body.classList.remove('wa-conv'); clearInterval(POLL); POLL = null; G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} }, stat:[], stN:0, sv:null }; svClose(); };
   window.waInit = async function(){
     try { G.st = await quiet('waStatus'); G.err = ''; }
     catch(e){ if (e.code === 'AUTH'){ return handleErr(e); } G.err = e.message || 'Could not reach the server'; G.st = G.st || { configured:true, connected:false, status:'idle' }; }
@@ -170,7 +188,7 @@
       if (!st.connected && (was0 !== G.starting || err0 !== G.err)) draw();
       if (st.connected){
         if (prev !== 'open'){ G.loaded = false; G.starting = false; G.sigL = G.sigM = ''; draw(); chats(true); toast('WhatsApp connected ✓'); }
-        else { await chats(true); if (G.open) await poll(); }
+        else { await chats(true); if (G.open) await poll(); if (G.f === 'status') await loadStat(true); }
       } else if (st.status === 'qr' || st.status === 'starting' || prev !== st.status){ draw(); }
     } catch(e){ if (e.code === 'AUTH' || e.code === 'PAYDUE') handleErr(e); }
   }
@@ -211,12 +229,13 @@
     var nb = $('#waNewBox'); if (nb){ var want = G.newOpen ? 1 : 0; if (nb.dataset.o !== String(want)){ nb.dataset.o = String(want);
       nb.innerHTML = want ? '<div class="wa-new"><div class="wa-pkh"><button class="wa-ic" onclick="waNewToggle()">←</button><div class="wa-mid"><b id="waPkT">New chat</b><small id="waCcount"></small></div><button class="wa-ic" title="Sync contacts" onclick="waSyncC()">↻</button></div><div class="wa-srch"><input class="input" id="waCq" placeholder="Search name, number or @username" oninput="waCFilter(this.value)" onkeydown="if(event.key===\'Enter\')waNewGo()"></div><div class="wa-clist" id="waClist"></div></div>' : '';
       if (want){ var i = $('#waCq'); if (i) i.focus(); paintContacts(); if (!G.contacts) loadContacts(); } } }
-    var un = G.chats.reduce(function(n, c){ return n + (c.unread ? 1 : 0); }, 0), ch = $('#waChips');
-    if (ch && ch.dataset.k !== G.f + '|' + un){ ch.dataset.k = G.f + '|' + un;
-      ch.innerHTML = [['all','All'],['unread','Unread' + (un ? ' ' + un : '')],['groups','Groups']].map(function(x){ return '<button class="' + (G.f === x[0] ? 'on' : '') + '" onclick="waChip(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join(''); }
-    var sig = (G.hist ? G.hist.chats + '/' + G.hist.msgs : '') + '|' + G.f + '|' + G.q + '|' + (G.open ? G.open.id : '') + '|' + G.chats.map(function(c){ return c.id + c.at + c.unread + c.last + c.name; }).join(',');
+    var un = G.chats.reduce(function(n, c){ return n + (c.unread ? 1 : 0); }, 0), ch = $('#waChips'), sn = G.stN || 0;
+    if (ch && ch.dataset.k !== G.f + '|' + un + '|' + sn){ ch.dataset.k = G.f + '|' + un + '|' + sn;
+      ch.innerHTML = [['all','All'],['unread','Unread' + (un ? ' ' + un : '')],['groups','Groups'],['status','Status' + (sn ? ' ' + sn : '')]].map(function(x){ return '<button class="' + (G.f === x[0] ? 'on' : '') + '" onclick="waChip(\'' + x[0] + '\')">' + x[1] + '</button>'; }).join(''); }
+    var sig = (G.hist ? G.hist.chats + '/' + G.hist.msgs : '') + '|' + G.f + '|' + G.q + '|' + (G.open ? G.open.id : '') + '|' + G.chats.map(function(c){ return c.id + c.at + c.unread + c.last + c.name; }).join(',') + (G.f === 'status' ? '|S' + (G.stat || []).map(function(g){ return g.id + g.at + g.items.length + g.name; }).join(',') : '');
     if (!force && sig === G.sigL) return; G.sigL = sig;
     var el = $('#waList'); if (!el) return; var top = el.scrollTop, q = G.q.toLowerCase();
+    if (G.f === 'status'){ paintStatusList(el, q); el.scrollTop = top; return; }
     var rows = G.chats.filter(function(c){ return (G.f === 'unread' ? c.unread : G.f === 'groups' ? c.group : true) && (!q || (title(c) + ' ' + c.number).toLowerCase().indexOf(q) > -1); }).map(function(c){
       return '<div class="wa-row' + (G.open && G.open.id === c.id ? ' on' : '') + '" data-id="' + esc(c.id) + '" onclick="waOpen(this.dataset.id)">' + avatar(c) +
         '<div class="wa-mid"><b>' + esc(title(c)) + '</b><small>' + (c.out ? 'You: ' : '') + esc(c.last) + '</small></div>' +
@@ -295,7 +314,7 @@
 
   /* ---------- chats ---------- */
   async function chats(silent){
-    try { var r = silent ? await quiet('waChats') : await api('waChats'); G.chats = r.items; G.hist = r.hist || G.hist; G.me = r.me || G.me; G.loaded = true; G.err = ''; }
+    try { var r = silent ? await quiet('waChats') : await api('waChats'); G.chats = r.items; G.hist = r.hist || G.hist; G.me = r.me || G.me; G.stN = r.stN || 0; G.loaded = true; G.err = ''; }
     catch(e){ if (e.code === 'AUTH' || e.code === 'PAYDUE') return handleErr(e); if (!silent) G.err = e.message || 'Could not load chats'; G.loaded = true; }
     if (S.view === 'whatsapp' && G.st && G.st.connected){ if ($('#waApp')) paintSide(); else draw(); }
   }
@@ -348,7 +367,7 @@
     if (k === 'new'){ if (!G.newOpen) waNewToggle(); } else if (k === 'grp'){ G.newOpen = true; G.grp = { on:true, sel:{} }; paintSide(true); paintContacts(); }
     else if (k === 'sync') waSyncC(); else if (k === 'refresh') waRefresh(); else if (k === 'relink') waRelink(); else if (k === 'out') waLogout(); else if (k === 'web') window.open('https://web.whatsapp.com/', '_blank', 'noopener'); };
   window.waCFilter = function(v){ G.cq = String(v || ''); paintContacts(); };
-  window.waChip = function(f){ G.f = f; G.sigL = ''; paintSide(true); };
+  window.waChip = function(f){ G.f = f; G.sigL = ''; paintSide(true); if (f === 'status') loadStat(); };
   window.waCall = async function(video){
     var c = G.open; if (!c) return; var num = String(c.number || '').replace(/\D/g, '');
     if (!num) return toast('Calls work only with one person’s number, not groups', true);
@@ -365,6 +384,49 @@
     var c = G.open; if (!c || G.busy) return;
     try { var r = await quiet('waHistory', { chat:c.id }); if (G.open !== c) return; G.msgs = r.items; paintMsgs(false); } catch(e){ if (e.code === 'AUTH' || e.code === 'PAYDUE') handleErr(e); }
   }
+
+  /* ---------- Status (contacts' status updates, last 24 h) with download ---------- */
+  async function loadStat(silent){
+    try { var r = await quiet('waStatuses'); G.stat = r.items || []; G.stN = G.stat.length; G.stLoaded = true; G.sigL = ''; if (S.view === 'whatsapp' && $('#waApp')) paintSide(true); }
+    catch(e){ if (e.code === 'AUTH' || e.code === 'PAYDUE') return handleErr(e); G.stLoaded = true; if (!silent) toast(e.message || 'Could not load status', true); }
+  }
+  function paintStatusList(el, q){
+    var list = (G.stat || []).filter(function(g){ return !q || (title(g) + ' ' + (g.number || '')).toLowerCase().indexOf(q) > -1; });
+    if (!list.length){ el.innerHTML = '<div class="wa-empty">' + (!G.stLoaded ? 'Loading status…' : 'No status updates yet.<br><small>Status of your contacts from the last 24 hours appears here. Only updates posted while this device is connected are received — keep it linked.</small><br><button class="btn sm" style="margin-top:8px" onclick="loadStatNow()">⟳ Refresh</button>') + '</div>'; return; }
+    el.innerHTML = '<div class="wa-sec" style="padding:8px 14px;font-size:12px;font-weight:700;color:var(--wa-d)">Recent updates</div>' + list.map(function(g){
+      var n = g.items.length;
+      return '<div class="wa-row" data-id="' + esc(g.id) + '" onclick="waSv(this.dataset.id)">' + avatar(g, 'ring') + '<div class="wa-mid"><b>' + esc(title(g)) + '</b><small>' + n + ' update' + (n > 1 ? 's' : '') + ' · tap to view &amp; download</small></div><div class="wa-end">' + esc(when(g.at)) + '</div></div>'; }).join('');
+  }
+  window.loadStatNow = function(){ G.stLoaded = false; G.sigL = ''; paintSide(true); loadStat(); };
+  function svGroup(){ return G.sv && (G.stat || []).filter(function(x){ return x.id === G.sv.id; })[0]; }
+  function svRoot(){ return document.getElementById('waSv'); }
+  function svClose(){ var e = svRoot(); if (e){ var v = e.querySelector('video,audio'); try { if (v) v.pause(); } catch(x){} e.remove(); } G.sv = null; document.removeEventListener('keydown', svKey); }
+  function svKey(e){ if (e.key === 'Escape') svClose(); else if (e.key === 'ArrowRight') waSvNav(1); else if (e.key === 'ArrowLeft') waSvNav(-1); }
+  window.waSv = function(id){ G.sv = { id:id, i:0 }; var g = svGroup(); if (!g){ G.sv = null; return; }
+    if (!svRoot()){ var d = document.createElement('div'); d.className = 'wa-sv'; d.id = 'waSv'; document.body.appendChild(d); document.addEventListener('keydown', svKey); }
+    svPaint(); };
+  window.waSvClose = svClose;
+  window.waSvNav = function(d){ var g = svGroup(); if (!g) return; var n = G.sv.i + d; if (n < 0 || n >= g.items.length){ if (n >= g.items.length) svClose(); return; } G.sv.i = n; svPaint(); };
+  function svPaint(){
+    var e = svRoot(), g = svGroup(); if (!e || !g){ svClose(); return; }
+    var i = Math.max(0, Math.min(G.sv.i, g.items.length - 1)); G.sv.i = i; var it = g.items[i], u = it.url ? url(it.url) : '', th = it.thumb ? 'data:image/jpeg;base64,' + it.thumb : '', body;
+    if (it.kind === 'photo') body = '<img src="' + esc(u) + '" alt="status"' + (th ? ' onerror="this.onerror=null;this.src=\'' + th + '\'"' : '') + '>';
+    else if (it.kind === 'video' || it.kind === 'gif') body = '<video controls autoplay playsinline' + (th ? ' poster="' + th + '"' : '') + ' src="' + esc(u) + '"></video>';
+    else if (it.kind === 'voice' || it.kind === 'audio') body = '<audio controls autoplay src="' + esc(u) + '"></audio>';
+    else body = '<div class="svt" style="' + (it.bg ? 'background:' + esc(it.bg) + ';' : '') + (it.fg ? 'color:' + esc(it.fg) : '') + '">' + link(it.text) + '</div>';
+    var cap = it.kind === 'text' ? '' : (it.text || ''), mediaN = g.items.filter(function(x){ return x.dl; }).length;
+    e.innerHTML = '<div class="svbars">' + g.items.map(function(x, k){ return '<i class="' + (k <= i ? 'on' : '') + '"></i>'; }).join('') + '</div>' +
+      '<div class="svh"><span class="wa-av">' + ini(title(g)) + (g.av ? '<img src="' + esc(url(g.av)) + '" alt="" onerror="this.remove()">' : '') + '</span><div class="m"><b>' + esc(title(g)) + '</b><small>' + esc(dayName(it.at)) + ', ' + esc(hm(it.at)) + ' · ' + (i + 1) + '/' + g.items.length + '</small></div><button class="svx" title="Close" onclick="waSvClose()">✕</button></div>' +
+      '<div class="svb">' + (i > 0 ? '<button class="svn l" onclick="waSvNav(-1)">‹</button>' : '') + body + '<button class="svn r" onclick="waSvNav(1)">›</button></div>' +
+      (cap ? '<div class="svcap">' + link(cap) + '</div>' : '') +
+      '<div class="svf">' + (it.dl ? '<a href="' + esc(url(it.dl)) + '" rel="noopener" download>⬇ Download</a>' : '<button onclick="waSvCopy()">📋 Copy text</button>') + (mediaN > 1 ? '<button class="g" onclick="waSvAll()">⬇ Download all (' + mediaN + ')</button>' : '') + '</div>';
+  }
+  window.waSvCopy = function(){ var g = svGroup(); if (!g) return; var it = g.items[G.sv.i]; try { navigator.clipboard.writeText(it.text || ''); toast('Text copied ✓'); } catch(e){ toast('Could not copy', true); } };
+  window.waSvAll = function(){
+    var g = svGroup(); if (!g) return; var list = g.items.filter(function(x){ return x.dl; });
+    list.forEach(function(x, k){ setTimeout(function(){ var a = document.createElement('a'); a.href = url(x.dl); a.rel = 'noopener'; a.download = ''; document.body.appendChild(a); a.click(); a.remove(); }, k * 900); });
+    toast('Downloading ' + list.length + ' files…');
+  };
 
   /* ---------- sending ---------- */
   window.waKey = function(e){ if (e.key === 'Enter' && !e.shiftKey && !/Mobi|Android/i.test(navigator.userAgent)){ e.preventDefault(); waSend(); } };

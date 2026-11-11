@@ -18,7 +18,7 @@ module.exports = function makeWhatsApp(o) {
   const { env, warn, sign } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -38,7 +38,7 @@ module.exports = function makeWhatsApp(o) {
 
   /* per user: sock, status (idle|starting|qr|open), qr, name, number, chats Map, msgs Map, raw Map (media only, in memory) */
   const users = new Map();
-  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), lid: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
+  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), lid: new Map(), stat: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
   const hasSaved = uid => { try { const c = JSON.parse(fs.readFileSync(path.join(udir(uid), 'creds.json'), 'utf8')); return !!(c && c.me); } catch (e) { return false; } };   // only a really linked login counts (half-finished QR logins are ignored)
   const wipe = uid => { try { fs.rmSync(udir(uid), { recursive: true, force: true }); } catch (e) {} };
 
@@ -132,7 +132,59 @@ module.exports = function makeWhatsApp(o) {
     } catch (e) {}
   }
   const setName = (c, n) => { if (n && String(n).trim()) c.name = String(n).trim(); };
+  /* ---------- contacts' status updates (24 h) - kept in memory only; photos / videos are downloaded live when opened ---------- */
+  const STAT_TTL = 24 * 3600e3, STAT_MAX = 500;
+  const hex = n => (n === undefined || n === null || n === '') ? '' : '#' + ((Number(n) & 0xFFFFFF) >>> 0).toString(16).padStart(6, '0');
+  const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/3gpp': '3gp', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/aac': 'aac' };
+  const extOf = mime => EXT[String(mime || '').split(';')[0].trim().toLowerCase()] || 'bin';
+  function purgeStat(s) { const now = Date.now(); s.stat.forEach((g, k) => { g.items = g.items.filter(i => now - i.at < STAT_TTL); if (!g.items.length) s.stat.delete(k); }); }
+  function addStatus(s, wm) {
+    try {
+      if (!wm || !wm.message || !wm.key || wm.key.fromMe) return;
+      const part = wm.key.participant || wm.participant; if (!part) return;
+      learn(s, part, wm.key.participantAlt); learn(s, part, wm.key.participantPn);
+      const jid = bareJid(part), x = unwrap(wm.message), pm = x.protocolMessage;
+      if (pm && pm.key && pm.key.id && (pm.type === 0 || pm.type === 'REVOKE')) {                    // the contact deleted a status
+        const g = s.stat.get(jid); if (g) { g.items = g.items.filter(i => i.id !== pm.key.id); if (!g.items.length) s.stat.delete(jid); } return;
+      }
+      const k = kindText(wm.message); if (!k || !/^(text|photo|video|gif|voice|audio)$/.test(k.kind)) return;
+      const at = tsOf(wm.messageTimestamp); if (Date.now() - at > STAT_TTL) return;
+      let g = s.stat.get(jid); if (!g) { g = { id: jid, push: '', items: [] }; s.stat.set(jid, g); }
+      if (wm.pushName) g.push = wm.pushName;
+      if (g.items.some(i => i.id === wm.key.id)) return;
+      const it = { id: wm.key.id, at, kind: k.kind, text: k.text || '', mime: k.mime || '', thumb: k.thumb || '', media: k.media ? 1 : 0, wm };
+      if (k.dur) it.dur = k.dur;
+      if (k.kind === 'text') { const e = x.extendedTextMessage || {}; it.bg = hex(e.backgroundArgb); it.fg = hex(e.textArgb); }
+      g.items.push(it); g.items.sort((a, b) => a.at - b.at);
+      let n = 0; s.stat.forEach(q => { n += q.items.length; });
+      if (n > STAT_MAX) purgeStat(s);
+      if (n > STAT_MAX) { const old = [...s.stat.values()].sort((a, b) => a.items[0].at - b.items[0].at)[0]; if (old) s.stat.delete(old.id); }
+    } catch (e) {}
+  }
+  function statusView(uid, r) {
+    purgeStat(r);
+    const by = new Map();
+    r.stat.forEach(g => {
+      const pn = pnOf(r, g.id), key = pn || g.id; let o = by.get(key);
+      if (!o) { o = { id: key, jid: g.id, pn, push: '', items: [] }; by.set(key, o); }
+      o.push = o.push || g.push;
+      g.items.forEach(i => {
+        const v = { id: i.id, at: i.at, kind: i.kind, text: i.text };
+        ['mime', 'dur', 'bg', 'fg'].forEach(f => { if (i[f]) v[f] = i[f]; });
+        if (i.thumb) v.thumb = i.thumb;
+        if (i.media) { v.url = link(uid, g.id, i.id, 's'); v.dl = v.url + '&dl=1'; }
+        o.items.push(v);
+      });
+    });
+    return [...by.values()].map(o => {
+      o.items.sort((a, b) => a.at - b.at);
+      const ct = (o.pn && r.contacts.get(o.pn)) || r.contacts.get(o.jid), ch = r.chats.get(o.jid) || (o.pn && r.chats.get(o.pn)), num = o.pn ? '+' + o.pn.split('@')[0] : numOf(o.jid);
+      return { id: o.id, name: (ch && ch.name) || (ct && (ct.name || ct.pn)) || o.push || num || 'WhatsApp contact', number: num, av: link(uid, o.jid, 0, 'a'), at: o.items[o.items.length - 1].at, items: o.items };
+    }).sort((a, b) => b.at - a.at);
+  }
+
   function addMsg(uid, s, jid, wm, live) {
+    if (jid === 'status@broadcast') { addStatus(s, wm); return null; }
     if (!isChat(jid) || jid === 'status@broadcast' || !wm || !wm.message) return null;
     if (wm.key) { learn(s, jid, wm.key.remoteJidAlt); learn(s, jid, wm.key.senderPn); learn(s, wm.key.participant, wm.key.participantAlt); learn(s, wm.key.participant, wm.key.participantPn); }
     const k = kindText(wm.message); if (!k) return null;
@@ -196,7 +248,7 @@ module.exports = function makeWhatsApp(o) {
         clearTimeout(wd);
         s.sock = null; s.qr = '';
         const code = lastDisconnect && lastDisconnect.error && lastDisconnect.error.output && lastDisconnect.error.output.statusCode;
-        if (code === DisconnectReason.loggedOut) { s.status = 'idle'; s.wantOn = false; s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.name = s.number = ''; s.loaded = false; wipe(uid); return; }
+        if (code === DisconnectReason.loggedOut) { s.status = 'idle'; s.wantOn = false; s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.stat.clear(); s.media.clear(); s.name = s.number = ''; s.loaded = false; wipe(uid); return; }
         s.status = 'idle';
         const why = lastDisconnect && lastDisconnect.error && lastDisconnect.error.message ? String(lastDisconnect.error.message).slice(0, 80) : '';
         if (code !== DisconnectReason.restartRequired) { s.vi = (s.vi || 0) + 1; s.err = 'WhatsApp closed the connection (code ' + (code || '?') + (why ? ': ' + why : '') + ') · Baileys ' + libVer() + ' · Node ' + process.version + (s.tries >= 2 ? ' · trying another way…' : ''); warn('WhatsApp close', code, why); }
@@ -257,7 +309,7 @@ module.exports = function makeWhatsApp(o) {
     const s = st(uid); s.wantOn = false; s.gen++;
     const sock = s.sock; s.sock = null; s.qr = ''; s.status = 'idle';
     if (sock) { try { if (logout) await sock.logout(); else sock.end(undefined); } catch (e) { try { sock.end(undefined); } catch (x) {} } }
-    if (logout) { s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.name = s.number = ''; s.loaded = false; if (s.saveT) { clearTimeout(s.saveT); s.saveT = null; } wipe(uid); }
+    if (logout) { s.chats.clear(); s.msgs.clear(); s.raw.clear(); s.pics.clear(); s.stat.clear(); s.media.clear(); s.name = s.number = ''; s.loaded = false; if (s.saveT) { clearTimeout(s.saveT); s.saveT = null; } wipe(uid); }
   }
   async function ready(uid) {                         // a connected socket, restoring a saved login after a server restart
     const s = st(uid);
@@ -309,8 +361,9 @@ module.exports = function makeWhatsApp(o) {
         if (!o) by.set(key, Object.assign({}, c)); else { const n = c.at > o.at ? Object.assign({}, c) : o; const w = c.at > o.at ? o : c; n.name = n.name || w.name; n.pn = n.pn || w.pn; n.unread = (n.unread || 0) + (w.unread || 0); by.set(key, n); }
       });
       const items = [...by.values()].sort((x, y) => y.at - x.at).slice(0, 400).map(c => chatView(uid, c));
-      return { ok: true, hist: r.hist, items, me: { name: r.name, number: r.number, av: link(uid, 'me', 0, 'a') } };
+      return { ok: true, hist: r.hist, stN: statusView(uid, r).length, items, me: { name: r.name, number: r.number, av: link(uid, 'me', 0, 'a') } };
     }
+    if (a === 'waStatuses') { await resolveLids(r); return { ok: true, items: statusView(uid, r) }; }
     if (a === 'waContacts') {
       await resolveLids(r);
       const m = new Map(), add = (id, name) => { const pn = pnOf(r, id), key = pn || id, o = m.get(key) || { id: pn || id, name: '', number: pn ? '+' + pn.split('@')[0] : numOf(id) }; if (name && !o.name) o.name = name; m.set(key, o); };
@@ -408,16 +461,18 @@ module.exports = function makeWhatsApp(o) {
       }
       if (!c) return text(404, 'No photo');
     } else {
-      const key = jid + '|' + id; c = s.media.get(key);
+      const isSt = kind === 's', key = (isSt ? 'st|' : '') + jid + '|' + id; c = s.media.get(key);
       if (!c) {
-        const wm = s.raw.get(key); if (!wm) return text(404, 'This file is no longer available. Open the chat again after the message arrives.');
+        let wm; if (isSt) { const g = s.stat.get(jid), it = g && g.items.find(i => i.id === id); wm = it && it.wm; } else wm = s.raw.get(key);
+        if (!wm && isSt) return text(404, 'This status has expired or is no longer available.');
+        if (!wm) return text(404, 'This file is no longer available. Open the chat again after the message arrives.');
         try {
           if (s.status !== 'open' || !s.sock) return text(503, 'WhatsApp is not connected.');
           const B = L(), x = unwrap(wm.message), part = x.imageMessage || x.videoMessage || x.audioMessage || x.documentMessage || x.stickerMessage || {};
           if ((Number(part.fileLength) || 0) > MAX) return text(413, 'Too big to open here (over ' + (MAX / 1048576) + ' MB). Open it on your phone.');
           const buf = await B.downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage });
           if (!buf || !buf.length) return text(404, 'No media');
-          c = { buf, mime: part.mimetype || 'application/octet-stream', name: part.fileName || ('file') };
+          c = { buf, mime: part.mimetype || 'application/octet-stream', name: part.fileName || (isSt ? 'WA-status-' + String(id).slice(0, 10) + '.' + extOf(part.mimetype) : 'file') };
           s.media.set(key, c); if (s.media.size > 40) s.media.delete(s.media.keys().next().value);
         } catch (e) { warn('WhatsApp media failed', e && e.message); return text(500, 'Could not load this file.'); }
       }
