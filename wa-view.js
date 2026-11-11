@@ -24,6 +24,13 @@
     '#waRoot .wa-top .wa-me small{opacity:.65;font-size:12px}',
     '#waRoot .wa-ic{flex:none;width:36px;height:36px;border-radius:50%;border:0;background:transparent;font-size:18px;cursor:pointer;color:inherit}',
     '#waRoot .wa-ic:hover{background:rgba(127,127,127,.15)}',
+    '#waRoot .wa-bar{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer}',
+    '#waRoot .wa-bar .wa-bi{font-size:22px}',
+    '#waRoot .wa-bar small{display:block;opacity:.65;font-size:12px}',
+    '#waRoot .wa-sw{width:42px;height:24px;border-radius:12px;background:#b8c0c4;position:relative;flex:none;transition:background .2s}',
+    '#waRoot .wa-sw i{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .2s}',
+    '#waRoot .wa-sw.on{background:#25d366}',
+    '#waRoot .wa-sw.on i{left:21px}',
     '#waRoot .wa-srch{padding:8px 12px;border-bottom:1px solid var(--line)}',
     '#waRoot .wa-srch input{width:100%;border-radius:10px}',
     '#waRoot .wa-new{padding:10px 12px;border-bottom:1px solid var(--line);background:rgba(37,211,102,.08)}',
@@ -219,12 +226,18 @@
       '<div class="wa-top"><div class="wa-me"><b class="wa-title">WhatsApp</b></div><button class="wa-plus" title="New chat" onclick="waNewToggle()">💬＋</button><button class="wa-ic" title="Menu" onclick="waMenu(event)">⋮</button></div>' +
       '<div class="wa-menu hidden" id="waMenu"><div class="wa-mrow"><span class="wa-av sm" id="waMeAv"></span><div class="wa-mid"><b id="waMeNm"></b><small id="waMeNo"></small></div></div>' +
       '<button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>' +
+      '<div class="wa-blueall" id="waBlueAll"></div>' +
       '<div id="waNewBox"></div><div class="wa-srch"><input class="input" id="waSearch" placeholder="🔍  Search or start a new chat" oninput="waFilter(this.value)"></div>' +
       '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div></div><div class="wa-main" id="waMain"></div></div>';
+  }
+  function paintBlueAll(){
+    var el = $('#waBlueAll'); if (!el) return; var h = G.hideAll !== false;
+    el.innerHTML = '<div class="wa-bar" onclick="waBlueAll()"><span class="wa-bi">' + (h ? '🙈' : '👁') + '</span><div class="wa-mid"><b>Hide blue tick (all contacts)</b><small>' + (h ? 'ON: nobody sees when you read their message' : 'OFF: everyone sees blue tick when you read') + '</small></div><span class="wa-sw' + (h ? ' on' : '') + '"><i></i></span></div>';
   }
   function paintSide(force){
     var app = $('#waApp'); if (!app) return;
     app.classList.toggle('open', !!G.open);
+    paintBlueAll();
     var me = G.me || {}, st = G.st || {}, nm = me.name || st.name || 'WhatsApp', no = me.number || st.number || '';
     var a = $('#waMeAv'); if (a && a.dataset.k !== nm + '|' + (me.av || '')){ a.dataset.k = nm + '|' + (me.av || ''); a.innerHTML = ini(nm) + (me.av ? '<img src="' + esc(url(me.av)) + '" alt="" onerror="this.remove()">' : ''); }
     var n1 = $('#waMeNm'), n2 = $('#waMeNo'); if (n1) n1.textContent = nm; if (n2) n2.textContent = no;
@@ -316,7 +329,7 @@
 
   /* ---------- chats ---------- */
   async function chats(silent){
-    try { var r = silent ? await quiet('waChats') : await api('waChats'); G.chats = r.items; G.hist = r.hist || G.hist; G.me = r.me || G.me; G.stN = r.stN || 0; G.loaded = true; G.err = ''; }
+    try { var r = silent ? await quiet('waChats') : await api('waChats'); G.chats = r.items; if (typeof r.hideAll === 'boolean') G.hideAll = r.hideAll; G.hist = r.hist || G.hist; G.me = r.me || G.me; G.stN = r.stN || 0; G.loaded = true; G.err = ''; }
     catch(e){ if (e.code === 'AUTH' || e.code === 'PAYDUE') return handleErr(e); if (!silent) G.err = e.message || 'Could not load chats'; G.loaded = true; }
     if (S.view === 'whatsapp' && G.st && G.st.connected){ if ($('#waApp')) paintSide(); else draw(); }
   }
@@ -380,6 +393,17 @@
     G.open = Object.assign({}, c); G.msgs = []; G.sigL = ''; paintSide(true); paintMain(true);
     try { var r = await api('waHistory', { chat:id }); if (!G.open || G.open.id !== id) return; G.msgs = r.items; Object.assign(G.open, r.chat); c.unread = 0; G.sigL = ''; paintSide(true); paintMain(true); var t = $('#waIn'); if (t && !/Mobi|Android/i.test(navigator.userAgent)) t.focus(); }
     catch(e){ G.open = null; handleErr(e); paintSide(true); paintMain(true); }
+  };
+  window.waBlueAll = async function(){                    // home page: hide / show blue tick for everyone
+    var hide = G.hideAll === false;
+    try {
+      var r = await api('waBlueAll', { hide:hide });
+      G.hideAll = !!r.hideAll;
+      G.chats.forEach(function(x){ x.blue = !G.hideAll; });
+      if (G.open){ G.open.blue = !G.hideAll; paintMain(true); }
+      paintBlueAll();
+      toast(G.hideAll ? 'Blue tick hidden for ALL contacts' : 'Blue tick will be shown to all contacts');
+    } catch(e){ handleErr(e); }
   };
   window.waBlue = async function(){                       // show / hide blue tick for the open contact
     var c = G.open; if (!c) return; var on = !c.blue;
