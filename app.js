@@ -1906,7 +1906,7 @@ function locTimeStr(tz){
     return t + d;
   }catch(e){ return ''; }
 }
-const GEO = { busy:false, timer:null, key:'ks_geo_v2' };
+const GEO = { busy:false, timer:null, key:'ks_geo_v3' };
 const geoGet = () => { try{ return JSON.parse(localStorage.getItem(GEO.key) || '{}') || {}; }catch(e){ return {}; } };
 const geoPut = o => { try{ localStorage.setItem(GEO.key, JSON.stringify(Object.assign(geoGet(), o))); }catch(e){} };
 async function geoSync(force){
@@ -1915,14 +1915,19 @@ async function geoSync(force){
   if (!force && g.uid === S.me.id && Date.now() - (g.at || 0) < 25 * 60000) return;      // temperature is refreshed at most every ~25 min
   GEO.busy = true;
   try{
-    const pos = await new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy:false, timeout:12000, maximumAge:900000 }));
-    const la = pos.coords.latitude.toFixed(2), lo = pos.coords.longitude.toFixed(2);       // ~1 km is plenty for weather; exact GPS is never sent
-    const ctl = typeof AbortController === 'function' ? new AbortController() : null, tm = ctl && setTimeout(() => ctl.abort(), 10000);
-    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + la + '&longitude=' + lo + '&current=temperature_2m&timezone=auto', ctl ? { signal:ctl.signal } : undefined);
-    if (tm) clearTimeout(tm);
-    const j = await r.json(), temp = j && j.current && j.current.temperature_2m, tz = j && j.timezone;
+    const pos = await new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy:true, timeout:15000, maximumAge:300000 }))
+      .catch(() => new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy:false, timeout:12000, maximumAge:900000 })));   // GPS first, network location as backup
+    const la = pos.coords.latitude.toFixed(3), lo = pos.coords.longitude.toFixed(3);       // ~100 m: exact enough for weather + place name, never the raw GPS
+    const jget = async url => { const ctl = typeof AbortController === 'function' ? new AbortController() : null, tm = ctl && setTimeout(() => ctl.abort(), 10000);
+      try{ const r = await fetch(url, ctl ? { signal:ctl.signal } : undefined); return await r.json(); } finally { if (tm) clearTimeout(tm); } };
+    const [w, g] = await Promise.all([                                                    // temperature + real place name at the same time
+      jget('https://api.open-meteo.com/v1/forecast?latitude=' + la + '&longitude=' + lo + '&current=temperature_2m&timezone=auto'),
+      jget('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' + la + '&longitude=' + lo + '&localityLanguage=en').catch(() => null)]);
+    const temp = w && w.current && w.current.temperature_2m, tz = w && w.timezone;
     if (typeof temp !== 'number' || !tz) throw new Error('no weather');
-    const loc = String(tz).split('/').pop().replace(/_/g, ' ');
+    const place = g && (g.locality || g.city || g.principalSubdivision) || '';              // e.g. "Rohini", "Patna" - the real place, not the time zone city
+    const city = g && g.city && g.city !== place ? g.city : '';
+    const loc = (place ? place + (city ? ', ' + city : '') : String(tz).split('/').pop().replace(/_/g, ' ')).slice(0, 60);
     const out = await api('setMyLocation', { tz, loc, temp:Math.round(temp) });
     S.myLoc = { uid:S.me.id, tz:out.tz || tz, loc:out.loc || loc, temp:out.temp }; if (S.chat) S.chat.meTz = out.tz || tz;
     geoPut({ uid:S.me.id, at:Date.now() });
