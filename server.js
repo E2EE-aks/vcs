@@ -349,7 +349,8 @@ function makeApp(store, env) {
 
   // ---------- Voice / video calls (WebRTC signalling over plain HTTPS polling, kept in memory) ----------
   // Audio and video never pass through this server: it only hands the "offer" / "answer" between the two phones.
-  const CALL_ACTIONS = new Set(['callConfig', 'callStart', 'callPoll', 'callAnswer', 'callEnd']);
+  const GUEST_ACTIONS = new Set(['guestCallConfig', 'guestCallStart', 'guestCallPoll', 'guestCallEnd']);   // QR / website visitor calls (no account)
+  const CALL_ACTIONS = new Set(['callConfig', 'callStart', 'callPoll', 'callAnswer', 'callEnd', ...GUEST_ACTIONS]);
   const vcalls = new Map(), vbusy = new Map();          // callId -> call ; userId -> callId
   let iceCache = { at: 0, v: null };
   async function iceServers() {
@@ -378,7 +379,41 @@ function makeApp(store, env) {
     if (vbusy.get(c.to) === c.id) vbusy.delete(c.to);
   }
   const vcSdp = o => { if (!o || typeof o !== 'object' || typeof o.sdp !== 'string' || o.sdp.length > 60000 || (o.type !== 'offer' && o.type !== 'answer')) globalThis.fail_('Bad call data.', 'CALL'); return { type: o.type, sdp: o.sdp }; };
+  // ---------- Visitor calls: someone scans the QR / opens call.html (no account) and rings the main admin inside the app ----------
+  // The call shows up in the app as "VCS Management · <visitor name>" and also sends the phone notification (fcm.js) when the app is closed.
+  // Set GUEST_CALL_TO on the server to ring another user id instead of the main admin ('ADMIN').
+  const gStarts = new Map(); let gHour = [];                  // abuse limits: per visitor address and overall
+  const gClean = s => String(s || '').replace(/[\u0000-\u001f<>&"'`\\]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  async function guestRoute(req) {
+    vcSweep(); const a = req.action, now = Date.now();
+    if (a === 'guestCallConfig') { const r = await iceServers(); return { ok: true, iceServers: r.servers, turn: r.turn }; }
+    if (a === 'guestCallStart') {
+      const ip = String(req._ip || 'x'), mine = (gStarts.get(ip) || []).filter(t => now - t < 600000);
+      gHour = gHour.filter(t => now - t < 3600000);
+      if (mine.length >= 5 || gHour.length >= 60) globalThis.fail_('Bahut zyada calls ho gayi. Thodi der baad try karein.', 'CALL');
+      if (!wb.loadedAt) await withWb(() => true);              // a freshly woken server loads the sheet first (needed to find the admin and the phone tokens)
+      const to = String(env.GUEST_CALL_TO || 'ADMIN'), peer = globalThis.getAccount_(to, globalThis.readSettings_().values);
+      if (!peer || !peer.active) globalThis.fail_('Abhi call available nahi hai.', 'CALL');
+      if (vbusy.has(to)) globalThis.fail_('Line abhi busy hai. Thodi der baad try karein.', 'BUSY');
+      const offer = vcSdp(req.offer);
+      mine.push(now); gStarts.set(ip, mine); gHour.push(now);
+      if (gStarts.size > 500) for (const [k, v] of gStarts) if (!v.some(t => now - t < 600000)) gStarts.delete(k);
+      const id = crypto.randomBytes(9).toString('hex'), gid = 'QR' + id.slice(0, 8), who = gClean(req.name);
+      const c = { id, from: gid, to, guest: true, gsec: crypto.randomBytes(12).toString('hex'), fromName: 'VCS Management' + (who ? ' · ' + who : ''),
+        kind: req.kind === 'video' ? 'video' : 'audio', offer, answer: null, state: 'ringing', t0: now, seen: { from: now, to: now }, endedBy: '', reason: '', endAt: 0 };
+      vcalls.set(id, c); vbusy.set(gid, id); vbusy.set(to, id);
+      PUSH.call(to, c).catch(() => {});                       // phone rings even when the app is closed
+      return { ok: true, id, secret: c.gsec };
+    }
+    const c = vcalls.get(String(req.cid || '')), sec = String(req.secret || '');
+    if (!c || !c.guest || sec.length !== c.gsec.length || !crypto.timingSafeEqual(Buffer.from(sec), Buffer.from(c.gsec)))
+      return a === 'guestCallPoll' ? { ok: true, call: { state: 'ended', reason: 'gone' } } : { ok: true };
+    if (a === 'guestCallPoll') { c.seen.from = now; return { ok: true, call: { state: c.state, answer: c.answer, reason: c.reason, byMe: c.endedBy === c.from } }; }
+    vcFinish(c, c.from, c.state === 'ringing' ? 'cancelled' : 'hangup');            // guestCallEnd
+    return { ok: true };
+  }
   async function callRoute(req) {
+    if (GUEST_ACTIONS.has(req.action)) return guestRoute(req);
     const uid = globalThis.checkToken_(req.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
     vcSweep(); const a = req.action, now = Date.now();
     if (a === 'callConfig') { const r = await iceServers(); return { ok: true, iceServers: r.servers, turn: r.turn }; }
@@ -1345,7 +1380,11 @@ function start(app, env) {
     let body = '';
     let lim = 2e6;
     rq.on('data', c => { body += c; if (lim === 2e6 && /"action"\s*:\s*"deployUpload"/.test(body.slice(0, 800))) lim = 135e6; if (body.length > lim) rq.destroy(); });   // look only at the START of the body: the first network chunk is usually bigger than 800 bytes, so the old check never matched and every upload over 2 MB was cut off
-    rq.on('end', async () => { let out; try { out = await app.handle(body); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
+    rq.on('end', async () => {
+      if (/"action"\s*:\s*"guestCall/.test(body.slice(0, 400))) {       // visitor calls: tell the handler who is calling (always overwritten here, never trusted from the page)
+        try { const j = JSON.parse(body); j._ip = String(rq.headers['x-forwarded-for'] || '').split(',')[0].trim() || (rq.socket && rq.socket.remoteAddress) || ''; body = JSON.stringify(j); } catch (e) {}
+      }
+      let out; try { out = await app.handle(body); } catch (e) { out = { ok: false, error: 'Server error: ' + (e && e.message || e), code: 'CRASH' }; } send(200, out); });
   }));
 }
 module.exports = { makeApp, start };

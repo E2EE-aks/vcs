@@ -2,177 +2,209 @@
 <html lang="hi">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Call</title>
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<title>VCS Call</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
-  *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,sans-serif;background:#0f172a;color:#fff;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px}
-  h1{font-size:20px;margin:8px 0}
-  .card{background:#1e293b;border-radius:16px;padding:16px;width:100%;max-width:420px;margin-top:12px;text-align:center}
-  button{border:0;border-radius:12px;padding:14px 18px;font-size:16px;margin:6px;color:#fff;cursor:pointer}
-  .audio{background:#16a34a}.video{background:#2563eb}.end{background:#dc2626}.ok{background:#16a34a}
-  video{width:100%;border-radius:12px;background:#000;margin-top:10px}
-  #local{max-width:120px;position:absolute;right:24px;bottom:24px}
-  #status{margin:8px 0;color:#94a3b8}
-  #qr{display:inline-block;background:#fff;padding:10px;border-radius:8px;margin-top:8px}
-  input{width:100%;padding:10px;border-radius:8px;border:0;margin-top:6px}
-  .hide{display:none}
-  .stage{position:relative}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#fff;display:flex;flex-direction:column;align-items:center;padding:calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom))}
+  h1{font-size:22px;margin:10px 0 2px;text-align:center}
+  .sub{color:#94a3b8;font-size:14px;text-align:center;margin-bottom:6px}
+  .card{background:#1e293b;border-radius:18px;padding:18px;width:100%;max-width:420px;margin-top:14px;text-align:center}
+  input{width:100%;padding:13px 14px;border-radius:12px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:16px;margin-bottom:8px}
+  button{border:0;border-radius:14px;padding:15px 18px;font-size:17px;font-weight:600;color:#fff;cursor:pointer;width:100%;margin-top:8px}
+  button:disabled{opacity:.5}
+  .audio{background:#16a34a}.video{background:#2563eb}.end{background:#dc2626}.dark{background:#334155}
+  .row{display:flex;gap:10px}.row button{margin-top:0}
+  #callBox{max-width:520px}
+  .stage{position:relative;border-radius:14px;overflow:hidden;background:#000;min-height:120px}
+  #remote{width:100%;max-height:60vh;display:block;background:#000}
+  #local{position:absolute;right:8px;bottom:8px;width:92px;border-radius:10px;border:2px solid rgba(255,255,255,.5);background:#111;transform:scaleX(-1)}
+  .avatar{font-size:64px;padding:26px 0}
+  #status{margin:12px 0 4px;font-size:18px;font-weight:600}
+  #hint{color:#94a3b8;font-size:13px;min-height:18px}
+  #qr{display:inline-block;background:#fff;padding:12px;border-radius:12px;margin:8px 0}
+  .link{font-size:12px;word-break:break-all;color:#94a3b8;margin:8px 0}
+  .hide{display:none!important}
 </style>
 </head>
 <body>
-<h1 id="title">Call karein</h1>
+<h1 id="title">📞 Call karein</h1>
+<div class="sub" id="sub">Koi account nahi chahiye. Seedha call lagegi.</div>
 
-<!-- ===== SETTINGS: apna unique ID yahan likho (sirf letters/numbers/-) ===== -->
-<script>
-  const OWNER_ID = "aks-call-7391-xk29";      // <-- aapka unique ID
-  const OWNER_PIN = "1300";                   // <-- owner page kholne ka PIN (basic protection)
-</script>
-
-<!-- ===== Visitor view (QR scan karne wala) ===== -->
-<div id="visitor" class="card hide">
-  <div>Mujhe call karein (account ki zarurat nahi)</div>
-  <button class="audio" onclick="startCall(false)">🎤 Audio Call</button>
-  <button class="video" onclick="startCall(true)">📹 Video Call</button>
-</div>
-
-<!-- ===== Owner view ===== -->
-<div id="owner" class="card hide">
-  <div id="pinBox">
-    <input id="pin" type="password" placeholder="PIN daalo">
-    <button class="ok" onclick="ownerLogin()">Open</button>
-  </div>
-  <div id="ownerMain" class="hide">
-    <div>Is QR ko print/website par lagao:</div>
-    <div id="qr"></div>
-    <div style="font-size:12px;word-break:break-all;margin-top:6px" id="link"></div>
-    <div id="ownerStatus" style="margin-top:10px;color:#94a3b8">Connecting...</div>
-    <div style="font-size:12px;color:#94a3b8">Call lene ke liye ye page khula rakho.</div>
-  </div>
-</div>
-
-<div id="incoming" class="card hide">
-  <div id="incomingText" style="font-size:18px">Incoming call...</div>
-  <button class="ok" onclick="answer()">Uthao</button>
-  <button class="end" onclick="decline()">Kaato</button>
+<!-- ===== Visitor (jo QR scan karega) ===== -->
+<div id="start" class="card">
+  <input id="name" type="text" maxlength="40" placeholder="Aapka naam (optional)" autocomplete="name">
+  <button class="audio" id="bAudio" onclick="startCall(false)">🎤 Audio Call</button>
+  <button class="video" id="bVideo" onclick="startCall(true)">📹 Video Call</button>
+  <div id="err" style="color:#fca5a5;margin-top:10px;font-size:14px"></div>
 </div>
 
 <div id="callBox" class="card hide">
-  <div id="status"></div>
   <div class="stage">
     <video id="remote" autoplay playsinline></video>
-    <video id="local" autoplay playsinline muted></video>
+    <div id="avatar" class="avatar hide">📞</div>
+    <video id="local" autoplay playsinline muted class="hide"></video>
   </div>
-  <button class="end" onclick="endCall()">Call khatam</button>
+  <div id="status">Connecting…</div>
+  <div id="hint"></div>
+  <div class="row" style="margin-top:10px">
+    <button class="dark" id="bMute" onclick="toggleMute()">🎙️ Mute</button>
+    <button class="end" onclick="endCall()">❌ Call khatam</button>
+  </div>
+</div>
+
+<!-- ===== QR page: call.html?qr=1 ===== -->
+<div id="qrBox" class="card hide">
+  <div>Is QR ko print karo ya website par lagao.<br>Koi bhi scan karke call kar sakta hai.</div>
+  <div id="qr"></div>
+  <div class="link" id="link"></div>
+  <button class="dark" onclick="copyLink()">🔗 Link copy karo</button>
 </div>
 
 <script>
-const params = new URLSearchParams(location.search);
-const isOwner = params.get("owner") === "1";
-let peer, currentCall, localStream, pendingCall, ringTimer, audioCtx;
-
+const API_URL = 'https://attendance-api-yjtj.onrender.com';
 const $ = id => document.getElementById(id);
-const show = id => $(id).classList.remove("hide");
-const hide = id => $(id).classList.add("hide");
+const show = id => $(id).classList.remove('hide'), hide = id => $(id).classList.add('hide');
+const REASONS = { declined:'Call kaat di gayi.', missed:'Jawab nahi mila. Thodi der baad try karein.', cancelled:'Call cancel ho gayi.', lost:'Connection toot gaya.', failed:'Call connect nahi ho payi.', gone:'Call khatam.', hangup:'Call khatam.' };
 
-function setStatus(t){ $("status").textContent = t; }
+let pc = null, local = null, cid = '', secret = '', gotAnswer = false, pollT = null, ringT = null, tickT = null, startedAt = 0, ending = false, muted = false, video = false, actx = null, wake = null;
 
-async function getMedia(video){
-  return navigator.mediaDevices.getUserMedia({audio:true, video: video ? {facingMode:"user"} : false});
+/* ---------- server ---------- */
+async function api(body, ms){
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms || 20000);
+  try{
+    const r = await fetch(API_URL, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' }, body:JSON.stringify(body), signal:ctl.signal });
+    return await r.json();
+  } finally { clearTimeout(t); }
 }
 
-function attachRemote(call){
-  call.on("stream", s => { $("remote").srcObject = s; setStatus("Connected"); });
-  call.on("close", cleanup);
-  call.on("error", e => { setStatus("Error: " + e.type); });
+/* ---------- ring-back tone for the caller (soft double beep while it rings) ---------- */
+function ringStart(){
+  try{
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === 'suspended') actx.resume();
+    const beep = () => { const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = 425; g.gain.value = .08; o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime + .9); };
+    beep(); ringT = setInterval(beep, 3000);
+  }catch(e){}
+}
+const ringStop = () => { clearInterval(ringT); ringT = null; };
+
+/* ---------- call ---------- */
+function setStatus(s, h){ $('status').textContent = s; $('hint').textContent = h || ''; }
+function gathered(p){
+  return new Promise(res => {
+    if (p.iceGatheringState === 'complete') return res();
+    const done = () => { p.removeEventListener('icegatheringstatechange', chk); clearTimeout(t); res(); };
+    const chk = () => { if (p.iceGatheringState === 'complete') done(); };
+    const t = setTimeout(done, 3000);
+    p.addEventListener('icegatheringstatechange', chk);
+  });
+}
+function mediaErr(e){
+  if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) return 'Mic' + (video ? ' / camera' : '') + ' ki permission allow karein.';
+  if (e && (e.name === 'NotFoundError' || e.name === 'OverconstrainedError')) return 'Is phone me mic' + (video ? ' / camera' : '') + ' nahi mila.';
+  if (e && e.name === 'NotReadableError') return 'Mic ya camera kisi aur app me chal raha hai.';
+  return (e && e.message) || 'Call shuru nahi ho payi.';
+}
+
+async function startCall(v){
+  $('err').textContent = ''; video = !!v;
+  if (!(window.isSecureContext && navigator.mediaDevices && window.RTCPeerConnection)){ $('err').textContent = 'Ye page https par aur naye browser me kholein.'; return; }
+  $('bAudio').disabled = $('bVideo').disabled = true;
+  ending = false; gotAnswer = false; muted = false; $('bMute').textContent = '🎙️ Mute';
+  try{
+    local = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true }, video: video ? { facingMode:'user', width:{ ideal:1280 }, height:{ ideal:720 } } : false });
+  }catch(e){ $('err').textContent = mediaErr(e); $('bAudio').disabled = $('bVideo').disabled = false; return; }
+  hide('start'); show('callBox'); $('title').textContent = '📞 Call ho rahi hai';
+  $('local').classList.toggle('hide', !video); $('avatar').classList.toggle('hide', video); $('remote').classList.toggle('hide', false);
+  if (video) $('local').srcObject = local;
+  setStatus('Connecting…', 'Server jaag raha ho to 30-60 second lag sakte hain.');
+  try{ if (navigator.wakeLock) wake = await navigator.wakeLock.request('screen'); }catch(e){}
+  ringStart();
+  try{
+    let ice = [{ urls:'stun:stun.l.google.com:19302' }];
+    try{ const c = await api({ action:'guestCallConfig' }, 70000); if (c && c.ok && Array.isArray(c.iceServers) && c.iceServers.length) ice = c.iceServers; }catch(e){}
+    if (ending) return;
+    pc = new RTCPeerConnection({ iceServers: ice });
+    const remote = new MediaStream(); $('remote').srcObject = remote;
+    pc.ontrack = e => { remote.addTrack(e.track); $('remote').play && $('remote').play().catch(() => {}); };
+    pc.onconnectionstatechange = () => {
+      const s = pc.connectionState;
+      if (s === 'connected') connected();
+      else if (s === 'failed') finish('Call connect nahi ho payi. Internet check karke dobara try karein.');
+      else if (s === 'disconnected') setTimeout(() => { if (pc && pc.connectionState !== 'connected' && !ending) finish('Connection toot gaya.'); }, 10000);
+    };
+    local.getTracks().forEach(t => pc.addTrack(t, local));
+    await pc.setLocalDescription(await pc.createOffer());
+    await gathered(pc);
+    if (ending) return;
+    const r = await api({ action:'guestCallStart', name:$('name').value.trim(), kind: video ? 'video' : 'audio', offer:{ type:pc.localDescription.type, sdp:pc.localDescription.sdp } }, 70000);
+    if (!r || !r.ok) return finish((r && r.error) || 'Call nahi lag payi.');
+    if (ending){ api({ action:'guestCallEnd', cid:r.id, secret:r.secret }).catch(() => {}); return; }
+    cid = r.id; secret = r.secret; setStatus('Ring ho rahi hai…', 'Samne wale ke uthane ka intezaar...');
+    pollT = setInterval(poll, 1500);
+  }catch(e){
+    finish(e && e.name === 'AbortError' ? 'Server se jawab nahi aaya. Thodi der baad try karein.' : 'Server tak nahi pahunch paye. Internet check karein.');
+  }
+}
+
+let polling = false;
+async function poll(){
+  if (polling || !cid || ending) return; polling = true;
+  try{
+    const r = await api({ action:'guestCallPoll', cid, secret }, 10000), c = r && r.call;
+    if (!c || ending) return;
+    if (c.state === 'ended') return finish(REASONS[c.reason] || 'Call khatam.');
+    if (c.state === 'active' && c.answer && !gotAnswer && pc){ gotAnswer = true; ringStop(); setStatus('Connecting…', ''); await pc.setRemoteDescription(c.answer); }
+  }catch(e){} finally { polling = false; }
+}
+
+function connected(){
+  if (startedAt) return;
+  startedAt = Date.now(); ringStop(); $('title').textContent = '📞 Call chal rahi hai'; if (video) $('avatar').classList.add('hide');
+  const upd = () => { const s = Math.floor((Date.now() - startedAt) / 1000); setStatus('Connected · ' + String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'), ''); };
+  upd(); tickT = setInterval(upd, 1000);
+}
+
+function toggleMute(){
+  muted = !muted; if (local) local.getAudioTracks().forEach(t => t.enabled = !muted);
+  $('bMute').textContent = muted ? '🔇 Unmute' : '🎙️ Mute';
 }
 
 function cleanup(){
-  if(localStream){ localStream.getTracks().forEach(t=>t.stop()); localStream=null; }
-  $("remote").srcObject = null; $("local").srcObject = null;
-  hide("callBox"); hide("incoming"); stopRing();
-  if(!isOwner) show("visitor");
-  currentCall = null; pendingCall = null;
+  ringStop(); clearInterval(pollT); clearInterval(tickT); pollT = tickT = null; startedAt = 0;
+  try{ pc && pc.close(); }catch(e){} pc = null;
+  try{ local && local.getTracks().forEach(t => t.stop()); }catch(e){} local = null;
+  try{ wake && wake.release(); }catch(e){} wake = null;
+  $('remote').srcObject = null; $('local').srcObject = null;
 }
-
-/* ---------- Visitor ---------- */
-async function startCall(video){
-  try{
-    localStream = await getMedia(video);
-  }catch(e){ alert("Mic/Camera ki permission do."); return; }
-  hide("visitor"); show("callBox");
-  $("local").srcObject = localStream;
-  $("local").style.display = video ? "block" : "none";
-  setStatus("Ring ho rahi hai...");
-  peer = new Peer();
-  peer.on("open", () => {
-    currentCall = peer.call(OWNER_ID, localStream, {metadata:{video}});
-    attachRemote(currentCall);
-    setTimeout(()=>{ if($("remote").srcObject==null && currentCall) setStatus("Jawab nahi mila, baad me try karein."); }, 30000);
-  });
-  peer.on("error", e => { setStatus(e.type==="peer-unavailable" ? "Abhi available nahi hain." : "Error: "+e.type); });
+function finish(msg){                                    // call is over (either side): go back to the start screen with a message
+  if (ending) return; ending = true; cleanup(); cid = ''; secret = '';
+  hide('callBox'); show('start'); $('title').textContent = '📞 Call karein';
+  $('bAudio').disabled = $('bVideo').disabled = false; $('err').textContent = msg || '';
 }
+function endCall(){
+  const c = cid, s = secret;
+  if (c) api({ action:'guestCallEnd', cid:c, secret:s }, 8000).catch(() => {});
+  finish('');
+}
+window.addEventListener('pagehide', () => {              // tab closed or page left: stop the ringing on the other side
+  if (cid && !ending){ try{ navigator.sendBeacon(API_URL, JSON.stringify({ action:'guestCallEnd', cid, secret })); }catch(e){} }
+});
 
-/* ---------- Owner ---------- */
-function ownerLogin(){
-  if($("pin").value !== OWNER_PIN){ alert("Galat PIN"); return; }
-  hide("pinBox"); show("ownerMain");
+/* ---------- QR page ---------- */
+function copyLink(){
+  const u = $('link').textContent;
+  (navigator.clipboard ? navigator.clipboard.writeText(u) : Promise.reject()).then(() => alert('Link copy ho gaya'), () => { prompt('Link copy karein:', u); });
+}
+if (new URLSearchParams(location.search).get('qr') === '1'){
+  hide('start'); show('qrBox'); $('title').textContent = '📷 Call QR';
   const url = location.origin + location.pathname;
-  $("link").textContent = url;
-  new QRCode($("qr"), {text:url, width:200, height:200});
-  peer = new Peer(OWNER_ID);
-  peer.on("open", () => { $("ownerStatus").textContent = "Online ✅ call ka wait..."; });
-  peer.on("error", e => { $("ownerStatus").textContent = e.type==="unavailable-id" ? "Ye ID kisi aur page par khuli hai (dusra tab band karo)." : "Error: "+e.type; });
-  peer.on("call", call => {
-    if(currentCall || pendingCall){ call.close(); return; }
-    pendingCall = call;
-    $("incomingText").textContent = (call.metadata && call.metadata.video ? "📹 Video" : "🎤 Audio") + " call aa rahi hai";
-    show("incoming"); startRing();
-    call.on("close", cleanup);
-  });
-}
-
-async function answer(){
-  stopRing(); hide("incoming");
-  const wantVideo = pendingCall.metadata && pendingCall.metadata.video;
-  try{ localStream = await getMedia(wantVideo); }
-  catch(e){ alert("Mic/Camera permission do."); decline(); return; }
-  $("local").srcObject = localStream;
-  $("local").style.display = wantVideo ? "block" : "none";
-  show("callBox");
-  currentCall = pendingCall; pendingCall = null;
-  currentCall.answer(localStream);
-  attachRemote(currentCall);
-  setStatus("Connecting...");
-}
-function decline(){ if(pendingCall){ pendingCall.close(); } cleanup(); }
-function endCall(){ if(currentCall){ currentCall.close(); } cleanup(); }
-
-function startRing(){
-  try{
-    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
-    const beep = () => {
-      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-      o.frequency.value = 880; g.gain.value = 0.15;
-      o.connect(g); g.connect(audioCtx.destination);
-      o.start(); o.stop(audioCtx.currentTime + 0.4);
-    };
-    beep(); ringTimer = setInterval(beep, 1200);
-  }catch(e){}
-  if(navigator.vibrate) navigator.vibrate([400,200,400]);
-  if(Notification && Notification.permission==="granted") new Notification("Incoming call");
-}
-function stopRing(){ clearInterval(ringTimer); ringTimer=null; }
-
-/* ---------- Init ---------- */
-if(isOwner){
-  $("title").textContent = "Owner Panel";
-  show("owner");
-  if("Notification" in window && Notification.permission==="default") Notification.requestPermission();
-} else {
-  show("visitor");
+  $('link').textContent = url;
+  try{ new QRCode($('qr'), { text:url, width:220, height:220, correctLevel:QRCode.CorrectLevel.M }); }catch(e){ $('qr').textContent = 'QR nahi ban paya. Internet check karein.'; }
 }
 </script>
 </body>
