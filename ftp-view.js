@@ -115,11 +115,20 @@
 
   /* =====================================================================
      A · Website se share  (phone ↔ phone, WebRTC)
-     Host phone folder chunta hai -> 6-digit code milta hai -> dusra phone code daalta hai -> us folder ka file manager khulta hai.
-     Files seedhe phone se phone jaati hain; server sirf shuru ka handshake karta hai. */
-  var R = { role:'', st:'', stBad:false, code:'', pc:null, dc:null, root:null, rootName:'', allowPut:true, cwd:'/', items:null, loading:false, dl:null, up:null, prog:'', log:[], codeIn:'', poll:null, on:false };
-  var CH = 16384, HAS_DIR = typeof window.showDirectoryPicker === 'function', HAS_RTC = typeof window.RTCPeerConnection === 'function';
-  function newPc(){ return new RTCPeerConnection({ iceServers:[{ urls:'stun:stun.l.google.com:19302' }] }); }
+     Host phone folder chunta hai -> 6-digit code -> dusra phone code daalta hai -> us folder ka file manager khulta hai.
+     Files seedhe phone se phone jaati hain; server sirf handshake karta hai.
+     Connection toote (network gaya, screen band …) to transfer PAUSE ho jaata hai, dono phone khud dobara jud jaate hain
+     aur transfer wahin se RESUME hota hai jahan ruka tha. */
+  var R = { role:'', st:'', stBad:false, code:'', key:'', ver:0, pc:null, dc:null, root:null, rootName:'', allowPut:true, cwd:'/', items:null, loading:false,
+            q:[], cur:null, log:[], codeIn:'', poll:null, on:false, gen:0, ep:0, lastRx:0, hb:null, wl:null, lostT:null, pairT:null, paired:false, joining:false, wake:null,
+            ups:{}, upDone:{}, curUp:'', hxT:0, saved:null, saveDir:null, saveName:'' };
+  var CH = 65536, BLK = 2097152, HI = 8388608, LO = 2097152, GKEY = 'ks_ftp_rtc_v1';
+  var HAS_DIR = typeof window.showDirectoryPicker === 'function', HAS_RTC = typeof window.RTCPeerConnection === 'function';
+  try { var sv0 = JSON.parse(localStorage.getItem(GKEY) || 'null'); if (sv0 && sv0.code && sv0.key && Date.now() - sv0.at < 86400000) R.saved = sv0; } catch(e){}
+  function saveGuest(){ try { R.saved = { code:R.code, key:R.key, at:Date.now() }; localStorage.setItem(GKEY, JSON.stringify(R.saved)); } catch(e){} }
+  function newPc(){ return new RTCPeerConnection({ iceServers:[{ urls:'stun:stun.l.google.com:19302' }, { urls:'stun:stun1.l.google.com:19302' }] }); }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function uid8(){ return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
   function gather(pc){
     return new Promise(function(res){
       if (pc.iceGatheringState === 'complete') return res();
@@ -129,38 +138,78 @@
       pc.addEventListener('icegatheringstatechange', ch);
     });
   }
-  function sendJ(o){ if (R.dc && R.dc.readyState === 'open') R.dc.send(JSON.stringify(o)); }
-  function sendBin(buf){
+  function sendJ(o){ var dc = R.dc; if (dc && dc.readyState === 'open'){ try { dc.send(JSON.stringify(o)); } catch(e){} } }
+  function sendBin(dc, buf){
     return new Promise(function(res){
       (function go(){
-        var dc = R.dc; if (!dc || dc.readyState !== 'open') return res(false);
-        if (dc.bufferedAmount > 1048576){ dc.bufferedAmountLowThreshold = 262144; var f = function(){ dc.removeEventListener('bufferedamountlow', f); go(); }; dc.addEventListener('bufferedamountlow', f); return; }
+        if (!dc || dc.readyState !== 'open') return res(false);
+        if (dc.bufferedAmount > HI){
+          dc.bufferedAmountLowThreshold = LO;
+          var f = function(){ dc.removeEventListener('bufferedamountlow', f); dc.removeEventListener('close', f); go(); };
+          dc.addEventListener('bufferedamountlow', f); dc.addEventListener('close', f); return;
+        }
         try { dc.send(buf); res(true); } catch(e){ res(false); }
       })();
     });
   }
   function fmt(n){ n = +n || 0; return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB'; }
   function setSt(m, bad){ R.st = m; R.stBad = !!bad; var el = $('#rtcSt'); if (el){ el.textContent = m; el.className = 'fx-msg' + (bad ? ' e' : ''); } }
-  function setProg(m){ R.prog = m; var el = $('#rtcProg'); if (el) el.textContent = m; }
   function logLine(m){ R.log.unshift(m); R.log = R.log.slice(0, 8); var el = $('#rtcLog'); if (el) el.innerHTML = R.log.map(esc).join('<br>'); }
-  function rtcReset(){
-    clearInterval(R.poll); R.poll = null;
-    if (R.code && R.role === 'host' && !R.on){ try { callServer({ action:'rtcClose', token:S.token, code:R.code }); } catch(e){} }
-    try { if (R.dc) R.dc.close(); } catch(e){} try { if (R.pc) R.pc.close(); } catch(e){}
-    R.role = ''; R.st = ''; R.stBad = false; R.code = ''; R.pc = null; R.dc = null; R.root = null; R.rootName = ''; R.cwd = '/'; R.items = null; R.loading = false; R.dl = null; R.up = null; R.prog = ''; R.log = []; R.on = false;
+  function hostProg(txt){ var n = Date.now(); if (n - R.hxT < 400) return; R.hxT = n; var el = $('#rtcHx'); if (el) el.textContent = txt; }
+
+  /* keep the screen awake while connected (a sleeping screen is the main reason long video transfers die) */
+  function wl(on){
+    try {
+      if (on){ if (navigator.wakeLock && !R.wl) navigator.wakeLock.request('screen').then(function(l){ R.wl = l; l.addEventListener('release', function(){ R.wl = null; }); }, function(){}); }
+      else if (R.wl){ R.wl.release(); R.wl = null; }
+    } catch(e){}
   }
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden && R.role && R.on) wl(true); });
+
+  function rtcReset(){
+    R.ep++; clearInterval(R.poll); clearInterval(R.hb); clearTimeout(R.lostT); clearTimeout(R.pairT); wl(false);
+    if (R.wake){ var w = R.wake; R.wake = null; w(); }
+    if (R.role === 'host' && R.code){ try { callServer({ action:'rtcClose', token:S.token, code:R.code }); } catch(e){} }
+    var dc = R.dc, pc = R.pc; R.dc = null; R.pc = null;
+    try { if (dc) dc.close(); } catch(e){} try { if (pc) pc.close(); } catch(e){}
+    Object.keys(R.ups).forEach(function(k){ try { R.ups[k].w.abort(); } catch(e){} });
+    R.role = ''; R.st = ''; R.stBad = false; R.code = ''; R.key = ''; R.ver = 0; R.root = null; R.rootName = ''; R.cwd = '/'; R.items = null; R.loading = false;
+    R.q = []; R.cur = null; R.log = []; R.on = false; R.paired = false; R.joining = false; R.ups = {}; R.upDone = {}; R.curUp = '';
+  }
+
+  /* ---------- connection watching + automatic re-connect ---------- */
   function watch(pc){
     pc.onconnectionstatechange = function(){
+      if (R.pc !== pc) return;
       var s = pc.connectionState;
-      if (s === 'connected'){ R.on = true; clearInterval(R.poll); setSt('✓ Connected'); rtcDraw(); }
-      else if ((s === 'failed' || s === 'disconnected' || s === 'closed') && R.pc === pc){
-        R.on = false; setSt(s === 'failed' ? 'Connection nahi ban paya (dono phone ek hi WiFi par rakho) ' : 'Connection toot gaya', true); rtcDraw();
-      }
+      if (s === 'connected') clearTimeout(R.lostT);
+      else if (s === 'failed' || s === 'closed') lost();
+      else if (s === 'disconnected'){ clearTimeout(R.lostT); R.lostT = setTimeout(function(){ if (R.pc === pc && pc.connectionState !== 'connected') lost(); }, 6000); }
     };
   }
+  function startHb(){
+    clearInterval(R.hb); R.lastRx = Date.now();
+    R.hb = setInterval(function(){ sendJ({ t:'p' }); if (R.on && Date.now() - R.lastRx > 20000) lost(); }, 4000);
+  }
+  function lost(){
+    if (!R.role || !R.pc) return;
+    R.on = false; R.gen++; clearInterval(R.hb); clearTimeout(R.lostT); clearTimeout(R.pairT); R.loading = false; R.curUp = '';
+    var dc = R.dc, pc = R.pc; R.dc = null; R.pc = null;
+    try { if (dc) dc.close(); } catch(e){} try { if (pc) pc.close(); } catch(e){}
+    if (R.cur && R.cur.state === 'run') R.cur.state = 'pause';
+    if (R.paired) setSt(navigator.onLine === false ? '📵 Network nahi hai — transfer pause hai, network aate hi apne aap chalu hoga' : '⏸ Connection toota — dobara jud raha hai, transfer wahin se chalega…', true);
+    rtcDraw();
+    if (R.role === 'host') setTimeout(function(){ if (R.role === 'host' && !R.pc) hostOffer(); }, 800); else guestLoop();
+  }
+  window.addEventListener('offline', function(){ if (R.role && R.on) lost(); });
+  window.addEventListener('online', function(){
+    if (!R.role) return;
+    if (R.wake){ var w = R.wake; R.wake = null; w(); }
+    if (R.role === 'host' && !R.on && R.paired && R.pc) setTimeout(function(){ if (!R.on) lost(); }, 1200);
+  });
   function haveNet(){ if (!HAS_RTC){ say('Ye browser phone-to-phone connection support nahi karta.', true); return false; } if (typeof S === 'undefined' || !S.token){ say('Pehle login karo.', true); return false; } return true; }
 
-  /* ----- host: folder -> offer -> code ----- */
+  /* ----- host ----- */
   function pickRoot(){
     if (!haveNet()) return;
     R.allowPut = !$('#rtcAllow') || $('#rtcAllow').checked;
@@ -169,46 +218,59 @@
     } else { var i = $('#rtcFiles'); if (i){ i.value = ''; i.click(); } }
   }
   function startHost(root, name){
-    rtcReset(); R.role = 'host'; R.root = root; R.rootName = name; setSt('Code ban raha hai…'); rtcDraw();
+    var allow = R.allowPut; rtcReset(); R.allowPut = allow; R.role = 'host'; R.root = root; R.rootName = name; setSt('Code ban raha hai…'); rtcDraw(); hostOffer();
+  }
+  function hostOffer(){
+    var ep = R.ep; clearInterval(R.poll);
     var pc = newPc(); R.pc = pc; watch(pc);
-    var dc = pc.createDataChannel('ks'); hostChannel(dc);
+    hostChannel(pc.createDataChannel('ks', { ordered:true }));
     pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).then(function(){ return gather(pc); })
-      .then(function(){ return callServer({ action:'rtcHost', token:S.token, offer:JSON.stringify(pc.localDescription) }); })
+      .then(function(){ return callServer({ action:'rtcHost', token:S.token, code:R.code, offer:JSON.stringify(pc.localDescription) }); })
       .then(function(j){
-        if (!j || !j.ok) throw new Error((j && j.error) || 'Server se code nahi mila');
-        if (R.pc !== pc) return;
-        R.code = j.code; setSt('Ye code dusre phone me daalo (10 minute chalega)'); rtcDraw();
-        var t0 = Date.now();
-        R.poll = setInterval(function(){
-          if (Date.now() - t0 > 600000){ clearInterval(R.poll); setSt('Code expire ho gaya — dobara share karo', true); return; }
-          callServer({ action:'rtcPoll', token:S.token, code:R.code }).then(function(a){
-            if (R.pc !== pc || !a || !a.ok) return;
-            if (a.gone){ clearInterval(R.poll); return; }
-            if (a.answer){ clearInterval(R.poll); setSt('Judh raha hai…'); pc.setRemoteDescription(JSON.parse(a.answer)).catch(function(e){ setSt('Judne me galti: ' + e.message, true); }); }
-          }, function(){});
-        }, 1500);
-      }).catch(function(e){ if (R.pc === pc){ setSt((e && e.message) || 'Galti hui', true); rtcDraw(); } });
+        if (ep !== R.ep || R.pc !== pc) return;
+        if (!j || !j.ok){ var e = new Error((j && j.error) || 'Server se code nahi mila'); e.fatal = j && j.code === 'RTCGONE'; throw e; }
+        R.code = j.code; if (!R.on) setSt(R.paired ? '⏸ Dusre phone ka wait… (wo apne aap dobara judega)' : 'Ye code dusre phone me daalo — 2 ghante tak chalega', !!R.paired); rtcDraw(); hostPoll(pc, ep);
+      }).catch(function(e){
+        if (ep !== R.ep || R.pc !== pc) return;
+        try { pc.close(); } catch(x){} R.pc = null;
+        if (e && e.fatal){ setSt('Code expire ho gaya — dobara Share karo', true); rtcDraw(); return; }
+        setSt('📵 Network nahi hai — dobara koshish ho rahi hai…', true); rtcDraw();
+        setTimeout(function(){ if (ep === R.ep && R.role === 'host' && !R.pc) hostOffer(); }, 3000);
+      });
+  }
+  function hostPoll(pc, ep){
+    R.poll = setInterval(function(){
+      if (ep !== R.ep || R.pc !== pc){ clearInterval(R.poll); return; }
+      callServer({ action:'rtcPoll', token:S.token, code:R.code }).then(function(a){
+        if (ep !== R.ep || R.pc !== pc || !a || !a.ok) return;
+        if (a.gone){ clearInterval(R.poll); setSt('Code expire ho gaya — dobara Share karo', true); rtcDraw(); return; }
+        if (!a.answer) return;
+        clearInterval(R.poll); R.paired = true; setSt('Judh raha hai…');
+        pc.setRemoteDescription(JSON.parse(a.answer)).catch(function(e){ setSt('Judne me galti: ' + e.message, true); });
+        clearTimeout(R.pairT); R.pairT = setTimeout(function(){ if (R.pc === pc && !R.on) lost(); }, 40000);
+      }, function(){});
+    }, 2000);
   }
   function hostChannel(dc){
     dc.binaryType = 'arraybuffer'; R.dc = dc;
-    dc.onopen = function(){ logLine('Dusra phone juda'); };
-    dc.onclose = function(){ logLine('Dusra phone hat gaya'); };
-    dc.onmessage = function(e){ hostMsg(e.data).catch(function(err){ sendJ({ t:'err', msg:(err && err.message) || 'Galti' }); }); };
+    dc.onopen = function(){ if (R.dc !== dc) return; R.on = true; R.gen++; R.curUp = ''; clearTimeout(R.pairT); startHb(); wl(true); setSt('✓ Connected'); logLine('Dusra phone juda'); rtcDraw(); };
+    dc.onclose = function(){ if (R.dc === dc) lost(); };
+    dc.onmessage = function(e){ if (R.dc !== dc) return; R.lastRx = Date.now(); hostMsg(e.data, dc).catch(function(err){ var id = ''; try { id = JSON.parse(e.data).id || ''; } catch(x){} sendJ({ t:'err', id:id, msg:(err && err.message) || 'Galti' }); }); };
   }
   function parts(p){ var a = String(p || '/').split('/').filter(Boolean); if (a.some(function(x){ return x === '.' || x === '..'; })) throw new Error('Galat path'); return a; }
-  async function dirAt(path){ var h = R.root.dir; var a = parts(path); for (var i = 0; i < a.length; i++) h = await h.getDirectoryHandle(a[i]); return h; }
-  async function hostMsg(d){
-    if (typeof d !== 'string'){                                   // binary = a chunk of a file being uploaded to this phone
-      var u = R.up; if (!u) return; u.got += d.byteLength; u.chain = u.chain.then(function(){ return u.w.write(d); }); return;
-    }
+  async function dirAt(path){ var h = R.root.dir, a = parts(path); for (var i = 0; i < a.length; i++) h = await h.getDirectoryHandle(a[i]); return h; }
+  function upWrite(u, d){ u.got += d.byteLength; u.chain = u.chain.then(function(){ return u.w.write(d); }).catch(function(e){ u.err = e; }); }
+  async function hostMsg(d, dc){
+    if (typeof d !== 'string'){ var u = R.ups[R.curUp]; if (u){ upWrite(u, d); hostProg('⬆ aa rahi: ' + u.name + ' — ' + fmt(u.got) + ' / ' + fmt(u.size)); } return; }
     var m = JSON.parse(d);
+    if (m.t === 'p') return;
     if (m.t === 'ls'){
       var out = [];
       if (R.root.files){ if (parts(m.path).length) throw new Error('Folder nahi mila'); R.root.files.forEach(function(f){ out.push({ n:f.name, d:0, s:f.size }); }); }
       else {
         var dir = await dirAt(m.path), n = 0;
         for await (var ent of dir.entries()){
-          if (++n > 1000) break;
+          if (++n > 2000) break;
           if (ent[1].kind === 'directory') out.push({ n:ent[0], d:1, s:0 });
           else { var sz = 0; try { sz = (await ent[1].getFile()).size; } catch(e){} out.push({ n:ent[0], d:0, s:sz }); }
         }
@@ -222,102 +284,215 @@
       if (R.root.files) file = R.root.files.filter(function(f){ return f.name === name; })[0];
       else { var dh = R.root.dir; for (var k = 0; k < a.length; k++) dh = await dh.getDirectoryHandle(a[k]); file = await (await dh.getFileHandle(name)).getFile(); }
       if (!file) throw new Error('File nahi mili');
-      sendJ({ t:'meta', name:file.name, size:file.size }); logLine('⬇ bheja ja raha: ' + file.name);
-      for (var off = 0; off < file.size; off += CH){
-        var buf = await file.slice(off, off + CH).arrayBuffer();
-        if (!(await sendBin(buf))) return;
+      var off = Math.max(0, Math.min(+m.off || 0, file.size));
+      sendJ({ t:'meta', id:m.id, name:file.name, size:file.size, off:off }); logLine((off ? '⏩ phir se bhej raha: ' : '⬇ bheja ja raha: ') + file.name);
+      for (var o = off; o < file.size; o += BLK){
+        var ab = await file.slice(o, Math.min(o + BLK, file.size)).arrayBuffer();
+        for (var p = 0; p < ab.byteLength; p += CH){
+          if (!(await sendBin(dc, new Uint8Array(ab, p, Math.min(CH, ab.byteLength - p)))) || R.dc !== dc) return;     // connection dropped: guest will ask again from where it stopped
+        }
+        hostProg('⬇ bheja: ' + file.name + ' — ' + fmt(Math.min(o + BLK, file.size)) + ' / ' + fmt(file.size));
       }
-      sendJ({ t:'end' }); logLine('✓ bhej diya: ' + file.name); return;
+      if (R.dc === dc){ sendJ({ t:'end', id:m.id }); logLine('✓ bhej diya: ' + file.name); }
+      return;
     }
     if (m.t === 'put'){
       if (!R.allowPut || R.root.files) throw new Error('Is phone par upload allow nahi hai');
-      var pa = parts(m.path), nm = String(m.name || '').replace(/[\/\\]/g, '_'); if (!nm || nm === '.' || nm === '..') throw new Error('File ka naam galat');
-      var ph = R.root.dir; for (var q = 0; q < pa.length; q++) ph = await ph.getDirectoryHandle(pa[q]);
-      var fh = await ph.getFileHandle(nm, { create:true }), w = await fh.createWritable();
-      R.up = { w:w, got:0, chain:Promise.resolve(), name:nm }; logLine('⬆ aa rahi: ' + nm); return;
+      if (R.upDone[m.id]){ sendJ({ t:'ok', id:m.id, name:R.upDone[m.id] }); return; }
+      var us = R.ups[m.id];
+      if (us && us.size !== m.size){ try { await us.w.abort(); } catch(e){} delete R.ups[m.id]; us = null; }
+      if (!us){
+        var pa = parts(m.path), nm = String(m.name || '').replace(/[\/\\]/g, '_'); if (!nm || nm === '.' || nm === '..') throw new Error('File ka naam galat');
+        var ph = R.root.dir; for (var q = 0; q < pa.length; q++) ph = await ph.getDirectoryHandle(pa[q]);
+        var fh = await ph.getFileHandle(nm, { create:true }), w = await fh.createWritable();
+        us = R.ups[m.id] = { w:w, got:0, size:m.size, chain:Promise.resolve(), name:nm, err:null }; logLine('⬆ aa rahi: ' + nm);
+      } else logLine('⏩ upload wahin se chalu: ' + us.name);
+      R.curUp = m.id; sendJ({ t:'putat', id:m.id, off:us.got }); return;
     }
-    if (m.t === 'end' && R.up){
-      var up = R.up; R.up = null; await up.chain; await up.w.close(); logLine('✓ mil gayi: ' + up.name); sendJ({ t:'ok', name:up.name }); return;
+    if (m.t === 'end'){
+      var up = R.ups[m.id]; if (!up) throw new Error('Upload nahi mila');
+      if (up.got < up.size){ R.curUp = m.id; sendJ({ t:'putat', id:m.id, off:up.got }); return; }
+      await up.chain; if (up.err) throw up.err;
+      await up.w.close(); delete R.ups[m.id]; R.upDone[m.id] = up.name; if (R.curUp === m.id) R.curUp = '';
+      logLine('✓ mil gayi: ' + up.name); sendJ({ t:'ok', id:m.id, name:up.name }); return;
     }
   }
 
-  /* ----- guest: code -> answer -> browse ----- */
-  function guestJoin(code){
+  /* ----- guest ----- */
+  function guestJoin(code, key){
     if (!haveNet()) return; code = String(code || '').replace(/\D/g, '');
     if (code.length !== 6){ say('6 ank ka code daalo', true); return; }
-    rtcReset(); R.role = 'guest'; setSt('Judh raha hai…'); rtcDraw();
-    var pc = newPc(); R.pc = pc; watch(pc);
-    pc.ondatachannel = function(e){ guestChannel(e.channel); };
-    callServer({ action:'rtcJoin', token:S.token, code:code }).then(function(j){
-      if (!j || !j.ok) throw new Error((j && j.error) || 'Code galat hai');
-      return pc.setRemoteDescription(JSON.parse(j.offer));
-    }).then(function(){ return pc.createAnswer(); }).then(function(a){ return pc.setLocalDescription(a); }).then(function(){ return gather(pc); })
-      .then(function(){ return callServer({ action:'rtcAnswer', token:S.token, code:code, answer:JSON.stringify(pc.localDescription) }); })
-      .then(function(j){ if (!j || !j.ok) throw new Error((j && j.error) || 'Answer nahi gaya'); setSt('Connect ho raha hai…'); })
-      .catch(function(e){ if (R.pc === pc){ setSt((e && e.message) || 'Galti hui', true); R.role = ''; try { pc.close(); } catch(x){} rtcDraw(); } });
+    var k = key || (R.saved && R.saved.code === code ? R.saved.key : '');
+    rtcReset(); R.role = 'guest'; R.code = code; R.key = k; R.paired = !!k; setSt('Judh raha hai…'); rtcDraw(); guestLoop();
+  }
+  function guestLoop(){
+    if (R.role !== 'guest' || R.joining) return;
+    R.joining = true; var ep = R.ep;
+    (async function(){
+      while (ep === R.ep && R.role === 'guest' && !R.on){
+        try { if (await guestAttempt(ep)) break; }
+        catch(e){
+          if (ep !== R.ep) break;
+          if (e && e.fatal){ if (R.paired){ setSt(e.message, true); } else { var m = e.message; R.role = ''; setSt(m, true); } rtcDraw(); break; }
+          setSt('📵 Network nahi hai — dobara koshish ho rahi hai…', true); rtcDraw();
+        }
+        await new Promise(function(r){ R.wake = r; setTimeout(r, 2000); });
+      }
+      if (ep === R.ep) R.joining = false;
+    })();
+  }
+  async function guestAttempt(ep){
+    var j = await callServer({ action:'rtcJoin', token:S.token, code:R.code, key:R.key, ver:R.ver });
+    if (ep !== R.ep) return true;
+    if (!j || !j.ok){ var e = new Error((j && j.error) || 'Code galat hai'); e.fatal = !!(j && (j.code === 'RTCGONE' || j.code === 'RTCBAD')); throw e; }
+    if (j.wait){ if (!R.on) setSt(R.paired ? '⏸ Host ka wait ho raha hai… (wo online aate hi jud jaayega)' : 'Judh raha hai…', !!R.paired); return false; }
+    var pc = newPc(); R.pc = pc; watch(pc); pc.ondatachannel = function(ev){ guestChannel(ev.channel); };
+    await pc.setRemoteDescription(JSON.parse(j.offer)); var an = await pc.createAnswer(); await pc.setLocalDescription(an); await gather(pc);
+    if (ep !== R.ep || R.pc !== pc) return true;
+    var r = await callServer({ action:'rtcAnswer', token:S.token, code:R.code, key:R.key, ver:j.ver, answer:JSON.stringify(pc.localDescription) });
+    if (!r || !r.ok){ if (R.pc === pc){ R.pc = null; try { pc.close(); } catch(x){} } var e2 = new Error((r && r.error) || 'Answer nahi gaya'); e2.fatal = !!(r && r.code === 'RTCGONE' || r && r.code === 'RTCBAD'); if (r && r.code === 'RTCVER'){ R.ver = 0; } throw e2; }
+    R.key = r.key || R.key; R.ver = j.ver; R.paired = true; saveGuest(); setSt('Connect ho raha hai…'); rtcDraw();
+    for (var i = 0; i < 60 && ep === R.ep && !R.on && R.pc === pc; i++) await sleep(500);
+    if (R.on) return true;
+    if (R.pc === pc){ R.pc = null; try { pc.close(); } catch(x){} }
+    return false;
   }
   function guestChannel(dc){
     dc.binaryType = 'arraybuffer'; R.dc = dc;
-    dc.onopen = function(){ R.on = true; setSt('✓ Connected'); ls('/'); };
-    dc.onclose = function(){ R.on = false; setSt('Connection toot gaya', true); rtcDraw(); };
-    dc.onmessage = function(e){ guestMsg(e.data); };
+    dc.onopen = function(){
+      if (R.dc !== dc) return; R.on = true; R.gen++; startHb(); wl(true); setSt('✓ Connected'); R.joining = false;
+      ls(R.cwd); if (R.cur) startTask(R.cur); else pump(); rtcDraw();
+    };
+    dc.onclose = function(){ if (R.dc === dc) lost(); };
+    dc.onmessage = function(e){ if (R.dc !== dc) return; R.lastRx = Date.now(); guestMsg(e.data); };
   }
   function ls(path){ R.cwd = path; R.items = []; R.loading = true; sendJ({ t:'ls', path:path }); rtcDraw(); }
-  function guestMsg(d){
-    if (typeof d !== 'string'){ if (R.dl){ R.dl.parts.push(d); R.dl.got += d.byteLength; setProg('⬇ ' + R.dl.name + ' — ' + fmt(R.dl.got) + ' / ' + fmt(R.dl.size)); } return; }
-    var m = JSON.parse(d);
-    if (m.t === 'ls'){ if (m.path !== R.cwd) return; R.items = R.items.concat(m.items || []); if (!m.more) R.loading = false; rtcDraw(); }
-    else if (m.t === 'meta'){ R.dl = { name:m.name, size:m.size, got:0, parts:[] }; setProg('⬇ ' + m.name + ' — 0 / ' + fmt(m.size)); }
-    else if (m.t === 'end' && R.dl){
-      var dl = R.dl; R.dl = null; var url = URL.createObjectURL(new Blob(dl.parts)), a = document.createElement('a');
-      a.href = url; a.download = dl.name; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(url); }, 60000);
-      setProg('✓ Download ho gayi: ' + dl.name);
-    }
-    else if (m.t === 'ok'){ setProg('✓ Upload ho gayi: ' + m.name); ls(R.cwd); }
-    else if (m.t === 'err'){ R.loading = false; R.dl = null; setProg('⚠ ' + m.msg); rtcDraw(); }
+
+  /* transfers: a queue; each task remembers how far it got, so after a reconnect it carries on from there */
+  function addDl(path, name, size){ R.q.push({ k:'dl', id:uid8(), path:path, name:name, size:size || 0, got:0, blob:new Blob([]), pend:[], pb:0, state:'wait', sp:0, tt:0, tb:0, disk:!!R.saveDir, w:null, chain:null, err:null }); rtcDraw(); pump(); }
+  /* badi file (GB me) seedhe phone ki storage me likhi jaati hai — memory me jama nahi hoti */
+  async function openDisk(t){
+    if (t.w) return;
+    var base = t.name.replace(/[\/\\]/g, '_'), nm = base, n = 0;
+    for (;;){ try { await R.saveDir.getFileHandle(nm); n++; var dot = base.lastIndexOf('.'); nm = dot > 0 ? base.slice(0, dot) + ' (' + n + ')' + base.slice(dot) : base + ' (' + n + ')'; } catch(e){ break; } }
+    var fh = await R.saveDir.getFileHandle(nm, { create:true }); t.w = await fh.createWritable(); t.saved = nm; t.chain = Promise.resolve();
   }
-  async function upload(file){
-    if (!file || !R.on) return;
-    sendJ({ t:'put', path:R.cwd, name:file.name, size:file.size });
-    for (var off = 0; off < file.size; off += CH){
-      var buf = await file.slice(off, off + CH).arrayBuffer(); if (!(await sendBin(buf))) return setProg('⚠ Upload beech me ruk gayi');
-      if ((off / CH) % 40 === 0) setProg('⬆ ' + file.name + ' — ' + fmt(off) + ' / ' + fmt(file.size));
+  function pickSave(){
+    if (!HAS_DIR) return;
+    window.showDirectoryPicker({ mode:'readwrite', id:'ksdl' }).then(function(h){ R.saveDir = h; R.saveName = h.name || 'Folder'; rtcDraw(); }, function(){});
+  }
+  function addUp(file){ R.q.push({ k:'up', id:uid8(), file:file, name:file.name, size:file.size, dir:R.cwd, sent:0, got:0, state:'wait', sp:0, tt:0, tb:0 }); rtcDraw(); pump(); }
+  function pump(){
+    if (!R.on || R.cur) return;
+    var t = R.q.filter(function(x){ return x.state === 'wait'; })[0]; if (!t) return;
+    R.cur = t; startTask(t);
+  }
+  function startTask(t){
+    t.state = 'run'; t.tt = Date.now(); t.tb = t.k === 'dl' ? t.got : (t.sent || 0);
+    if (t.k === 'dl'){
+      var g = R.gen, go = function(){ if (g === R.gen && R.cur === t) sendJ({ t:'get', id:t.id, path:t.path, off:t.got }); };
+      if (t.disk) openDisk(t).then(go, function(e){ done(t, false, 'Folder me file nahi bani: ' + (e && e.message || e)); }); else go();
     }
-    sendJ({ t:'end' }); setProg('Upload ho rahi… ' + file.name);
+    else sendJ({ t:'put', id:t.id, path:t.dir, name:t.name, size:t.size });
+    rtcDraw();
+  }
+  function done(t, ok, msg){ t.state = ok ? 'done' : 'err'; t.msg = msg || ''; if (R.cur === t) R.cur = null; rtcDraw(); pump(); }
+  function pos(t){ return t.k === 'dl' ? t.got : Math.max(0, Math.min(t.size, (t.sent || 0) - (R.dc ? R.dc.bufferedAmount : 0))); }
+  function tick(t){
+    var n = Date.now(), dt = n - t.tt; if (dt < 400) return;
+    var p = pos(t), inst = (p - t.tb) / (dt / 1000); t.sp = t.sp ? t.sp * 0.6 + inst * 0.4 : inst; t.tt = n; t.tb = p;
+    var bar = $('#xb-' + t.id), tx = $('#xt-' + t.id), pc = t.size ? Math.min(100, p / t.size * 100) : 0;
+    if (bar) bar.style.width = pc.toFixed(1) + '%'; if (tx) tx.textContent = stText(t);
+  }
+  function stText(t){
+    var p = pos(t), pc = t.size ? Math.floor(Math.min(100, p / t.size * 100)) : 0;
+    if (t.state === 'done') return '✓ ' + fmt(t.size) + ' · ho gaya';
+    if (t.state === 'err') return '⚠ ' + (t.msg || 'Galti');
+    if (t.state === 'wait') return 'Line me hai…';
+    if (t.state === 'pause') return '⏸ Pause · ' + pc + '% (' + fmt(p) + ' / ' + fmt(t.size) + ') — network aate hi chalega';
+    return pc + '% · ' + fmt(p) + ' / ' + fmt(t.size) + (t.sp > 1024 ? ' · ' + fmt(t.sp) + '/s' : '');
+  }
+  function flushDl(t){ if (t.pend.length){ t.blob = new Blob([t.blob].concat(t.pend)); t.pend = []; t.pb = 0; } }
+  function guestMsg(d){
+    var t = R.cur;
+    if (typeof d !== 'string'){ if (t && t.k === 'dl' && t.state === 'run' && t.disk){ var at = t.got; t.got += d.byteLength; t.chain = t.chain.then(function(){ return t.w.write({ type:'write', position:at, data:d }); }).catch(function(e){ t.err = e; }); tick(t); return; }
+      if (t && t.k === 'dl' && t.state === 'run'){ t.pend.push(d); t.pb += d.byteLength; t.got += d.byteLength; if (t.pb >= 8388608) flushDl(t); tick(t); } return; }
+    var m = JSON.parse(d);
+    if (m.t === 'p') return;
+    if (m.t === 'ls'){ if (m.path !== R.cwd) return; R.items = (R.items || []).concat(m.items || []); if (!m.more){ R.loading = false; } rtcDraw(); return; }
+    if (m.t === 'meta'){ if (t && t.id === m.id){ t.size = m.size; t.name = m.name; if (m.off !== t.got){ t.got = m.off; if (!m.off){ t.blob = new Blob([]); t.pend = []; t.pb = 0; } } rtcDraw(); } return; }
+    if (m.t === 'end'){
+      if (t && t.k === 'dl' && t.id === m.id && t.disk){
+        t.chain.then(function(){ if (t.err) throw t.err; return t.w.close(); }).then(function(){ t.name = t.saved || t.name; t.w = null; done(t, true); }, function(e){ done(t, false, 'Save nahi hui: ' + (e && e.message || e)); });
+        return;
+      }
+      if (t && t.k === 'dl' && t.id === m.id){
+        flushDl(t); var url = URL.createObjectURL(t.blob), a = document.createElement('a');
+        a.href = url; a.download = t.name; a.style.display = 'none'; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function(){ URL.revokeObjectURL(url); t.blob = null; }, 120000); done(t, true);
+      } return;
+    }
+    if (m.t === 'putat'){ if (t && t.k === 'up' && t.id === m.id){ upLoop(t, m.off || 0); } return; }
+    if (m.t === 'ok'){ if (t && t.k === 'up' && t.id === m.id){ t.sent = t.size; var dd = t.dir; done(t, true); if (R.cwd === dd) ls(dd); } return; }
+    if (m.t === 'err'){
+      if (t && (!m.id || m.id === t.id)){ done(t, false, m.msg); return; }
+      R.loading = false; rtcDraw(); return;
+    }
+  }
+  async function upLoop(t, off){
+    var g = R.gen, dc = R.dc, at = off; t.sent = off; t.tb = off; t.tt = Date.now();
+    while (at < t.size){
+      var ab = await t.file.slice(at, Math.min(at + BLK, t.size)).arrayBuffer();
+      for (var i = 0; i < ab.byteLength; i += CH){
+        var len = Math.min(CH, ab.byteLength - i);
+        if (g !== R.gen || !(await sendBin(dc, new Uint8Array(ab, i, len)))) return;          // paused: resumes after reconnect
+        t.sent += len; tick(t);
+      }
+      at += ab.byteLength;
+    }
+    if (g === R.gen) sendJ({ t:'end', id:t.id });
   }
   function join(a, b){ return (a === '/' ? '' : a) + '/' + b; }
   function up1(p){ var a = p.split('/').filter(Boolean); a.pop(); return '/' + a.join('/'); }
 
+  function taskHtml(t){
+    var pc = t.size ? Math.min(100, pos(t) / t.size * 100) : 0, col = t.state === 'err' ? '#c62828' : t.state === 'pause' ? '#b45309' : t.state === 'done' ? '#16a34a' : '#5b3df5';
+    return '<div class="fx-it" style="display:block"><div style="display:flex;align-items:center;gap:8px"><div class="t" style="cursor:default">' + (t.k === 'dl' ? '⬇ ' : '⬆ ') + esc(t.name) + '<small id="xt-' + t.id + '">' + esc(stText(t)) + '</small></div>' +
+      (t.state === 'err' ? '<button class="fx-ib" data-xr="' + t.id + '" aria-label="Retry">↻</button>' : '') +
+      (t.state !== 'run' ? '<button class="fx-ib" data-xx="' + t.id + '" aria-label="Remove">✕</button>' : '') + '</div>' +
+      '<div style="height:6px;border-radius:6px;background:#e8e8f0;margin-top:8px;overflow:hidden"><div id="xb-' + t.id + '" style="height:100%;width:' + pc.toFixed(1) + '%;background:' + col + ';transition:width .3s"></div></div></div>';
+  }
   function rtcDraw(){
     var box = $('#fxRtc'); if (!box) return;
     var h = '<div class="fx-box"><h3>A · Website se share (bina koi app)</h3>';
     if (!HAS_RTC) h += '<div class="fx-msg e">Ye browser is feature ko support nahi karta. Chrome / Safari update karo.</div>';
     else if (!R.role){
-      h += '<div class="fx-sub">Dono phone par yahi website kholo. Jis phone ki files dikhani hain wo <b>Share</b> dabaye, doosra phone code daalke <b>Judo</b> dabaye.</div>' +
+      h += '<div class="fx-sub">Dono phone par yahi website kholo. Jis phone ki files dikhani hain wo <b>Share</b> dabaye, doosra phone code daalke <b>Judo</b> dabaye. Code 2 ghante tak chalta hai; ek baar judne ke baad network toote to bhi dono phone khud dobara jud jaate hain aur transfer wahin se chalta hai.</div>' +
         '<div class="fx-act" style="margin-top:4px"><button class="fx-btn" id="rtcShare" type="button">📤 Is phone ko share karo</button></div>' +
         '<label style="display:flex;gap:8px;align-items:center;font-weight:600;margin-top:10px"><input type="checkbox" id="rtcAllow" style="width:auto"' + (R.allowPut ? ' checked' : '') + '> Dusra phone yahan files upload bhi kar sake</label>' +
         (HAS_DIR ? '' : '<div class="fx-sub" style="margin-top:6px">Ye browser poora folder share nahi karta (iPhone) — aap sirf chuni hui files share kar paoge. Poora file manager Android Chrome se share hota hai.</div>') +
         '<label style="margin-top:16px">Ya dusre phone ka code daalo</label><div class="fx-row"><div><input id="rtcCode" inputmode="numeric" maxlength="6" placeholder="6 ank ka code" autocomplete="off" value="' + esc(R.codeIn) + '"></div><button class="fx-btn go" id="rtcJoin" type="button">🔌 Judo</button></div>' +
+        (R.saved ? '<div class="fx-act"><button class="fx-btn gr" id="rtcResume" type="button">↻ Pichhla connection dobara jodo (' + esc(R.saved.code) + ')</button></div>' : '') +
         '<input id="rtcFiles" type="file" multiple hidden>';
       if (R.st) h += '<div id="rtcSt" class="fx-msg' + (R.stBad ? ' e' : '') + '">' + esc(R.st) + '</div>';
     } else if (R.role === 'host'){
       h += '<div class="fx-sub">Share ho raha hai: <b>' + esc(R.rootName) + '</b>' + (R.allowPut && !R.root.files ? ' · upload allowed' : ' · sirf dekhne / download') + '</div>' +
-        (R.code && !R.on ? '<div class="fx-link" style="font-size:30px;text-align:center;letter-spacing:6px">' + esc(R.code) + '</div>' : '') +
-        '<div id="rtcSt" class="fx-msg' + (R.stBad ? ' e' : '') + '">' + esc(R.st) + '</div><div id="rtcLog" class="fx-sub" style="margin-top:8px">' + R.log.map(esc).join('<br>') + '</div>' +
+        (R.code ? '<div class="fx-link" style="' + (R.on ? 'font-size:18px' : 'font-size:30px') + ';text-align:center;letter-spacing:6px">' + esc(R.code) + '</div>' : '') +
+        '<div id="rtcSt" class="fx-msg' + (R.stBad ? ' e' : '') + '">' + esc(R.st) + '</div><div id="rtcHx" class="fx-sub" style="margin-top:6px"></div><div id="rtcLog" class="fx-sub" style="margin-top:4px">' + R.log.map(esc).join('<br>') + '</div>' +
         '<div class="fx-act"><button class="fx-btn rd" id="rtcStop" type="button">⏹ Share band karo</button></div>' +
-        (R.on ? '<div class="fx-sub" style="margin-top:8px">Jab tak ye screen khuli hai tab tak dusra phone files dekh sakta hai.</div>' : '');
+        '<div class="fx-sub" style="margin-top:8px">Jab tak ye screen khuli hai (screen on rakhne ki koshish ho rahi hai) tab tak dusra phone files dekh sakta hai. Network toote to ye khud dobara jud jaata hai.</div>';
     } else {
       h += '<div id="rtcSt" class="fx-msg' + (R.stBad ? ' e' : '') + '">' + esc(R.st) + '</div>';
-      if (R.on){
-        var crumbs = '📁 ' + esc(R.cwd);
-        h += '<div class="fx-act" style="align-items:center"><button class="fx-btn gr" id="rtcUp" type="button"' + (R.cwd === '/' ? ' disabled' : '') + '>⬆ Peeche</button><div style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + crumbs + '</div></div>' +
+      if (R.paired || R.on){
+        h += '<div class="fx-act" style="align-items:center"><button class="fx-btn gr" id="rtcUp" type="button"' + (R.cwd === '/' || !R.on ? ' disabled' : '') + '>⬆ Peeche</button><div style="flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📁 ' + esc(R.cwd) + '</div></div>' +
           (R.loading && !(R.items || []).length ? '<div class="fx-sub" style="margin-top:10px">Khul raha hai…</div>' : '') +
           (R.items || []).map(function(x, i){
             return '<div class="fx-it"><div class="t" data-r="' + i + '">' + (x.d ? '📁 ' : '📄 ') + esc(x.n) + '<small>' + (x.d ? 'Folder' : fmt(x.s)) + '</small></div>' + (x.d ? '' : '<button class="fx-ib" data-g="' + i + '" aria-label="Download">⬇</button>') + '</div>';
           }).join('') +
           (R.items && !R.loading && !R.items.length ? '<div class="fx-sub" style="margin-top:10px">Ye folder khali hai.</div>' : '') +
-          '<div id="rtcProg" class="fx-msg" style="color:var(--ink,#333)">' + esc(R.prog) + '</div>' +
-          '<div class="fx-act"><button class="fx-btn" id="rtcUpl" type="button">⬆ Yahan file upload karo</button><input id="rtcUpf" type="file" multiple hidden></div>';
+          (HAS_DIR ? '<div class="fx-act"><button class="fx-btn gr" id="rtcSave" type="button">📂 ' + (R.saveDir ? 'Download folder: ' + esc(R.saveName) + ' (badlo)' : 'Download folder chuno (badi file / video ke liye)') + '</button></div>' : '<div class="fx-sub" style="margin-top:8px">Is browser me download memory me jama hoti hai — 1–2 GB se badi file ke liye Android Chrome use karo.</div>') +
+          (R.q.length ? '<label style="margin-top:16px">Transfers</label>' + R.q.slice(-8).map(taskHtml).join('') : '') +
+          '<div class="fx-act"><button class="fx-btn" id="rtcUpl" type="button"' + (R.on ? '' : ' disabled') + '>⬆ Yahan file upload karo</button><input id="rtcUpf" type="file" multiple hidden></div>';
       }
       h += '<div class="fx-act"><button class="fx-btn rd" id="rtcStop" type="button">⏹ Disconnect</button></div>';
     }
@@ -327,18 +502,22 @@
     root.addEventListener('input', function(e){ if (e.target.id === 'rtcCode') R.codeIn = e.target.value; });
     root.addEventListener('change', function(e){
       if (e.target.id === 'rtcFiles' && e.target.files.length){ if (!haveNet()) return; R.allowPut = false; startHost({ files:[].slice.call(e.target.files) }, e.target.files.length + ' file(s)'); }
-      if (e.target.id === 'rtcUpf'){ var fs = [].slice.call(e.target.files); e.target.value = ''; fs.reduce(function(p, f){ return p.then(function(){ return upload(f); }); }, Promise.resolve()); }
+      if (e.target.id === 'rtcUpf'){ var fs = [].slice.call(e.target.files); e.target.value = ''; fs.forEach(addUp); }
     });
     root.addEventListener('keydown', function(e){ if (e.key === 'Enter' && e.target.id === 'rtcCode') guestJoin(e.target.value); });
     root.addEventListener('click', function(e){
       var t = e.target;
       if (t.closest('#rtcShare')) return pickRoot();
       if (t.closest('#rtcJoin')) return guestJoin($('#rtcCode').value);
+      if (t.closest('#rtcResume')){ if (R.saved) guestJoin(R.saved.code, R.saved.key); return; }
       if (t.closest('#rtcStop')){ rtcReset(); rtcDraw(); return; }
-      if (t.closest('#rtcUp')){ ls(up1(R.cwd)); return; }
+      if (t.closest('#rtcSave')){ pickSave(); return; }
+      if (t.closest('#rtcUp')){ if (R.on) ls(up1(R.cwd)); return; }
       if (t.closest('#rtcUpl')){ $('#rtcUpf').click(); return; }
-      var g = t.closest('[data-g]'); if (g){ var x = R.items[+g.dataset.g]; if (x){ sendJ({ t:'get', path:join(R.cwd, x.n) }); setProg('⬇ ' + x.n + ' — shuru…'); } return; }
-      var r = t.closest('[data-r]'); if (r){ var y = R.items[+r.dataset.r]; if (y && y.d) ls(join(R.cwd, y.n)); else if (y){ sendJ({ t:'get', path:join(R.cwd, y.n) }); setProg('⬇ ' + y.n + ' — shuru…'); } return; }
+      var xx = t.closest('[data-xx]'); if (xx){ R.q = R.q.filter(function(q){ return q.id !== xx.dataset.xx; }); rtcDraw(); return; }
+      var xr = t.closest('[data-xr]'); if (xr){ var q = R.q.filter(function(z){ return z.id === xr.dataset.xr; })[0]; if (q){ q.state = 'wait'; rtcDraw(); pump(); } return; }
+      var g = t.closest('[data-g]'); if (g){ var x = R.items[+g.dataset.g]; if (x) addDl(join(R.cwd, x.n), x.n, x.s); return; }
+      var r = t.closest('[data-r]'); if (r){ var y = R.items[+r.dataset.r]; if (y && y.d){ if (R.on) ls(join(R.cwd, y.n)); } else if (y) addDl(join(R.cwd, y.n), y.n, y.s); return; }
     });
   }
 
