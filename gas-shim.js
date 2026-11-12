@@ -96,7 +96,12 @@ class Sheet {
   }
   deleteRows(r, n) {
     this._jr();
-    this.v.splice(r - 1, n); this.rows = Math.max(1, this.rows - n);
+    this.v.splice(r - 1, n);
+    // Google Sheets refuses to delete every non-frozen row ("not possible to delete all non-frozen rows").
+    // So if this delete would leave the sheet with only the header, add spare blank rows first.
+    const left = this.rows - n;
+    if (left < 3) { const add = 3 - Math.max(left, 0); this.wb.ops.push({ appendDimension: { sheetId: this.id, dimension: 'ROWS', length: add } }); this.rows += add; }
+    this.rows = Math.max(1, this.rows - n);
     this.wb.ops.push({ deleteDimension: { range: { sheetId: this.id, dimension: 'ROWS', startIndex: r - 1, endIndex: r - 1 + n } } });
   }
   deleteRow(r) { this.deleteRows(r, 1); }
