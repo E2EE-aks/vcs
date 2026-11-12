@@ -6253,8 +6253,8 @@ function groupChatForm(id){
   };
 }
 
-/* ---------- chat translation (English / Hindi / Indonesian), select & copy ---------- */
-const CH_LANGS = { en:{ name:'English', short:'EN' }, hi:{ name:'हिन्दी (Hindi)', short:'HI' }, id:{ name:'Bahasa Indonesia', short:'ID' } };
+/* ---------- chat translation (English / Hindi / Indonesian / Bengali), select & copy ---------- */
+const CH_LANGS = { en:{ name:'English', short:'EN' }, hi:{ name:'हिन्दी (Hindi)', short:'HI' }, id:{ name:'Bahasa Indonesia', short:'ID' }, bn:{ name:'বাংলা (Bengali)', short:'BN' } };
 const chatMsg = id => (S.chat.msgs[S.chat.with] || []).find(m => m.id === id);
 function chatLangOf(m){
   const o = S.chat.ov[m.id];

@@ -3757,11 +3757,11 @@ function chatLive_(req) {
     edited: chatEdited_(req, rows),
     gone: chatGone_(req, function (r) { return (r.from === CTX.uid && r.to === w) || (r.from === w && r.to === CTX.uid); }) };
 }
-// Translate messages (English / Hindi / Indonesian) with Google Translate built into Apps Script. Results are cached 6 hours.
-var TR_LANGS = { en: 1, hi: 1, id: 1 };
+// Translate messages (English / Hindi / Indonesian / Bengali) with Google Translate built into Apps Script. Results are cached 6 hours.
+var TR_LANGS = { en: 1, hi: 1, id: 1, bn: 1 };
 function chatTranslate_(req) {
   var to = String(req.to || '').toLowerCase();
-  if (!TR_LANGS[to]) fail_('Choose English, Hindi or Indonesian.');
+  if (!TR_LANGS[to]) fail_('Choose English, Hindi, Indonesian or Bengali.');
   var texts = Array.isArray(req.texts) ? req.texts.slice(0, 30) : [];
   var cache = CacheService.getScriptCache(), out = [];
   texts.forEach(function (t) {

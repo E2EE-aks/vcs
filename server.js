@@ -1005,10 +1005,10 @@ function makeApp(store, env) {
     return { code: 200, u, body: r.body };
   }
 
-  // ---------- Chat translate (English / Hindi / Indonesian) ----------
+  // ---------- Chat translate (English / Hindi / Indonesian / Bengali) ----------
   // Apps Script's LanguageApp does not exist on this Node server, so translate by calling Google Translate directly.
   // Runs outside the sheet queue (like call polling), so chat never waits for it. Results are cached 6 hours.
-  const TR_OK = { en: 1, hi: 1, id: 1 }, trCache = new Map();
+  const TR_OK = { en: 1, hi: 1, id: 1, bn: 1 }, trCache = new Map();
   // Google blocks bursts (HTTP 429). So: at most 3 requests at a time, a short gap between them, a retry with back-off,
   // a second Google address as back-up, and a quiet period when Google says "slow down" (instead of hammering it).
   let trActive = 0; const trWait = [];
@@ -1096,7 +1096,7 @@ function makeApp(store, env) {
   async function trRoute(req) {
     if (!globalThis.checkToken_(req.token)) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
     const to = String(req.to || '').toLowerCase();
-    if (!TR_OK[to]) globalThis.fail_('Choose English, Hindi or Indonesian.');
+    if (!TR_OK[to]) globalThis.fail_('Choose English, Hindi, Indonesian or Bengali.');
     const texts = (Array.isArray(req.texts) ? req.texts : []).slice(0, 30).map(t => String(t == null ? '' : t).slice(0, 1800));
     let bad = 0, why = '';
     const out = await Promise.all(texts.map(async t => {
