@@ -1099,7 +1099,7 @@ async function depLoad(){
   if (DEP.st.configured){
     try { const r = await api('deployFiles'); DEP.files = r.files; DEP.commits = r.commits; DEP.err = ''; }
     catch(e){ DEP.err = e.message; DEP.files = DEP.files || []; }
-    await depPoll(); await rdLoad(true);
+    await depPoll(); await rdLoad(true); rdcResume();
     if (DEP.prog && DEP.prog.state === 'pending' && Date.now() - new Date(DEP.prog.at).getTime() < 15 * 60000) depWatch(true);   // a deploy is still running
   }
   if (S.view === 'deploy') render();
@@ -1235,7 +1235,7 @@ function rdHtml(){
   const rows = (r.deploys || []).map(x => { const t = RD_TXT[x.status] || ['•', x.status];
     return `<div class="log-item"><div class="l1"><b>${t[0]} ${esc(t[1])}</b><span class="muted">${esc(depWhen(x.at))}</span></div>
       <div class="l2">${x.sha ? `<code>${esc(x.sha.slice(0, 7))}</code> ` : ''}${esc(x.msg || (x.trigger === 'manual' ? 'Manual deploy' : x.trigger || ''))}</div></div>`; }).join('');
-  return `${r.err ? `<div class="log-item bad"><div class="l1"><b>${esc(r.err)}</b></div></div>` : ''}${verdict}
+  return `<div id="rdcBox">${rdcHtml()}</div>${r.err ? `<div class="log-item bad"><div class="l1"><b>${esc(r.err)}</b></div></div>` : ''}${verdict}
     <div class="actions" style="margin:10px 0"><button class="btn" id="rdGo" onclick="rdDeploy(false)" ${DEP.rdBusy ? 'disabled' : ''}>🚀 Deploy latest commit</button>
       <button class="btn ghost" onclick="rdDeploy(true)" ${DEP.rdBusy ? 'disabled' : ''}>🧹 Clear cache &amp; deploy</button></div>
     ${r.canStatus ? rows || '<div class="muted">No deploys yet</div>' : '<div class="muted">Status is not shown because only the deploy hook is set. Add RENDER_API_KEY and RENDER_SERVICE_ID to see live status.</div>'}`;
@@ -1246,6 +1246,56 @@ async function rdDeploy(clear){
   try { await api('renderDeploy', { clearCache: !!clear }); toast('Deploy started on Render'); await new Promise(r => setTimeout(r, 2500)); await rdLoad(true); }
   catch(e){ handleErr(e); }
   DEP.rdBusy = false; rdDraw();
+}
+/* ---- after an upload: Render deploys TWICE, then the saved site copy is cleared ONCE (only after the last deploy is live) ---- */
+const RDC_KEY = 'ks_dep_chain', RDC_FAIL = ['build_failed', 'update_failed', 'pre_deploy_failed', 'canceled'];
+let rdcRun = false;
+const rdcGet = () => { try { return JSON.parse(localStorage.getItem(RDC_KEY) || 'null'); } catch(e){ return null; } };
+const rdcSet = o => { try { if (o) localStorage.setItem(RDC_KEY, JSON.stringify(o)); else localStorage.removeItem(RDC_KEY); } catch(e){} };
+function rdcMsg(m){ DEP.chainMsg = m || ''; const el = document.getElementById('rdcBox'); if (el) el.innerHTML = rdcHtml(); }
+const rdcHtml = () => DEP.chainMsg ? `<div class="log-item"><div class="l1"><b>${esc(DEP.chainMsg)}</b></div></div>` : '';
+function rdcStart(t0){ rdcSet({ step:1, at:t0 || Date.now() }); rdcResume(); }
+function rdcStop(msg, bad){ rdcSet(null); rdcRun = false; rdcMsg(''); if (msg) toast(msg, !!bad); }
+async function rdcResume(){
+  if (rdcRun || !S.token) return;
+  let c = rdcGet(); if (!c) return;
+  rdcRun = true;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  while (S.token){
+    c = rdcGet(); if (!c) { rdcRun = false; return; }
+    if (Date.now() - c.at > 40 * 60000) return rdcStop('Auto deploy stopped: it took too long. Check the Render card.', true);
+    let r = null; try { r = await api('renderStatus'); } catch(e){ await sleep(6000); continue; }          // the server restarts while Render goes live: just try again
+    const list = r.deploys || [], pick = since => list.find(x => Date.parse(x.at) >= since - 30000);
+    if (!r.canDeploy) return rdcStop('Auto deploy needs Render to be connected (RENDER_API_KEY + RENDER_SERVICE_ID).', true);
+    if (c.step === 1){                                                                // deploy 1 = the one Render starts from the upload
+      rdcMsg('⏳ Deploy 1 of 2 on Render…');
+      if (!r.canStatus){ if (Date.now() - c.at > 180000){ c.step = 2; rdcSet(c); } await sleep(6000); continue; }
+      const d = pick(c.at);
+      if (!d){ if (Date.now() - c.at > 90000 && !c.m1){ try { await api('renderDeploy', { clearCache:false }); c.m1 = 1; rdcSet(c); } catch(e){ return rdcStop('❌ Could not start deploy 1: ' + e.message, true); } } }
+      else if (RDC_FAIL.includes(d.status)) return rdcStop('❌ Deploy 1 failed on Render. The second deploy and cache clear were skipped.', true);
+      else if (d.status === 'live'){ c.step = 2; rdcSet(c); }
+    } else if (c.step === 2){                                                         // deploy 2 = started by us
+      rdcMsg('🚀 Starting deploy 2 of 2…');
+      try { await api('renderDeploy', { clearCache:false }); } catch(e){ return rdcStop('❌ Could not start deploy 2: ' + e.message, true); }
+      c.step = 3; c.t2 = Date.now(); rdcSet(c); try { await rdLoad(true); } catch(e){}
+    } else {
+      rdcMsg('⏳ Deploy 2 of 2 on Render…');
+      if (!r.canStatus){ if (Date.now() - c.t2 > 180000) return rdcFinish(); await sleep(6000); continue; }
+      const d = pick(c.t2);
+      if (d && RDC_FAIL.includes(d.status)) return rdcStop('❌ Deploy 2 failed on Render. Cache was NOT cleared.', true);
+      if (d && d.status === 'live') return rdcFinish();
+    }
+    await sleep(6000);
+  }
+  rdcRun = false;
+}
+async function rdcFinish(){                                                           // the LAST deploy is live -> clear the saved copy now (and only now)
+  rdcMsg('🧹 Last deploy is live — clearing the saved copy…');
+  let stamp = '';
+  for (let i = 0; i < 6 && !stamp; i++){ try { stamp = (await api('deployDone')).stamp; } catch(e){ await new Promise(r => setTimeout(r, 5000)); } }
+  rdcSet(null); rdcRun = false;
+  toast('✅ Both deploys are live — loading the new version');
+  setTimeout(() => { if (window.ksDeployDone) ksDeployDone(stamp); else location.reload(); }, 1200);
 }
 const depB64 = buf => { const u = new Uint8Array(buf); let out = ''; for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(out); };
 const depFromB64 = b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
@@ -1280,8 +1330,10 @@ async function depReview(){
         const path = (s ? s.value : (r.matches[0] ? r.matches[0].path : ((p && p.value.trim()) || r.name))).replace(/^\/+/, '');
         files.push({ path, b64: depB64(await r.file.arrayBuffer()) });
       }
+      const t0 = Date.now();
       const res = await api('deployUpload', { files, message:(w.querySelector('#depMsg').value || '').trim(), confirmBackend:true });
       w.remove();
+      if (!res.unchanged) rdcStart(t0);                 // Render deploy x2, then clear the saved copy once
       if (res.unchanged) toast('Nothing changed — these files are already the same on GitHub');
       else { toast('Published ' + res.changed.length + ' file' + (res.changed.length === 1 ? '' : 's') + ' — watch the Live status card'); document.getElementById('depFiles').value = ''; }
       if (res.warnings && res.warnings.length) setTimeout(() => toast('⚠ Published, but check: ' + res.warnings.join(' | '), true), 1200);

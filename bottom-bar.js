@@ -597,11 +597,13 @@
   function vis(){
     var b = document.body, off = app.classList.contains('hidden') || b.classList.contains('vc-open') || b.classList.contains('menu-open') ||
       b.classList.contains('chat-conv') || !!$('.chat.in-conv') || kb;
+    /* side bars stay available inside a chat room (quick switch); only the bottom bar hides there */
+    var sOff = app.classList.contains('hidden') || b.classList.contains('vc-open') || b.classList.contains('menu-open') || kb;
     bar.classList.toggle('hidden', off);
     if (!bar.classList.contains('bb-closing')) bar.classList.toggle('bb-min', isMin());
     dp.classList.toggle('hidden', off || !isMin());
-    vOff = off; Object.keys(sides).forEach(function(k){ sides[k].el.classList.toggle('hidden', off); });
-    if (off) closeSides();
+    vOff = sOff; Object.keys(sides).forEach(function(k){ sides[k].el.classList.toggle('hidden', sOff); });
+    if (sOff) closeSides();
     b.classList.toggle('has-btm', !off);
     if (!off){ gap(); requestAnimationFrame(function(){ gap(); moveInd(true); }); }
     if (app.classList.contains('hidden')) openSheet(false);

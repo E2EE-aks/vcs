@@ -654,7 +654,7 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'deployDone', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself (only a warning in the app, never blocks)
   const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60, CLONE_MAX = 95 * 1024 * 1024;   // CLONE_MAX: apk/zip in clone-src/ (GitHub itself refuses files over 100 MB)   // generous limits: any file type (text or binary), many files
@@ -827,6 +827,11 @@ function makeApp(store, env) {
     const a = req.action, ready = !!(GH.repo && GH.token);
     if (a === 'deployStatus') return { ok: true, configured: ready, repo: GH.repo, branch: GH.branch };
     if (a === 'renderStatus' || a === 'renderDeploy') return renderRoute(a, req, ready);
+    if (a === 'deployDone') {                      // the LAST deploy of an upload is live: save a new stamp - browsers clear their saved copy once when they see it change
+      const stamp = String(Date.now());
+      globalThis.PropertiesService.getScriptProperties().setProperty('DEPLOY_STAMP', stamp);
+      return { ok: true, stamp };
+    }
     if (!ready) globalThis.fail_('GitHub is not connected yet. Add GITHUB_TOKEN and GITHUB_REPO on Render first.', 'NOGH');
     const S0 = globalThis.readSettings_().values, acc = globalThis.getAccount_('ADMIN', S0) || {};
     const ctx = { uid: 'ADMIN', username: acc.username || 'admin', name: acc.name || '' };
@@ -1316,6 +1321,10 @@ function start(app, env) {
     };
     if (rq.method === 'OPTIONS') { rs.writeHead(204, cors); return rs.end(); }
     const url = new URL(rq.url, 'http://x');
+    if (rq.method === 'GET' && url.pathname === '/deploy-stamp') {                         // public, tiny: changes only after the last deploy of an upload
+      let st = ''; try { st = String(globalThis.PropertiesService.getScriptProperties().getProperty('DEPLOY_STAMP') || ''); } catch (e) {}
+      const h = Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, cors); rs.writeHead(200, h); return rs.end(JSON.stringify({ ok: true, stamp: st }));
+    }
     if (rq.method === 'GET' && url.pathname === '/live/stream') return live.stream(rq, rs, cors, String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''));
     if (rq.method === 'GET' && url.pathname === '/updates/download' && app.updOpen) {      // stream an update file to the user
       return app.updOpen(Object.fromEntries(url.searchParams)).then(o => {
