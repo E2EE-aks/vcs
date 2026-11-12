@@ -806,12 +806,11 @@ function makeApp(store, env) {
     const canStatus = !!(RD.key && RD.svc), canDeploy = canStatus || !!RD.hook;
     if (a === 'renderStatus') {
       const out = { ok: true, canStatus, canDeploy, deploys: [], head: null };
-      if (ghReady) { try { const c = await gh('GET', '/commits/' + encodeURIComponent(GH.branch)); out.head = { sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0], at: c.commit && c.commit.author ? c.commit.author.date : '' }; } catch (e) { out.headErr = e.message; } }
-      if (canStatus) {
-        const l = await rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=6');
-        out.deploys = (Array.isArray(l) ? l : []).map(x => x.deploy || x).map(d => ({ id: d.id, status: d.status, trigger: d.trigger || '', at: d.createdAt, done: d.finishedAt || '',
+      const headP = ghReady ? gh('GET', '/commits/' + encodeURIComponent(GH.branch)).then(c => { out.head = { sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0], at: c.commit && c.commit.author ? c.commit.author.date : '' }; }).catch(e => { out.headErr = e.message; }) : Promise.resolve();
+      const depP = canStatus ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=6') : Promise.resolve(null);   // GitHub + Render at the same time
+      const [, l] = await Promise.all([headP, depP]);
+      if (canStatus) out.deploys = (Array.isArray(l) ? l : []).map(x => x.deploy || x).map(d => ({ id: d.id, status: d.status, trigger: d.trigger || '', at: d.createdAt, done: d.finishedAt || '',
           sha: d.commit ? String(d.commit.id || '') : '', msg: d.commit ? String(d.commit.message || '').split('\n')[0] : '' }));
-      }
       return out;
     }
     if (!canDeploy) globalThis.fail_('Render is not connected. Add RENDER_API_KEY + RENDER_SERVICE_ID (or RENDER_DEPLOY_HOOK) on Render first.', 'NORENDER');
@@ -836,23 +835,19 @@ function makeApp(store, env) {
     const S0 = globalThis.readSettings_().values, acc = globalThis.getAccount_('ADMIN', S0) || {};
     const ctx = { uid: 'ADMIN', username: acc.username || 'admin', name: acc.name || '' };
     if (a === 'deployFiles') {
-      const t = await gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1');
+      const [t, cm] = await Promise.all([gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1'), gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&per_page=15')]);   // both at once
       const files = (t.tree || []).filter(x => x.type === 'blob' && depPathOk(x.path)).slice(0, 3000).map(x => ({ path: x.path, size: x.size || 0 }));
-      const cm = await gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&per_page=15');
       return { ok: true, files, commits: depCommits(cm) };
     }
     if (a === 'deployProgress') {                 // the same "x/3" checks GitHub shows next to a commit (Render's deploy is one of them)
       const c = await gh('GET', '/commits/' + encodeURIComponent(GH.branch));
       const items = []; let limited = false;
-      try {
-        const st = await gh('GET', '/commits/' + c.sha + '/status');
-        (st.statuses || []).forEach(x => items.push({ name: String(x.context || 'Status'), state: x.state === 'success' ? 'ok' : x.state === 'pending' ? 'wait' : 'bad' }));
-      } catch (e) { if (e.code === 'GITHUB') limited = true; else throw e; }
-      try {
-        const ck = await gh('GET', '/commits/' + c.sha + '/check-runs?per_page=50');
-        (ck.check_runs || []).forEach(x => items.push({ name: String(x.name || 'Check'),
-          state: x.status !== 'completed' ? 'wait' : (['success', 'neutral', 'skipped'].includes(x.conclusion) ? 'ok' : 'bad') }));
-      } catch (e) { if (e.code === 'GITHUB') limited = true; else throw e; }
+      const [st, ck] = await Promise.all([                                    // the two GitHub calls run at the same time
+        gh('GET', '/commits/' + c.sha + '/status').catch(e => { if (e.code === 'GITHUB') { limited = true; return null; } throw e; }),
+        gh('GET', '/commits/' + c.sha + '/check-runs?per_page=50').catch(e => { if (e.code === 'GITHUB') { limited = true; return null; } throw e; })]);
+      if (st) (st.statuses || []).forEach(x => items.push({ name: String(x.context || 'Status'), state: x.state === 'success' ? 'ok' : x.state === 'pending' ? 'wait' : 'bad' }));
+      if (ck) (ck.check_runs || []).forEach(x => items.push({ name: String(x.name || 'Check'),
+        state: x.status !== 'completed' ? 'wait' : (['success', 'neutral', 'skipped'].includes(x.conclusion) ? 'ok' : 'bad') }));
       const done = items.filter(x => x.state === 'ok').length, bad = items.some(x => x.state === 'bad');
       return { ok: true, sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0],
         at: c.commit && c.commit.author ? c.commit.author.date : '', total: items.length, done, items, limited,

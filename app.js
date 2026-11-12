@@ -513,6 +513,7 @@ function enterApp(){
   go(S.view);
   chatStart(); vcStart(); ludoStart();
   if (isAdmin()) loadLogs();
+  setTimeout(() => { try{ geoStart(); }catch(e){} }, 3000);          // location -> temperature, only if the user allows it
 }
 /* profile photos: tiny pictures cached on this phone; the server only sends a version number (pv) with the user list */
 let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') || '{}') || {}; }catch(e){ return {}; } })();
@@ -1095,14 +1096,17 @@ const depBase = p => String(p).split('/').pop();
 const depBackend = p => /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i.test(depBase(p));
 const depWhen = t => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
 async function depLoad(){
-  try { DEP.st = await api('deployStatus'); } catch(e){ DEP.st = { configured:false }; DEP.err = e.message; }
-  if (DEP.st.configured){
-    try { const r = await api('deployFiles'); DEP.files = r.files; DEP.commits = r.commits; DEP.err = ''; }
-    catch(e){ DEP.err = e.message; DEP.files = DEP.files || []; }
-    await depPoll(); await rdLoad(true); rdcResume();
-    if (DEP.prog && DEP.prog.state === 'pending' && Date.now() - new Date(DEP.prog.at).getTime() < 15 * 60000) depWatch(true);   // a deploy is still running
-  }
+  /* fast: show the tab at once (from the last result if we have one), then load status, files, live checks and Render IN PARALLEL */
   if (S.view === 'deploy') render();
+  try { DEP.st = await api('deployStatus'); } catch(e){ DEP.st = { configured:false }; DEP.err = e.message; }
+  if (S.view === 'deploy') render();
+  if (!DEP.st.configured) return;
+  const files = api('deployFiles').then(r => { DEP.files = r.files; DEP.commits = r.commits; DEP.err = ''; })
+    .catch(e => { DEP.err = e.message; DEP.files = DEP.files || []; })
+    .then(() => { if (S.view === 'deploy') render(); });
+  const prog = depPoll().then(() => { depDraw(); if (DEP.prog && DEP.prog.state === 'pending' && Date.now() - new Date(DEP.prog.at).getTime() < 15 * 60000) depWatch(true); });
+  const rend = rdLoad(true).then(() => rdcResume());
+  await Promise.all([files, prog, rend]);
 }
 /* ---- live progress: the same x/3 checks GitHub shows next to the commit (pending -> 1/3 -> 2/3 -> 3/3 = live) ---- */
 async function depPoll(){
@@ -1889,22 +1893,11 @@ function bdayAlertHtml(){
     <div style="flex:1;min-width:200px"><div style="font-weight:800;font-size:calc(17px*var(--fs))">Birthday today!</div>
       ${t.map(x => `<div><b>${esc(x.name)}</b>${x.age > 0 && x.age < 120 ? ` turns ${x.age} today` : ' — birthday today'} 🎉</div>`).join('')}</div></div>`;
 }
-/* ---------- my location (time zone) — other people see my local time under my name in chat ---------- */
-const KS_LOC = [
-  ['India','Asia/Kolkata','Delhi / Mumbai'],['Indonesia','Asia/Jakarta','Jakarta (WIB)'],['Indonesia','Asia/Makassar','Bali (WITA)'],['Indonesia','Asia/Jayapura','Papua (WIT)'],
-  ['Pakistan','Asia/Karachi',''],['Bangladesh','Asia/Dhaka',''],['Nepal','Asia/Kathmandu',''],['Sri Lanka','Asia/Colombo',''],['Bhutan','Asia/Thimphu',''],['Maldives','Indian/Maldives',''],
-  ['Afghanistan','Asia/Kabul',''],['Iran','Asia/Tehran',''],['Iraq','Asia/Baghdad',''],['Saudi Arabia','Asia/Riyadh',''],['United Arab Emirates','Asia/Dubai','Dubai'],['Qatar','Asia/Qatar',''],['Kuwait','Asia/Kuwait',''],['Oman','Asia/Muscat',''],['Bahrain','Asia/Bahrain',''],
-  ['Israel','Asia/Jerusalem',''],['Jordan','Asia/Amman',''],['Lebanon','Asia/Beirut',''],['Turkey','Europe/Istanbul',''],
-  ['Thailand','Asia/Bangkok',''],['Vietnam','Asia/Ho_Chi_Minh',''],['Cambodia','Asia/Phnom_Penh',''],['Laos','Asia/Vientiane',''],['Myanmar','Asia/Yangon',''],['Malaysia','Asia/Kuala_Lumpur',''],['Singapore','Asia/Singapore',''],['Philippines','Asia/Manila',''],['Brunei','Asia/Brunei',''],
-  ['China','Asia/Shanghai',''],['Hong Kong','Asia/Hong_Kong',''],['Taiwan','Asia/Taipei',''],['Japan','Asia/Tokyo',''],['South Korea','Asia/Seoul',''],['Mongolia','Asia/Ulaanbaatar',''],
-  ['Kazakhstan','Asia/Almaty',''],['Uzbekistan','Asia/Tashkent',''],
-  ['Australia','Australia/Sydney','Sydney'],['Australia','Australia/Perth','Perth'],['New Zealand','Pacific/Auckland',''],['Fiji','Pacific/Fiji',''],
-  ['United Kingdom','Europe/London',''],['Ireland','Europe/Dublin',''],['Portugal','Europe/Lisbon',''],['Spain','Europe/Madrid',''],['France','Europe/Paris',''],['Germany','Europe/Berlin',''],['Italy','Europe/Rome',''],['Netherlands','Europe/Amsterdam',''],['Belgium','Europe/Brussels',''],['Switzerland','Europe/Zurich',''],['Austria','Europe/Vienna',''],['Sweden','Europe/Stockholm',''],['Norway','Europe/Oslo',''],['Denmark','Europe/Copenhagen',''],['Finland','Europe/Helsinki',''],['Poland','Europe/Warsaw',''],['Czechia','Europe/Prague',''],['Hungary','Europe/Budapest',''],['Romania','Europe/Bucharest',''],['Greece','Europe/Athens',''],['Ukraine','Europe/Kyiv',''],['Russia','Europe/Moscow','Moscow'],
-  ['Egypt','Africa/Cairo',''],['Morocco','Africa/Casablanca',''],['Algeria','Africa/Algiers',''],['Nigeria','Africa/Lagos',''],['Ghana','Africa/Accra',''],['Kenya','Africa/Nairobi',''],['Ethiopia','Africa/Addis_Ababa',''],['Tanzania','Africa/Dar_es_Salaam',''],['Uganda','Africa/Kampala',''],['South Africa','Africa/Johannesburg',''],['Mauritius','Indian/Mauritius',''],
-  ['United States','America/New_York','New York'],['United States','America/Chicago','Chicago'],['United States','America/Denver','Denver'],['United States','America/Los_Angeles','Los Angeles'],['United States','America/Anchorage','Alaska'],['United States','Pacific/Honolulu','Hawaii'],
-  ['Canada','America/Toronto','Toronto'],['Canada','America/Vancouver','Vancouver'],['Mexico','America/Mexico_City',''],['Brazil','America/Sao_Paulo','São Paulo'],['Argentina','America/Argentina/Buenos_Aires',''],['Chile','America/Santiago',''],['Colombia','America/Bogota',''],['Peru','America/Lima',''],['Venezuela','America/Caracas','']
-];
+/* ---------- location -> temperature (no manual option) ----------
+   Nothing is shown in the profile. Only when the user ALLOWS the browser's location access, the phone's position is turned into
+   the current temperature (°C, Open-Meteo, no key) + time zone, saved on the server and shown under the person's name in Chat. */
 function locMine(){ const m = S.me && S.me.id; return S.myLoc && S.myLoc.uid === m ? S.myLoc : null; }
+function locCard(){ return ''; }
 function locTimeStr(tz){
   try{
     const now = new Date(), t = new Intl.DateTimeFormat(undefined, { timeZone:tz, hour:'numeric', minute:'2-digit' }).format(now);
@@ -1913,43 +1906,47 @@ function locTimeStr(tz){
     return t + d;
   }catch(e){ return ''; }
 }
-function locOptions(sel){
-  const seen = new Set(KS_LOC.map(x => x[1]));
-  let h = '<option value="">— Not set —</option>' + KS_LOC.map(x => `<option value="${esc(x[1])}" data-l="${esc(x[0])}" ${sel === x[1] ? 'selected' : ''}>${esc(x[0] + (x[2] ? ' · ' + x[2] : ''))}</option>`).join('');
-  let all = []; try{ all = (Intl.supportedValuesOf && Intl.supportedValuesOf('timeZone')) || []; }catch(e){}
-  const rest = all.filter(z => !seen.has(z) && /^[A-Za-z]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(z) && z.length <= 40);
-  if (sel && !seen.has(sel) && !rest.includes(sel)) rest.unshift(sel);
-  if (rest.length) h += '<optgroup label="Other time zones">' + rest.map(z => `<option value="${esc(z)}" data-l="${esc(z.split('/').pop().replace(/_/g, ' '))}" ${sel === z ? 'selected' : ''}>${esc(z.replace(/_/g, ' '))}</option>`).join('') + '</optgroup>';
-  return h;
-}
-function locCard(){
-  const m = locMine();
-  if (!m && S.me && S.me.id && !S._locLoading){
-    S._locLoading = 1;
-    api('getMyLocation').then(r => { S.myLoc = { uid:S.me.id, tz:r.tz || '', loc:r.loc || '' }; }).catch(() => { S.myLoc = { uid:S.me.id, tz:'', loc:'' }; })
-      .finally(() => { S._locLoading = 0; if (S.view === 'settings' || S.view === 'profile') render(); });
-  }
-  const tz = m ? m.tz : '';
-  return `<div class="loc-box"><div class="loc-h">📍 My location</div>
-    <p class="muted" style="margin:4px 0 10px">Choose the place you live in. The people you chat with will see your local time under your name, and you will see theirs.</p>
-    <select class="input" id="locSel" onchange="locSave(this)" ${m ? '' : 'disabled'}>${locOptions(tz)}</select>
-    <div class="loc-now muted" id="locNow">${tz ? '🕐 Your time there now: ' + esc(locTimeStr(tz)) : (m ? 'Not set — others will not see your time.' : 'Loading…')}</div></div>`;
-}
-async function locSave(sel){
-  const o = sel.options[sel.selectedIndex], tz = sel.value, loc = tz ? (o.dataset.l || '') : '';
-  sel.disabled = true;
+const GEO = { busy:false, timer:null, key:'ks_geo_v2' };
+const geoGet = () => { try{ return JSON.parse(localStorage.getItem(GEO.key) || '{}') || {}; }catch(e){ return {}; } };
+const geoPut = o => { try{ localStorage.setItem(GEO.key, JSON.stringify(Object.assign(geoGet(), o))); }catch(e){} };
+async function geoSync(force){
+  if (GEO.busy || !S.token || !S.me || !S.me.id || !navigator.geolocation) return;
+  const g = geoGet();
+  if (!force && g.uid === S.me.id && Date.now() - (g.at || 0) < 25 * 60000) return;      // temperature is refreshed at most every ~25 min
+  GEO.busy = true;
   try{
-    const r = await api('setMyLocation', { tz, loc });
-    S.myLoc = { uid:S.me.id, tz:r.tz || '', loc:r.loc || '' }; if (S.chat) S.chat.meTz = r.tz || '';
-    const n = document.getElementById('locNow'); if (n) n.textContent = r.tz ? '🕐 Your time there now: ' + locTimeStr(r.tz) : 'Not set — others will not see your time.';
-    toast(r.tz ? 'Location saved · ' + (r.loc || r.tz) : 'Location removed');
-  }catch(e){ handleErr(e); const m = locMine(); sel.value = m ? m.tz : ''; }
-  finally{ sel.disabled = false; }
+    const pos = await new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy:false, timeout:12000, maximumAge:900000 }));
+    const la = pos.coords.latitude.toFixed(2), lo = pos.coords.longitude.toFixed(2);       // ~1 km is plenty for weather; exact GPS is never sent
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null, tm = ctl && setTimeout(() => ctl.abort(), 10000);
+    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + la + '&longitude=' + lo + '&current=temperature_2m&timezone=auto', ctl ? { signal:ctl.signal } : undefined);
+    if (tm) clearTimeout(tm);
+    const j = await r.json(), temp = j && j.current && j.current.temperature_2m, tz = j && j.timezone;
+    if (typeof temp !== 'number' || !tz) throw new Error('no weather');
+    const loc = String(tz).split('/').pop().replace(/_/g, ' ');
+    const out = await api('setMyLocation', { tz, loc, temp:Math.round(temp) });
+    S.myLoc = { uid:S.me.id, tz:out.tz || tz, loc:out.loc || loc, temp:out.temp }; if (S.chat) S.chat.meTz = out.tz || tz;
+    geoPut({ uid:S.me.id, at:Date.now() });
+  }catch(e){ geoPut({ uid:S.me && S.me.id, at:Date.now() - 20 * 60000 }); }              // try again in ~5 min
+  finally{ GEO.busy = false; }
 }
-/* the other person's local time, e.g. "🕐 4:15 PM · Indonesia" */
+async function geoStart(){
+  if (!navigator.geolocation || !S.token) return;
+  let st = 'prompt', perm = null;
+  try{ perm = await navigator.permissions.query({ name:'geolocation' }); st = perm.state; }catch(e){}
+  if (perm && !perm.__ks){ perm.__ks = 1; perm.onchange = () => { if (perm.state === 'granted') geoSync(true); }; }   // user allows it later in the browser settings
+  if (st === 'denied') return;
+  if (st === 'prompt'){ if (geoGet().asked) return; geoPut({ asked:1 }); }                  // the browser asks only once; no repeated pop-ups
+  await geoSync(false);
+  clearInterval(GEO.timer); GEO.timer = setInterval(() => { if (!document.hidden) geoSync(false); }, 10 * 60000);
+}
+/* the other person's temperature + local time, e.g. "🌡 28°C · 🕐 4:15 PM · Kolkata" */
 function chatLocLine(u){
-  if (!u || u.isGroup || !u.tz) return '';
-  const t = locTimeStr(u.tz); return t ? '🕐 ' + t + (u.loc ? ' · ' + u.loc : '') : '';
+  if (!u || u.isGroup) return '';
+  const parts = [];
+  if (typeof u.temp === 'number' && Date.now() - (u.tempAt || 0) < 24 * 3600000) parts.push('🌡 ' + Math.round(u.temp) + '°C');
+  if (u.tz){ const t = locTimeStr(u.tz); if (t) parts.push('🕐 ' + t); }
+  if (parts.length && u.loc) parts.push(u.loc);
+  return parts.join(' · ');
 }
 setInterval(() => { try{ if (S.view === 'chat' && S.chat && S.chat.with) chatHeader(); }catch(e){} }, 20000);
 async function photoPick(inp){
@@ -5853,7 +5850,7 @@ const chFmt = {};
 function chClockTz(t, tz){ try{ const f = chFmt[tz] || (chFmt[tz] = new Intl.DateTimeFormat('en-IN', { timeZone:tz, hour:'numeric', minute:'2-digit' })); return f.format(new Date(t)); }catch(e){ return ''; } }
 function chMyTz(){ const m = locMine(); return (S.chat && S.chat.meTz) || (m && m.tz) || Intl.DateTimeFormat().resolvedOptions().timeZone; }
 function chDual(m, u){
-  if (!u || u.isGroup || !u.tz) return null;                       // needs the other person's location (Settings → Profile photo → My location)
+  if (!u || u.isGroup || !u.tz) return null;                       // needs the other person's time zone (saved automatically when they allow location access)
   const me = chMyTz(), a = m.mine ? me : u.tz, b = m.mine ? u.tz : me, x = chClockTz(m.t, a), y = chClockTz(m.t, b);
   return x && y ? { s:x, r:y } : null;
 }

@@ -3533,7 +3533,7 @@ function chatUsers_() {
     var p = presence_(ms, now), o = info[a.id] || { unread: 0, last: null };
     total += o.unread;
     return { id: a.id, name: a.name || a.username, username: a.username, role: a.role, online: p.online, ago: p.ago, pv: avCanSee_(a.id, CTX.uid) ? avVer_(avm[a.id]) : 0,
-      tz: (lcm[a.id] || {}).tz || '', loc: (lcm[a.id] || {}).loc || '',
+      tz: (lcm[a.id] || {}).tz || '', loc: (lcm[a.id] || {}).loc || '', temp: (lcm[a.id] || {}).temp, tempAt: (lcm[a.id] || {}).ts || 0,
       unread: o.unread, lastText: o.last ? chatPreview_(o.last.text) : '', lastTime: o.last ? o.last.t : 0, lastMine: o.last ? o.last.from === CTX.uid : false };
   });
   var nm = chatNameMap_();
@@ -3547,18 +3547,18 @@ function chatUsers_() {
   return { ok: true, users: users, groups: groups, unread: total, now: now, me: CTX.uid, mePv: avVer_(avm[CTX.uid]), meTz: (lcm[CTX.uid] || {}).tz || '' };
 }
 // ---------- my location / time zone (shown under my name in other people's chat as my local time) ----------
-// LOC_<userId> = {"tz":"Asia/Kolkata","loc":"India"}
+// LOC_<userId> = {"tz":"Asia/Kolkata","loc":"Kolkata","temp":28,"ts":1700000000000}   (saved automatically when the user allows location access)
 function locMap_() {
   var all = PropertiesService.getScriptProperties().getProperties(), out = {};
   Object.keys(all).forEach(function (k) {
     if (k.indexOf('LOC_') !== 0 || !all[k]) return;
-    try { var o = JSON.parse(String(all[k])); if (o && o.tz) out[k.slice(4)] = { tz: String(o.tz), loc: String(o.loc || '') }; } catch (e) {}
+    try { var o = JSON.parse(String(all[k])); if (o && o.tz) out[k.slice(4)] = { tz: String(o.tz), loc: String(o.loc || ''), temp: typeof o.temp === 'number' ? o.temp : null, ts: Number(o.ts) || 0 }; } catch (e) {}
   });
   return out;
 }
 function getMyLocation_() {
   var o = locMap_()[CTX.uid] || { tz: '', loc: '' };
-  return { ok: true, tz: o.tz, loc: o.loc };
+  return { ok: true, tz: o.tz, loc: o.loc, temp: o.temp, ts: o.ts };
 }
 // ---------- birthdays: every user saves his own date (BD_<userId> = yyyy-mm-dd); admins read the list for the Dashboard alert ----------
 function setMyBirthday_(req) {
@@ -3582,10 +3582,11 @@ function birthdayList_() {
 }
 function setMyLocation_(req) {
   var tz = String(req.tz || '').trim(), loc = String(req.loc || '').trim().slice(0, 60), P = PropertiesService.getScriptProperties();
-  if (!tz) { P.deleteProperty('LOC_' + CTX.uid); return { ok: true, tz: '', loc: '' }; }
-  if (!/^[A-Za-z]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(tz) || tz.length > 40) fail_('Please choose a valid location.');
-  P.setProperty('LOC_' + CTX.uid, JSON.stringify({ tz: tz, loc: loc }));
-  return { ok: true, tz: tz, loc: loc };
+  if (!tz) { P.deleteProperty('LOC_' + CTX.uid); return { ok: true, tz: '', loc: '', temp: null, ts: 0 }; }
+  if (!/^[A-Za-z]+(\/[A-Za-z0-9_+\-]+){0,2}$/.test(tz) || tz.length > 40) fail_('Invalid location.');
+  var t = Number(req.temp), temp = (req.temp !== undefined && req.temp !== null && req.temp !== '' && isFinite(t) && t > -90 && t < 70) ? Math.round(t) : null, ts = Date.now();
+  P.setProperty('LOC_' + CTX.uid, JSON.stringify({ tz: tz, loc: loc, temp: temp, ts: ts }));
+  return { ok: true, tz: tz, loc: loc, temp: temp, ts: ts };
 }
 // ---------- chat profile photos ----------
 // One small (<= ~8 KB) JPEG data-URL per user, kept in the script properties as  AVT_<userId> = "<timestamp>|<data-url>".

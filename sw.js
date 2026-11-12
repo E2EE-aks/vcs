@@ -1,7 +1,7 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v78';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-motion.css', 'ks-motion.js', 'ks-cache.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'ftp-view.js', 'status-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
+const CACHE = 'ks-shell-v79';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-motion.css', 'ks-motion.js', 'ks-cache.js', 'login-custom.js', 'native-push.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'ftp-view.js', 'status-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting()));
@@ -16,9 +16,26 @@ self.addEventListener('fetch', e => {
   if (r.method !== 'GET') return;
   const u = new URL(r.url);
   if (u.origin !== self.location.origin) return;           // the API on Render is never touched here
-  // every app file is fetched fresh from the server first (even ?v= ones), so a new deploy shows up at once - the saved copy is only for when there is no network
-  e.respondWith(netFirst(r, u));
+  // FAST: the saved copy opens instantly and is refreshed quietly in the background (stale-while-revalidate).
+  // A new deploy still shows up: ks-cache.js clears the saved copy once when the deploy stamp changes, and a new ?v= is a new file.
+  e.respondWith(swr(e, r, u));
 });
+async function swr(e, req, u) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(req) || (req.mode === 'navigate' ? await cache.match('index.html', { ignoreSearch: true }) || await cache.match('./') : null);
+  const refresh = fetch(req, { cache: 'no-cache' }).then(res => {
+    if (res && res.ok && res.type === 'basic') {
+      const copy = res.clone();
+      cache.keys().then(async ks => {
+        await Promise.all(ks.filter(k => new URL(k.url).pathname === u.pathname && k.url !== req.url).map(k => cache.delete(k)));
+        await cache.put(req, copy);
+      }).catch(() => {});
+    }
+    return res;
+  });
+  if (hit) { e.waitUntil(refresh.catch(() => {})); return hit; }
+  return netFirst(req, u);                                  // first visit / not saved yet: normal network load
+}
 async function cacheFirst(req, u) {
   const cache = await caches.open(CACHE);
   const hit = await cache.match(req);
