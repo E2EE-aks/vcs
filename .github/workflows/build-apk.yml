@@ -136,6 +136,10 @@ jobs:
               f = '<intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /></intent-filter>'
               m = m.replace('</activity>', f + '\n        </activity>', 1)
               open('android/app/src/main/AndroidManifest.xml', 'w', encoding='utf-8').write(m)
+          m = open('android/app/src/main/AndroidManifest.xml', encoding='utf-8').read()
+          if 'REQUEST_INSTALL_PACKAGES' not in m:
+              m = m.replace('<application', '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application', 1)
+              open('android/app/src/main/AndroidManifest.xml', 'w', encoding='utf-8').write(m)
           ma = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)[0]
           j = open(ma, encoding='utf-8').read()
           if 'ksShare(' not in j:
@@ -166,6 +170,7 @@ jobs:
               ksShare(intent);
             }
             public static class KsDlBridge {
+              static final java.util.HashSet<Long> APK_IDS = new java.util.HashSet<Long>();
               private final android.content.Context c;
               KsDlBridge(android.content.Context c) { this.c = c; }
               @android.webkit.JavascriptInterface
@@ -187,7 +192,8 @@ jobs:
                   r.setTitle(safe);
                   r.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                   r.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, safe);
-                  ((android.app.DownloadManager) c.getSystemService(android.content.Context.DOWNLOAD_SERVICE)).enqueue(r);
+                  long id = ((android.app.DownloadManager) c.getSystemService(android.content.Context.DOWNLOAD_SERVICE)).enqueue(r);
+                  if (safe.toLowerCase().endsWith(".apk")) APK_IDS.add(Long.valueOf(id));
                   return "ok";
                 } catch (Exception e) {
                   return "err " + e.getMessage();
@@ -224,6 +230,23 @@ jobs:
               try {
                 android.webkit.WebView w = bridge.getWebView();
                 w.addJavascriptInterface(new KsDlBridge(this), "KsDl");
+                android.content.BroadcastReceiver rc = new android.content.BroadcastReceiver() {
+                  public void onReceive(android.content.Context ctx, Intent in) {
+                    try {
+                      long id = in.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                      if (!KsDlBridge.APK_IDS.remove(Long.valueOf(id))) return;
+                      android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE);
+                      android.net.Uri u = dm.getUriForDownloadedFile(id);
+                      if (u == null) return;
+                      Intent ins = new Intent(Intent.ACTION_VIEW);
+                      ins.setDataAndType(u, "application/vnd.android.package-archive");
+                      ins.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(ins);
+                    } catch (Exception e) {}
+                  }
+                };
+                android.content.IntentFilter fl = new android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+                if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(rc, fl, 2); else registerReceiver(rc, fl);
                 w.setDownloadListener(new android.webkit.DownloadListener() {
                   public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
                     try {
