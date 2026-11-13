@@ -13,7 +13,8 @@
     try {
       if (PN && PN.createChannel){
         PN.createChannel({ id:'messages', name:'Messages', description:'New chat messages', importance:4, visibility:1, vibration:true, lights:true });
-        PN.createChannel({ id:'calls', name:'Calls', description:'Incoming voice and video calls', importance:5, visibility:1, vibration:true, lights:true });
+        PN.createChannel({ id:'calls_v2', name:'Calls (ringtone)', description:'Incoming voice and video calls', importance:5, visibility:1, vibration:true, lights:true, sound:'ks_ringtone' });
+        try { if (PN.deleteChannel) PN.deleteChannel({ id:'calls' }); } catch(e){}      // old channel only had the phone's short beep
       }
     } catch(e){}
   }

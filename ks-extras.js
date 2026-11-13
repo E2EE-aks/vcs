@@ -358,7 +358,7 @@
       drop:   { n:'Water drop', s:[[1400,.07,0],[900,.14,70]] }
     },
     call: {
-      default:{ n:'Default',  s:[[880,.3,0],[660,.3,380],[880,.3,800],[660,.3,1180]] },
+      default:{ n:'Default (phone ringtone)',  s:[[880,.3,0],[660,.3,380],[880,.3,800],[660,.3,1180]] },
       classic:{ n:'Classic phone', s:[[1000,.12,0],[1000,.12,160],[1000,.12,320],[1000,.12,480],[1000,.12,900],[1000,.12,1060],[1000,.12,1220],[1000,.12,1380]] },
       melody: { n:'Melody',   s:[[523,.25,0],[659,.25,260],[784,.25,520],[1047,.4,780],[784,.25,1250],[659,.25,1510]] },
       digital:{ n:'Digital',  s:[[1500,.15,0],[1100,.15,200],[1500,.15,400],[1100,.15,600],[1500,.15,1000],[1100,.15,1200]] },
@@ -431,8 +431,9 @@
     var t = TONES[kind][name] || TONES[kind].default;
     t.s.forEach(function(x){ setTimeout(function(){ try { vcBeep(x[0], x[1]); } catch (e) {} }, x[2]); });
   }
-  function playFile(kind, loop, onFail){
-    var c = cache[kind]; if (!c) return false;
+  var BUILTIN_RING = 'ringtone.ogg';
+  function playFile(kind, loop, onFail, src){
+    var c = src ? { url:src } : cache[kind]; if (!c) return false;
     stopAudio(kind);
     var a = new Audio(c.url); a.loop = !!loop; a.volume = 1; cur[kind] = a;
     var pr; try { pr = a.play(); } catch (e) { if (onFail) onFail(); return true; }
@@ -448,13 +449,14 @@
   /* used by the app: an incoming call starts ringing / stops */
   window.ksRingStart = function(){
     if (tone('call') === 'custom' && cache.call) return playFile('call', true, function(){ beeps('call', 'default'); });
+    if (tone('call') === 'default') return playFile('call', true, function(){ beeps('call', 'default'); }, BUILTIN_RING);   // real phone ringtone, loops until answered / ended
     return false;
   };
   window.ksRingStop = function(){ stopAudio('call'); };
   window.ksMsgVib  = function(){ return vibArr('msg'); };
   window.ksCallVib = function(){ return vibArr('call'); };
   window.ksCallBeep = function(){ beeps('call', tone('call') === 'custom' ? 'default' : tone('call')); };
-  window.ksCallCustom = function(){ return tone('call') === 'custom' && !!cache.call; };
+  window.ksCallCustom = function(){ return (tone('call') === 'custom' && !!cache.call) || tone('call') === 'default'; };
 
   /* ---------- settings UI ---------- */
   window.ksSndUI = function(kind){

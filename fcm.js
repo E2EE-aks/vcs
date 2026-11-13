@@ -56,7 +56,7 @@ module.exports = function ({ env, warn, withWb }) {
     await Promise.all(list.map(async x => {
       const data = {}; Object.keys(m.data || {}).forEach(k => { data[k] = String(m.data[k]); });
       const body = { message: { token: x.t, notification: { title: String(m.title || '').slice(0, 80), body: String(m.body || '').slice(0, 160) }, data,
-        android: { priority: 'HIGH', ttl: (m.ttl || 900) + 's', notification: { channel_id: m.channel || 'messages', tag: m.tag || undefined, sound: 'default',
+        android: { priority: 'HIGH', ttl: (m.ttl || 900) + 's', notification: { channel_id: m.channel || 'messages', tag: m.tag || undefined, sound: m.call ? 'ks_ringtone' : 'default',
           notification_priority: m.call ? 'PRIORITY_MAX' : 'PRIORITY_HIGH' } } } };
       try {
         const r = await fetch('https://fcm.googleapis.com/v1/projects/' + encodeURIComponent(account().project_id) + '/messages:send',
@@ -92,7 +92,7 @@ module.exports = function ({ env, warn, withWb }) {
     } catch (e) { warn('kw push', e && e.message); }
   }
   // incoming voice / video call -> the person being called (rings for ~40 seconds)
-  const call = (to, c) => send(to, { title: c.kind === 'video' ? '📹 Incoming video call' : '📞 Incoming call', body: c.fromName || 'Someone', channel: 'calls',
+  const call = (to, c) => send(to, { title: c.kind === 'video' ? '📹 Incoming video call' : '📞 Incoming call', body: c.fromName || 'Someone', channel: 'calls_v2',
     tag: 'call-' + c.id, ttl: 40, call: true, data: { kind: 'call', callId: c.id, with: c.from } });
 
   return { actions: ACTIONS, route, send, chat, call, ready: () => !!account() };

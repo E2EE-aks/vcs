@@ -1,6 +1,6 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v79';
+const CACHE = 'ks-shell-v80';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-motion.css', 'ks-motion.js', 'ks-cache.js', 'login-custom.js', 'native-push.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'ftp-view.js', 'status-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
 
 self.addEventListener('install', e => {
@@ -13,7 +13,7 @@ self.addEventListener('activate', e => {
 /* app files: network first (so a new deploy shows up at once), saved copy when there is no network */
 self.addEventListener('fetch', e => {
   const r = e.request;
-  if (r.method !== 'GET') return;
+  if (r.method !== 'GET' || r.headers.has('range')) return;   // audio / video (ringtone loop) needs real range replies
   const u = new URL(r.url);
   if (u.origin !== self.location.origin) return;           // the API on Render is never touched here
   // FAST: the saved copy opens instantly and is refreshed quietly in the background (stale-while-revalidate).
