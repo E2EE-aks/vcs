@@ -165,15 +165,64 @@ jobs:
               super.onNewIntent(intent);
               ksShare(intent);
             }
+            public static class KsDlBridge {
+              private final android.content.Context c;
+              KsDlBridge(android.content.Context c) { this.c = c; }
+              @android.webkit.JavascriptInterface
+              public String save(String name, String mime, String b64) {
+                try {
+                  byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                  String safe = (name == null || name.length() == 0) ? "download" : name.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  if (mime == null || mime.length() == 0) mime = "application/octet-stream";
+                  java.io.OutputStream o;
+                  if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, safe);
+                    v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime);
+                    v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS);
+                    android.net.Uri u = c.getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                    o = c.getContentResolver().openOutputStream(u);
+                  } else {
+                    java.io.File d = c.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+                    d.mkdirs();
+                    o = new java.io.FileOutputStream(new java.io.File(d, safe));
+                  }
+                  o.write(data);
+                  o.close();
+                  return "ok";
+                } catch (Exception e) {
+                  return "err " + e.getMessage();
+                }
+              }
+            }
+            private void ksDl() {
+              try {
+                android.webkit.WebView w = bridge.getWebView();
+                w.addJavascriptInterface(new KsDlBridge(this), "KsDl");
+                w.setDownloadListener(new android.webkit.DownloadListener() {
+                  public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
+                    try {
+                      if (url == null || !url.startsWith("http")) return;
+                      android.app.DownloadManager.Request r = new android.app.DownloadManager.Request(android.net.Uri.parse(url));
+                      r.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                      r.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, android.webkit.URLUtil.guessFileName(url, cd, mime));
+                      ((android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE)).enqueue(r);
+                      android.widget.Toast.makeText(MainActivity.this, "Downloading… see Downloads", android.widget.Toast.LENGTH_SHORT).show();
+                    } catch (Exception e) {}
+                  }
+                });
+              } catch (Exception e) {}
+            }
           """
               if 'super.onCreate(savedInstanceState);' in j:
-                  j = j.replace('super.onCreate(savedInstanceState);', 'super.onCreate(savedInstanceState);\n    ksShare(getIntent());', 1)
+                  j = j.replace('super.onCreate(savedInstanceState);', 'super.onCreate(savedInstanceState);\n    ksShare(getIntent());\n    ksDl();', 1)
               else:
                   meth += """
             @Override
             public void onCreate(android.os.Bundle savedInstanceState) {
               super.onCreate(savedInstanceState);
               ksShare(getIntent());
+              ksDl();
             }
           """
               j = re.sub(r'(class MainActivity extends BridgeActivity\s*\{)', r'\1' + meth.replace('\\', '\\\\'), j, 1)
