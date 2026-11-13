@@ -47,6 +47,9 @@ function makeApp(store, env) {
     const [uid, ver, exp, , iss] = p.split('|');
     const issued = Number(iss) || (Number(exp) - TOKEN_TTL * 1000);          // tokens made before this update carried the old 6 h expiry
     // No automatic sign-out: a phone stays signed in until the user taps Log out (or an admin signs them out / blocks the account).
+    // Just after the server wakes up the sheet is not loaded yet, so the saved session version cannot be read. Judging it then
+    // would sign everybody out after every sleep (Render free sleeps after 15 min). The signature + expiry are already checked.
+    if (!wb.loadedAt) return Number(exp) > Date.now() ? uid : '';
     return (Number(exp) > Date.now() && ver === getVersion_(uid)) ? uid : '';
   };
 

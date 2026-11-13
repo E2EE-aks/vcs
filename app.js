@@ -514,11 +514,48 @@ function enterApp(){
   chatStart(); vcStart(); ludoStart();
   if (isAdmin()) loadLogs();
   setTimeout(() => { try{ geoStart(); }catch(e){} }, 3000);          // location -> temperature, only if the user allows it
+  try { shareConsume(); } catch(e){}                                  // something was shared to this app: open Links with it filled in
 }
 /* profile photos: tiny pictures cached on this phone; the server only sends a version number (pv) with the user list */
 let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') || '{}') || {}; }catch(e){ return {}; } })();
 const avSave = () => { try{ localStorage.setItem('ks_av_v1', JSON.stringify(AV)); }catch(e){} };
 const avSrc = id => (AV[id] && AV[id].src) || '';
+/* ---------- keep the server awake while the app is open, and wake it as soon as the app comes back to the screen ---------- */
+(function keepAwake(){
+  let last = 0;
+  const ping = () => { if (document.hidden || !S.token) return; last = Date.now(); try { callServer({ action:'status' }).catch(() => {}); } catch(e){} };
+  setInterval(ping, 4 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && Date.now() - last > 60000) ping(); });
+})();
+/* ---------- Share to this app (Instagram reel / any link  ->  Share  ->  this app  ->  Links) ---------- */
+(function shareCatch(){
+  try {
+    const q = new URLSearchParams(location.search);
+    if (!(q.has('st') || q.has('sx') || q.has('su')) || !q.has('ksshare')) return;
+    const text = [q.get('sx'), q.get('su'), q.get('st')].filter(Boolean).join(' ');
+    const m = /https?:\/\/[^\s<>"]+/i.exec(text);
+    const link = m ? m[0] : '';
+    let name = (q.get('st') || '').trim() || text.replace(link, '').replace(/\s+/g, ' ').trim();
+    if (name === link) name = '';
+    if (!name && /instagram\.com/i.test(link)) name = 'Instagram reel';
+    if (link || name) localStorage.setItem('ks_share', JSON.stringify({ name: name.slice(0, 300), link: link.slice(0, 1000), at: Date.now() }));
+    history.replaceState(null, '', location.pathname);
+  } catch(e){}
+})();
+function shareConsume(){
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem('ks_share') || 'null'); localStorage.removeItem('ks_share'); } catch(e){}
+  if (!d || Date.now() - d.at > 6 * 3600e3) return;
+  go('links');
+  setTimeout(() => {
+    try {
+      linkForm(); const f = document.querySelector('#lnf'); if (!f) return;
+      if (f.elements.name) f.elements.name.value = d.name || '';
+      if (f.elements.link) f.elements.link.value = d.link || '';
+      toast('Link received - choose the type and tap Add');
+    } catch(e){}
+  }, 350);
+}
 async function boot(){
   const t = store.get(TK);
   const bioP = bioDetect();                       // runs while the network call below is already in flight
@@ -526,7 +563,23 @@ async function boot(){
     S.token = t;                                  // returning user: show the app frame at once, then load the data
     $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
     $('#view').innerHTML = '<div class="skel-kpis"><i class="skel"></i><i class="skel"></i><i class="skel"></i><i class="skel"></i></div><div class="card"><div class="skel-box"><i class="skel w60"></i><i class="skel"></i><i class="skel w80"></i><i class="skel w40"></i></div></div>';
-    try { await loadAll(); enterApp(); return; } catch { clearToken(); $('#app').classList.add('hidden'); }
+    /* Only a real "session is invalid" answer signs the user out. A sleeping / slow server (Render free sleeps after 15 min) or a bad
+       network just means: wait and try again - the saved login is kept. */
+    let bad = false;
+    for (let i = 0; i < 8; i++){
+      try { await loadAll(); enterApp(); return; }
+      catch(e){
+        if (e && e.code === 'AUTH'){ bad = true; break; }
+        if (e && (e.code === 'EXPIRED' || e.code === 'PAYDUE')) return;
+        if (i === 1) $('#view').insertAdjacentHTML('beforeend', '<p class="muted" id="wakeMsg" style="text-align:center;margin:18px">⏳ Server is waking up… please wait, you stay signed in.</p>');
+        await new Promise(r => setTimeout(r, Math.min(2000 * (i + 1), 8000)));
+      }
+    }
+    if (!bad){
+      $('#view').innerHTML = '<div class="card" style="text-align:center"><h3>Cannot reach the server</h3><p class="muted">You are still signed in. Check your internet and try again.</p><button class="btn" onclick="location.reload()">Try again</button></div>';
+      return;
+    }
+    clearToken(); $('#app').classList.add('hidden');
   } else showLogin(false);                        // new visitor: the sign-in card appears instantly (no waiting for the server)
   let st;
   try { st = await api('status'); }
