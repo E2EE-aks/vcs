@@ -265,10 +265,38 @@ module.exports = function makeWhatsApp(o) {
     }).sort((a, b) => b.at - a.at);
   }
 
+  /* "Delete for everyone" by the OTHER person: we keep the message (text / photo / video) on our side and only flag it as deleted,
+     so the screen can show "this person deleted this message". Your own deletes are not touched. */
+  function markDeleted(uid, s, key, jidHint) {
+    try {
+      if (!key || !key.id) return;
+      let list = null, m = null;
+      const tryList = j => { const l = j && s.msgs.get(j); const f = l && l.find(x => x.id === key.id); if (f) { list = j; m = f; } };
+      tryList(jidHint); tryList(key.remoteJid);
+      if (!m) for (const j of s.msgs.keys()) { tryList(j); if (m) break; }
+      if (!m || m.out || m.deleted) return;
+      m.deleted = true; m.delAt = Date.now();
+      if (m.media) keepMedia(s, list, m);
+      saveSoon(uid, s);
+    } catch (e) { warn('WhatsApp keep-deleted', e && e.message); }
+  }
+  async function keepMedia(s, jid, m) {                   // save the file now, before WhatsApp removes it, so it still opens later
+    try {
+      const key = jid + '|' + m.id, wm = s.raw.get(key);
+      if (!wm || s.media.has(key) || s.status !== 'open' || !s.sock) return;
+      const B = L(), x = unwrap(wm.message), part = x.imageMessage || x.videoMessage || x.audioMessage || x.documentMessage || x.stickerMessage || {};
+      if ((Number(part.fileLength) || 0) > MAX) return;
+      const buf = await B.downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage });
+      if (buf && buf.length) { s.media.set(key, { buf, mime: part.mimetype || 'application/octet-stream', name: part.fileName || 'file' }); if (s.media.size > 40) s.media.delete(s.media.keys().next().value); }
+    } catch (e) {}
+  }
+  const isRevoke = pm => !!(pm && pm.key && pm.key.id && (pm.type === 0 || pm.type === 'REVOKE'));
+
   function addMsg(uid, s, jid, wm, live) {
     if (jid === 'status@broadcast') { addStatus(s, wm); return null; }
     if (!isChat(jid) || jid === 'status@broadcast' || !wm || !wm.message) return null;
     if (wm.key) { learn(s, jid, wm.key.remoteJidAlt); learn(s, jid, wm.key.senderPn); learn(s, wm.key.participant, wm.key.participantAlt); learn(s, wm.key.participant, wm.key.participantPn); }
+    { const pm = unwrap(wm.message).protocolMessage; if (isRevoke(pm)) { if (!(wm.key && wm.key.fromMe)) markDeleted(uid, s, pm.key, jid); return null; } }   // someone deleted a message: keep it, just flag it
     const k = kindText(wm.message); if (!k) return null;
     const out = !!(wm.key && wm.key.fromMe), id = (wm.key && wm.key.id) || crypto.randomBytes(6).toString('hex');
     const list = s.msgs.get(jid) || []; if (list.some(m => m.id === id)) return null;
@@ -378,6 +406,7 @@ module.exports = function makeWhatsApp(o) {
     const RANK = { error: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
     const bump = (m, st2) => { if (m && m.out && st2 && (RANK[st2] || 0) >= (RANK[m.status] || 0)) m.status = st2; };
     sock.ev.on('messages.update', ups => ups.forEach(u => {
+      if (u.update && (u.update.messageStubType === 1 || u.update.messageStubType === 'REVOKE') && u.key && !u.key.fromMe) { markDeleted(uid, s, u.key, u.key.remoteJid); return; }   // deleted for everyone by the other person
       if (!u.update || u.update.status === undefined || u.update.status === null) return;
       bump(findMsg(u.key), ST[u.update.status]);
     }));

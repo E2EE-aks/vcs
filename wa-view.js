@@ -5,7 +5,7 @@
 (function(){
   'use strict';
   var $ = function(s, r){ return (r || document).querySelector(s); };
-  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} }, stat:[], stN:0, sv:null };
+  var G = { st:null, chats:[], me:null, q:'', open:null, msgs:[], err:'', busy:false, starting:false, loaded:false, sigL:'', sigM:'', delSeen:{}, delInit:false, newOpen:false, emoji:false, contacts:null, cq:'', f:'all', hist:null, grp:{ on:false, sel:{} }, stat:[], stN:0, sv:null };
   var POLL = null;
 
   try { TITLES.whatsapp = ['WhatsApp', 'Your WhatsApp, linked with a QR code — chat with anyone']; } catch(e){}
@@ -104,6 +104,8 @@
     '#waRoot .wa-chk.on{background:var(--wa-g);border-color:var(--wa-g)}',
     '#waRoot .wa-sys{align-self:center;max-width:80%;text-align:center;font-size:12.5px;padding:4px 12px;border-radius:8px;background:var(--card,#fff);box-shadow:0 1px 1px rgba(0,0,0,.1);opacity:.95}',
     '#waRoot .wa-sys.miss{color:#d33}',
+    '#waRoot .wa-b.del{box-shadow:0 0 0 1.5px rgba(229,72,77,.55),0 1px 1px rgba(0,0,0,.13)}',
+    '#waRoot .wa-b .wa-delt{display:block;margin:0 0 4px;padding:3px 8px;border-radius:7px;background:rgba(229,72,77,.14);color:#e5484d;font-size:12.5px;font-weight:700;line-height:1.3;cursor:pointer}',
     '#waRoot .wa-av.ring{box-shadow:0 0 0 2px var(--card,#fff),0 0 0 4px var(--wa-g)}',
     '.wa-sv{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.94);color:#fff;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}',
     '.wa-sv .svh{display:flex;align-items:center;gap:10px;padding:10px 12px}',
@@ -363,11 +365,19 @@
     else if (m.kind === 'file') h += '<a class="wa-file" href="' + esc(u + '&dl=1') + '" target="_blank" rel="noopener"><span style="font-size:24px">📄</span><span style="min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(m.name || 'File') + '</b><small>' + (m.size ? size(m.size) + ' · ' : '') + 'Tap to download</small></span></a>';
     else if (m.kind === 'geo') h += '<a href="https://www.google.com/maps?q=' + esc(m.lat + ',' + m.lon) + '" target="_blank" rel="noopener" style="color:#027eb5">📍 Open location in Maps</a><br>';
     var cap = m.kind === 'file' || m.kind === 'photo' || m.kind === 'video' || m.kind === 'gif' || m.kind === 'voice' || m.kind === 'audio' || m.kind === 'sticker' || m.kind === 'geo' ? (m.text && m.text !== m.label && m.kind !== 'geo' ? m.text : '') : (m.text || m.label || '');
-    return '<div class="wa-b ' + (m.out ? 'out' : 'in') + '">' + (m.from && !m.out && G.open && G.open.group ? '<span class="wa-who">' + esc(m.from) + '</span>' : '') + h + link(cap) + '<span class="wa-t">' + esc(hm(m.at)) + tick1(m) + '</span><div style="clear:both"></div></div>';
+    var dl = m.deleted && !m.out ? '<span class="wa-delt" onclick="waDelInfo(this)" data-n="' + esc(G.open && G.open.group ? (m.from || 'Someone') : title(G.open || {})) + '" data-k="' + esc(m.kind === 'photo' ? 'photo' : (m.kind === 'video' || m.kind === 'gif') ? 'video' : m.kind === 'text' ? 'message' : 'file') + '">🚫 Deleted by ' + esc(G.open && G.open.group ? (m.from || 'sender') : 'sender') + ' (saved here' + (m.delAt ? ' · ' + esc(hm(m.delAt)) : '') + ')</span>' : '';
+    return '<div class="wa-b ' + (m.out ? 'out' : 'in') + (dl ? ' del' : '') + '">' + dl + (m.from && !m.out && G.open && G.open.group ? '<span class="wa-who">' + esc(m.from) + '</span>' : '') + h + link(cap) + '<span class="wa-t">' + esc(hm(m.at)) + tick1(m) + '</span><div style="clear:both"></div></div>';
   }
+  var DELK = { photo:'photo', video:'video', message:'message', file:'file' };
+  function waDelPop(m){ var who = G.open && G.open.group ? (m.from || 'Someone') : title(G.open || {}); var k = m.kind === 'photo' ? 'photo' : (m.kind === 'video' || m.kind === 'gif') ? 'video' : m.kind === 'text' ? 'message' : 'file'; toast('🚫 ' + who + ' deleted this ' + k + ' - it is still saved here', true); }
+  window.waDelInfo = function(el){ toast('🚫 ' + (el.getAttribute('data-n') || 'This person') + ' deleted this ' + (DELK[el.getAttribute('data-k')] || 'message') + ' for everyone. It is NOT deleted from your WhatsApp here.', true); };
   function paintMsgs(bottom){
     var el = $('#waMsgs'); if (!el) return;
-    var sig = G.msgs.map(function(m){ return m.id + (m.status || ''); }).join(','); if (sig === G.sigM && !bottom) return; G.sigM = sig;
+    var sig = G.msgs.map(function(m){ return m.id + (m.status || '') + (m.deleted ? 'D' : ''); }).join(','); if (sig === G.sigM && !bottom) return; G.sigM = sig;
+    var seen = G.delSeen || (G.delSeen = {}), fresh = null;
+    G.msgs.forEach(function(m){ if (m.deleted && !m.out && !seen[m.id]){ seen[m.id] = 1; if (G.delInit && m.delAt && Date.now() - m.delAt < 120000) fresh = m; } });
+    G.delInit = true;
+    if (fresh) waDelPop(fresh);
     var near = el.scrollHeight - el.scrollTop - el.clientHeight < 90, h = '', day = '';
     G.msgs.forEach(function(m){ var d = dayName(m.at); if (d !== day){ day = d; h += '<div class="wa-day">' + esc(d) + '</div>'; } h += bubble(m); });
     var more = '<div class="wa-more"><button class="btn ghost sm" onclick="waMore()">⬆ Load older messages</button></div>';
@@ -461,7 +471,7 @@
   };
   window.waOpen = async function(id){
     var c = G.chats.filter(function(x){ return x.id === id; })[0]; if (!c) return;
-    G.open = Object.assign({}, c); G.msgs = []; G.sigL = ''; paintSide(true); paintMain(true);
+    G.open = Object.assign({}, c); G.msgs = []; G.sigL = ''; G.delSeen = {}; G.delInit = false; paintSide(true); paintMain(true);
     try { var r = await api('waHistory', { chat:id }); if (!G.open || G.open.id !== id) return; G.msgs = r.items; Object.assign(G.open, r.chat); c.unread = 0; G.sigL = ''; paintSide(true); paintMain(true); var t = $('#waIn'); if (t && !/Mobi|Android/i.test(navigator.userAgent)) t.focus(); }
     catch(e){ G.open = null; handleErr(e); paintSide(true); paintMain(true); }
   };
