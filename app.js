@@ -531,7 +531,7 @@ const avSrc = id => (AV[id] && AV[id].src) || '';
 (function shareCatch(){
   try {
     const q = new URLSearchParams(location.search);
-    if (!(q.has('st') || q.has('sx') || q.has('su')) || !q.has('ksshare')) return;
+    if (!(q.has('st') || q.has('sx') || q.has('su'))) return;
     const text = [q.get('sx'), q.get('su'), q.get('st')].filter(Boolean).join(' ');
     const m = /https?:\/\/[^\s<>"]+/i.exec(text);
     const link = m ? m[0] : '';

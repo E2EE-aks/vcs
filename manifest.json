@@ -29,7 +29,7 @@
     }
   ],
   "share_target": {
-    "action": "./?ksshare=1",
+    "action": "./",
     "method": "GET",
     "params": {
       "title": "st",
