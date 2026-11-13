@@ -298,9 +298,14 @@ jobs:
           M=android/app/src/main/AndroidManifest.xml
           RES=android/app/src/main/res
           # permissions
-          for p in POST_NOTIFICATIONS VIBRATE CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION; do
+          for p in POST_NOTIFICATIONS VIBRATE CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION RECORD_AUDIO MODIFY_AUDIO_SETTINGS BLUETOOTH_CONNECT INTERNET; do
             grep -q "android.permission.$p" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
           done
+          # mic/camera hardware declared optional (so Play/Android never filters the app) - needed for WebView getUserMedia
+          for f in microphone camera; do
+            grep -q "android.hardware.$f\"" $M || sed -i "s#</manifest>#    <uses-feature android:name=\\\"android.hardware.$f\\\" android:required=\\\"false\\\" />\n</manifest>#" $M
+          done
+          grep -n "RECORD_AUDIO\|hardware.microphone" $M
           # real ringtone for incoming calls (notification channel 'calls_v2' uses res/raw/ks_ringtone)
           if [ -f ringtone.ogg ]; then mkdir -p $RES/raw && cp ringtone.ogg $RES/raw/ks_ringtone.ogg; else echo "::warning::ringtone.ogg missing - calls will only beep"; fi
           # notification channel + small icon used by Firebase when the app is closed
