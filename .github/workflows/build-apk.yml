@@ -169,6 +169,31 @@ jobs:
               private final android.content.Context c;
               KsDlBridge(android.content.Context c) { this.c = c; }
               @android.webkit.JavascriptInterface
+              public String info() {
+                try {
+                  android.content.pm.PackageInfo p = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
+                  return p.versionName + "|" + p.lastUpdateTime;
+                } catch (Exception e) {
+                  return "";
+                }
+              }
+              @android.webkit.JavascriptInterface
+              public String download(String url, String name, String mime) {
+                try {
+                  if (url == null || !url.startsWith("http")) return "bad link";
+                  String safe = (name == null || name.length() == 0) ? "download" : name.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  android.app.DownloadManager.Request r = new android.app.DownloadManager.Request(android.net.Uri.parse(url));
+                  if (mime != null && mime.length() > 0) r.setMimeType(mime);
+                  r.setTitle(safe);
+                  r.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                  r.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, safe);
+                  ((android.app.DownloadManager) c.getSystemService(android.content.Context.DOWNLOAD_SERVICE)).enqueue(r);
+                  return "ok";
+                } catch (Exception e) {
+                  return "err " + e.getMessage();
+                }
+              }
+              @android.webkit.JavascriptInterface
               public String save(String name, String mime, String b64) {
                 try {
                   byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
