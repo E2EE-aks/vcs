@@ -515,17 +515,49 @@ function enterApp(){
   if (isAdmin()) loadLogs();
   setTimeout(() => { try{ geoStart(); }catch(e){} }, 3000);          // location -> temperature, only if the user allows it
   try { shareConsume(); } catch(e){}                                  // something was shared to this app: open Links with it filled in
+  setTimeout(() => appUpCheck(true), 2500);                           // Android app: is there a newer .apk?
 }
 /* profile photos: tiny pictures cached on this phone; the server only sends a version number (pv) with the user list */
 let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') || '{}') || {}; }catch(e){ return {}; } })();
 const avSave = () => { try{ localStorage.setItem('ks_av_v1', JSON.stringify(AV)); }catch(e){} };
 const avSrc = id => (AV[id] && AV[id].src) || '';
+/* ---------- Android app: on open, tell the user when a newer .apk was uploaded in the Updates tab ---------- */
+const APPUP = { last:0, shown:false };
+function appUpInfo(){
+  try { const s = String((window.KsDl && window.KsDl.info && window.KsDl.info()) || ''), i = s.lastIndexOf('|'); if (i < 0) return null; return { name:s.slice(0, i), at:Number(s.slice(i + 1)) || 0 }; } catch(e){ return null; }
+}
+async function appUpCheck(force){
+  try {
+    const me = appUpInfo(); if (!me || !S.token || APPUP.shown) return;
+    if (!force && Date.now() - APPUP.last < 10 * 60 * 1000) return;
+    APPUP.last = Date.now();
+    const r = await api('updList'); UPD.items = r.items; UPD.can = !!r.canManage;
+    const norm = v => String(v || '').trim().toLowerCase().replace(/^v/, '');
+    const u = (r.items || []).find(x => /\.apk$/i.test(x.name || ''));                    // the list is newest first
+    if (!u) return;
+    const same = u.version && norm(u.version) === norm(me.name);                           // already on this version
+    const newer = Date.parse(u.at) > me.at + 120000;                                       // uploaded after this app was installed
+    if (same || !newer) return;
+    APPUP.shown = true;
+    const w = openModal(`<h3>🔔 New update available</h3>
+      <p class="sub"><b style="word-break:break-word">${esc(u.title)}</b>${u.version ? ' · ' + esc(u.version) : ''} · ${updSize(u.size)}</p>
+      ${u.notes ? `<div class="log-item" style="white-space:pre-wrap;margin:8px 0">${esc(u.notes)}</div>` : ''}
+      <p class="muted">Tap Download, then open the downloaded file to install it over this app. Your data stays safe.</p>
+      <div class="foot"><button class="btn ghost" data-x>Later</button><button class="btn" data-ok>⬇ Download update</button></div>`);
+    w.querySelector('[data-x]').onclick = () => w.remove();
+    w.querySelector('[data-ok]').onclick = async ev => {
+      const b = ev.currentTarget; b.disabled = true;
+      try { await updDownload(u.id); w.remove(); toast('⬇ Downloading… open the file from the notification to install'); }
+      catch(e){ b.disabled = false; handleErr(e); }
+    };
+  } catch(e){}
+}
 /* ---------- keep the server awake while the app is open, and wake it as soon as the app comes back to the screen ---------- */
 (function keepAwake(){
   let last = 0;
   const ping = () => { if (document.hidden || !S.token) return; last = Date.now(); try { callServer({ action:'status' }).catch(() => {}); } catch(e){} };
   setInterval(ping, 4 * 60 * 1000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && Date.now() - last > 60000) ping(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && Date.now() - last > 60000) ping(); if (!document.hidden) appUpCheck(false); });
 })();
 /* ---------- Share to this app (Instagram reel / any link  ->  Share  ->  this app  ->  Links) ---------- */
 function shareStore(text, title){
@@ -1580,8 +1612,8 @@ function verWatch(){
 async function verDownload(asset){
   try {
     const r = await api('verTicket', { asset });
-    const a = document.createElement('a'); a.href = API_URL + '/updates/download?id=' + encodeURIComponent(r.id) + '&k=' + encodeURIComponent(r.ticket); a.rel = 'noopener';
-    document.body.appendChild(a); a.click(); a.remove(); toast('Download started — open the .apk to install');
+    ksFileDownload(API_URL + '/updates/download?id=' + encodeURIComponent(r.id) + '&k=' + encodeURIComponent(r.ticket), (r.name || 'app') + (/\.apk$/i.test(r.name || '') ? '' : '.apk'));
+    toast('Download started — open the .apk to install');
   } catch(e){ handleErr(e); }
 }
 
@@ -1632,11 +1664,21 @@ function bindUpdates(){
   const f = $('#updFile'); if (f) f.onchange = () => { const t = $('#updTitle'); if (f.files[0] && t && !t.value.trim()) t.value = f.files[0].name.replace(/\.[^.]+$/, ''); };
   const box = $('#updBox'); if (box) box.ontoggle = () => { UPD.open = box.open; };
 }
+/* download a file from a link: the Android app hands it to the phone's download manager (a WebView cannot do it by itself), a browser just follows the link */
+function ksFileDownload(url, name){
+  if (window.KsDl && window.KsDl.download){
+    const mime = /\.apk$/i.test(name || '') ? 'application/vnd.android.package-archive' : '';
+    const r = window.KsDl.download(url, name || 'download', mime);
+    if (r !== 'ok') throw new Error('Could not start the download (' + r + ')');
+    return;
+  }
+  const a = document.createElement('a'); a.href = url; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+}
 async function updDownload(id){
   try {
     const r = await api('updTicket', { id });                 // a 2-minute pass, so your login is never put in the link
-    const a = document.createElement('a'); a.href = API_URL + '/updates/download?id=' + encodeURIComponent(id) + '&k=' + encodeURIComponent(r.ticket); a.rel = 'noopener';
-    document.body.appendChild(a); a.click(); a.remove();
+    const u = (UPD.items || []).find(x => x.id === id);
+    ksFileDownload(API_URL + '/updates/download?id=' + encodeURIComponent(id) + '&k=' + encodeURIComponent(r.ticket), u && u.name);
     toast('Download started');
   } catch(e){ handleErr(e); if (e.code === 'UPD') updLoad(); }
 }
