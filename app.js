@@ -4849,6 +4849,12 @@ async function needPdf(){
   if (!(window.jspdf.jsPDF.API && window.jspdf.jsPDF.API.autoTable)) await loadScript(LIBS.atable);
 }
 function saveBlob(name, blob){
+  if (window.KsDl && window.KsDl.save){                       // Android app: the WebView cannot download a file by itself, so the app saves it to Downloads
+    const fr = new FileReader();
+    fr.onload = () => { try { const r = window.KsDl.save(name, blob.type || 'application/octet-stream', String(fr.result).split(',')[1] || ''); toast(r === 'ok' ? '⬇ Saved in Downloads: ' + name : 'Could not save the file (' + r + ')', r !== 'ok'); } catch(e){ toast('Could not save the file', true); } };
+    fr.onerror = () => toast('Could not read the file', true);
+    fr.readAsDataURL(blob); return;
+  }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
