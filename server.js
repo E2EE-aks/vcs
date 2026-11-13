@@ -657,7 +657,7 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'deployDone', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'deployDone', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket', 'verDelete']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself (only a warning in the app, never blocks)
   const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60, CLONE_MAX = 95 * 1024 * 1024;   // CLONE_MAX: apk/zip in clone-src/ (GitHub itself refuses files over 100 MB)   // generous limits: any file type (text or binary), many files
@@ -790,6 +790,19 @@ function makeApp(store, env) {
         await new Promise(r => setTimeout(r, 1500));                                      // be gentle with the GitHub API
       }
       return { ok: true, started };
+    }
+    if (a === 'verDelete') {                                        // remove old APK builds: the release (the .apk file), its tag and the build log
+      const items = (Array.isArray(req.items) ? req.items : []).slice(0, 30);
+      let done = 0;
+      for (const it of items) {
+        const rid = String(it && it.id || ''), no = String(it && it.no || '');
+        if (!/^\d+$/.test(rid) || !/^\d+$/.test(no)) continue;
+        try { const rl = await gh('GET', '/releases/tags/apk-' + no); await gh('DELETE', '/releases/' + rl.id); } catch (e) { if (e.code !== 'GITHUB') throw e; }
+        try { await gh('DELETE', '/git/refs/tags/apk-' + no); } catch (e) { if (e.code !== 'GITHUB') throw e; }
+        try { await gh('DELETE', '/actions/runs/' + rid); } catch (e) { if (e.code !== 'GITHUB') throw e; }
+        done++;
+      }
+      return { ok: true, deleted: done };
     }
     if (a === 'verTicket') {
       const aid = String(req.asset || ''); if (!/^\d+$/.test(aid)) globalThis.fail_('Invalid file.', 'VER');

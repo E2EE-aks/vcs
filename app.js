@@ -547,7 +547,7 @@ async function appUpCheck(force){
     w.querySelector('[data-x]').onclick = () => w.remove();
     w.querySelector('[data-ok]').onclick = async ev => {
       const b = ev.currentTarget; b.disabled = true;
-      try { await updDownload(u.id); w.remove(); toast('⬇ Downloading… open the file from the notification to install'); }
+      try { await updDownload(u.id); w.remove(); toast('⬇ Downloading… the install screen opens by itself when it is ready'); }
       catch(e){ b.disabled = false; handleErr(e); }
     };
   } catch(e){}
@@ -1495,9 +1495,11 @@ function verBuildsHtml(){
     return `<div class="log-item ${!run && !ok ? 'bad' : ''}"><div class="l1"><b style="word-break:break-word">${esc(b.title || ('Build #' + b.no))}</b><span class="muted">${esc(depWhen(b.at))}</span></div>
       <div class="l2">${run ? '⏳ Building… (about 5–8 minutes)' : ok ? '✅ Ready' : '❌ Build failed — open the log to see why'}${b.asset ? ' · ' + updSize(b.asset.size) : ''}</div>
       <div class="actions" style="margin-top:6px">${b.asset ? `<button class="btn sm" data-vdl="${esc(b.asset.id)}">⬇ Download APK</button>` : ''}
-        <a class="btn soft sm" href="${esc(b.url)}" target="_blank" rel="noopener">Log ↗</a></div></div>`;
+        <a class="btn soft sm" href="${esc(b.url)}" target="_blank" rel="noopener">Log ↗</a>${run ? '' : `<button class="btn danger sm" data-vdel="${esc(b.id)}" data-no="${esc(b.no)}">🗑 Delete</button>`}</div></div>`;
   }).join('');
-  return (VER.starting ? '<div class="log-item"><div class="l1"><b>⏳ Starting the build…</b></div></div>' : '') + (rows || (VER.starting ? '' : '<div class="empty-state">No builds yet</div>'));
+  const keep = VER.builds.find(b => b.status === 'completed' && b.conclusion === 'success'), oldN = VER.builds.filter(b => b.status === 'completed' && b !== keep).length;
+  const bulk = oldN ? `<div class="actions" style="margin-bottom:10px"><button class="btn danger sm" data-vdelold>🗑 Delete all old builds (${oldN}) · keep the newest ready one</button></div>` : '';
+  return bulk + (VER.starting ? '<div class="log-item"><div class="l1"><b>⏳ Starting the build…</b></div></div>' : '') + (rows || (VER.starting ? '' : '<div class="empty-state">No builds yet</div>'));
 }
 function vVersion(){
   if (!VER.files) return '<div class="card"><div class="empty-state">Loading…</div></div>';
@@ -1549,7 +1551,14 @@ function bindVersion(){
   if ($q('vcZip')) $q('vcZip').onchange = e => { const f = e.target.files[0]; VER.cloneZip = f || null; const i = $q('vcZipInfo'); if (i) i.textContent = f ? ('✅ ' + f.name + ' · ' + updSize(f.size)) : ''; };
   if ($q('vcApk')) $q('vcApk').onchange = e => { const f = e.target.files[0]; VER.cloneApk = f || null; const i = $q('vcApkInfo'); if (i) i.textContent = f ? ('✅ ' + f.name + ' · ' + updSize(f.size)) : ''; };
   if ($q('vcGo')) $q('vcGo').onclick = verClone;
-  const bx = $q('verBuilds'); if (bx) bx.onclick = e => { const b = e.target.closest('[data-vdl]'); if (b) verDownload(b.dataset.vdl); };
+  const bx = $q('verBuilds'); if (bx) bx.onclick = e => {
+    const b = e.target.closest('[data-vdl]'); if (b) return verDownload(b.dataset.vdl);
+    const d = e.target.closest('[data-vdel]'); if (d) return verDelete([{ id:d.dataset.vdel, no:d.dataset.no }], 'This build and its .apk file are removed from GitHub and cannot be brought back.');
+    if (e.target.closest('[data-vdelold]')){
+      const keep = VER.builds.find(x => x.status === 'completed' && x.conclusion === 'success'), old = VER.builds.filter(x => x.status === 'completed' && x !== keep);
+      verDelete(old.map(x => ({ id:x.id, no:x.no })), old.length + ' old build(s) are removed from GitHub for good. The newest ready build stays.');
+    }
+  };
 }
 function verDraw(){ const el = document.getElementById('verBuilds'); if (S.view === 'version' && el) el.innerHTML = verBuildsHtml(); }
 async function verBuild(){
@@ -1608,6 +1617,13 @@ function verWatch(){
     verDraw();
     if (!need()) clearInterval(VER.timer);
   }, 10000);
+}
+async function verDelete(items, msg){
+  if (!items.length) return;
+  if (!await confirmBox(items.length > 1 ? 'Delete old builds?' : 'Delete this build?', msg, 'Delete', true)) return;
+  try { busy(true); const r = await api('verDelete', { items }); await verRefresh(true); verDraw(); toast('🗑 Deleted ' + r.deleted + (r.deleted === 1 ? ' build' : ' builds')); }
+  catch(e){ handleErr(e); }
+  finally { busy(false); }
 }
 async function verDownload(asset){
   try {
