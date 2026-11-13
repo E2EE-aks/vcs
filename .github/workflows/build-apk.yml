@@ -85,7 +85,7 @@ jobs:
             cp "$f" "www/$f"
           done
           fi
-          for f in native-push.js; do [ -f "$f" ] && cp "$f" "www/$f" || true; done
+          for f in native-push.js ringtone.ogg; do [ -f "$f" ] && cp "$f" "www/$f" || true; done
           [ -f www/index.html ] || { echo "index.html must be part of the app"; exit 1; }
           if [ -n "$GSJ" ]; then echo "window.KS_FCM = true;" > www/ks-native.js; else echo "window.KS_FCM = false;" > www/ks-native.js; fi
           sed -i '0,/<head>/s//<head>\n<script src="ks-native.js"><\/script>/' www/index.html
@@ -301,6 +301,8 @@ jobs:
           for p in POST_NOTIFICATIONS VIBRATE CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION; do
             grep -q "android.permission.$p" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
           done
+          # real ringtone for incoming calls (notification channel 'calls_v2' uses res/raw/ks_ringtone)
+          if [ -f ringtone.ogg ]; then mkdir -p $RES/raw && cp ringtone.ogg $RES/raw/ks_ringtone.ogg; else echo "::warning::ringtone.ogg missing - calls will only beep"; fi
           # notification channel + small icon used by Firebase when the app is closed
           META='    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="messages" />'
           if [ -f badge-72.png ]; then
