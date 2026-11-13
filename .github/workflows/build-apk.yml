@@ -125,6 +125,63 @@ jobs:
           sed -i "s#</application>#$ACT\n    </application>#" $M
           grep -n "KsBrowserActivity" $M
 
+      - name: Share to this app (Android share menu -> Links)
+        run: |
+          set -e
+          M=android/app/src/main/AndroidManifest.xml
+          python3 - <<'PY'
+          import re, glob
+          m = open('android/app/src/main/AndroidManifest.xml', encoding='utf-8').read()
+          if 'android.intent.action.SEND' not in m:
+              f = '<intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /></intent-filter>'
+              m = m.replace('</activity>', f + '\n        </activity>', 1)
+              open('android/app/src/main/AndroidManifest.xml', 'w', encoding='utf-8').write(m)
+          ma = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)[0]
+          j = open(ma, encoding='utf-8').read()
+          if 'ksShare(' not in j:
+              j = re.sub(r'(package [^;]+;)', r'\1\nimport android.content.Intent;\nimport android.os.Handler;\nimport android.os.Looper;\nimport org.json.JSONObject;', j, 1)
+              meth = """
+            private void ksShare(Intent i) {
+              try {
+                if (i == null || !Intent.ACTION_SEND.equals(i.getAction())) return;
+                String t = i.getStringExtra(Intent.EXTRA_TEXT);
+                if (t == null || t.length() == 0) return;
+                String s = i.getStringExtra(Intent.EXTRA_SUBJECT);
+                if (s == null) s = "";
+                final String js = "window.ksShareIn&&window.ksShareIn(" + JSONObject.quote(t) + "," + JSONObject.quote(s) + ")";
+                final Handler h = new Handler(Looper.getMainLooper());
+                int[] delays = {300, 1500, 4000, 8000};
+                for (int k = 0; k < delays.length; k++) {
+                  h.postDelayed(new Runnable() {
+                    public void run() {
+                      try { if (bridge != null && bridge.getWebView() != null) bridge.getWebView().evaluateJavascript(js, null); } catch (Exception e) {}
+                    }
+                  }, delays[k]);
+                }
+              } catch (Exception e) {}
+            }
+            @Override
+            protected void onNewIntent(Intent intent) {
+              super.onNewIntent(intent);
+              ksShare(intent);
+            }
+          """
+              if 'super.onCreate(savedInstanceState);' in j:
+                  j = j.replace('super.onCreate(savedInstanceState);', 'super.onCreate(savedInstanceState);\n    ksShare(getIntent());', 1)
+              else:
+                  meth += """
+            @Override
+            public void onCreate(android.os.Bundle savedInstanceState) {
+              super.onCreate(savedInstanceState);
+              ksShare(getIntent());
+            }
+          """
+              j = re.sub(r'(class MainActivity extends BridgeActivity\s*\{)', r'\1' + meth.replace('\\', '\\\\'), j, 1)
+              open(ma, 'w', encoding='utf-8').write(j)
+          print(open(ma, encoding='utf-8').read())
+          PY
+          grep -n "action.SEND" $M
+
       - name: Firebase (notifications when the app is closed)
         run: |
           if [ -n "$GSJ" ]; then
