@@ -1189,6 +1189,57 @@ function makeApp(store, env) {
     return { code: r.status, r };
   }
 
+  // ---------- Custom call / message tones: saved per user on the main admin's Drive, so they follow the user to any phone ----------
+  // Upload goes through POST /ringtone/upload, playing through GET /ringtone/file (signed link). The user's choice (file name, "use it") is kept in a script property.
+  const RT_MAX = 8 * 1048576, RT_MIME = /^audio\/(mpeg|mp3|ogg|opus|wav|x-wav|wave|mp4|x-m4a|m4a|aac|x-aac|webm|3gpp|amr|flac|x-flac)$/;
+  const RT_ACTIONS = new Set(['ringtoneGet', 'ringtoneUse', 'ringtoneDel']);
+  const rtKey = uid => 'RT_' + String(uid).replace(/[^\w-]/g, '_').slice(0, 60);
+  const rtLoad = uid => withWb(() => { try { return JSON.parse(gp().getProperty(rtKey(uid)) || '{}') || {}; } catch (e) { return {}; } });
+  const rtSave = (uid, o) => withWb(() => { gp().setProperty(rtKey(uid), JSON.stringify(o)); });
+  const rtKind = k => (k === 'msg' || k === 'call') ? k : '';
+  const rtUid = token => { const uid = globalThis.checkToken_(token); if (!uid) { const e = new Error('Session expired. Please log in again.'); e.code = 'AUTH'; throw e; } return uid; };
+  function rtView(uid, o) {
+    const exp = (Math.floor(Date.now() / 21600000) + 2) * 21600000, items = {};
+    ['call', 'msg'].forEach(k => { const f = o[k]; if (f && f.i) items[k] = { id: f.i, n: f.n, m: f.m, s: f.s, use: f.use ? 1 : 0, t: { u: uid, e: exp, k: globalThis.mediaSign_(f.i, uid, exp) } }; });
+    return items;
+  }
+  async function rtRoute(req) {
+    const uid = rtUid(req.token), a = req.action, kind = rtKind(String(req.kind || ''));
+    if (a === 'ringtoneGet') return { ok: true, items: rtView(uid, await rtLoad(uid)), max: RT_MAX };
+    if (!kind) throw new Error('Choose call or message tone.');
+    const o = await rtLoad(uid);
+    if (a === 'ringtoneUse') {
+      if (!o[kind]) throw new Error('No tone is uploaded yet.');
+      o[kind].use = req.use ? 1 : 0; await rtSave(uid, o);
+      return { ok: true, items: rtView(uid, o) };
+    }
+    if (a === 'ringtoneDel') {
+      const old = o[kind]; delete o[kind]; await rtSave(uid, o);
+      if (old && old.i) drvDelete(old.i).catch(e => warn('ringtone delete', e && e.message));
+      return { ok: true, items: rtView(uid, o) };
+    }
+    throw new Error('Unknown action.');
+  }
+  async function rtUpload(token, q, buf) {
+    const uid = rtUid(token), kind = rtKind(String(q.kind || '')), mime = String(q.mime || '').toLowerCase().split(';')[0];
+    if (!kind) throw new Error('Choose call or message tone.');
+    if (!RT_MIME.test(mime)) throw new Error('Please choose an audio file (mp3, wav, ogg, m4a, aac ...).');
+    if (!buf.length) throw new Error('The file is empty.');
+    const tok = await drvAccess(), folder = await drvFolder(tok);
+    const nm = String(q.name || 'tone').replace(/[^\w.\- ]+/g, '_').slice(0, 80);
+    const meta = { name: 'tone_' + kind + '_' + uid + '_' + nm, parents: [folder], mimeType: mime, description: 'KS custom ' + kind + ' tone of ' + uid };
+    const bnd = 'ksr' + crypto.randomBytes(8).toString('hex');
+    const body = Buffer.concat([Buffer.from('--' + bnd + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(meta) + '\r\n--' + bnd + '\r\nContent-Type: ' + mime + '\r\n\r\n'), buf, Buffer.from('\r\n--' + bnd + '--')]);
+    const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'multipart/related; boundary=' + bnd }, body });
+    const j = await r.json().catch(() => ({}));
+    if (!j.id) { if (r.status === 401) drvTok = null; throw new Error('Google Drive did not accept the file: ' + ((j.error && j.error.message) || r.status)); }
+    const o = await rtLoad(uid), old = o[kind];
+    o[kind] = { i: j.id, n: nm, m: mime, s: buf.length, use: 1, at: Date.now() };
+    await rtSave(uid, o);
+    if (old && old.i) drvDelete(old.i).catch(e => warn('ringtone replace', e && e.message));   // the previous file of this user is removed from Drive
+    return { ok: true, items: rtView(uid, o) };
+  }
+
   let chain = Promise.resolve();
   function withWb(fn) {                                                // run fn in the request queue with fresh sheet data, save its changes
     const job = async () => {
@@ -1276,6 +1327,11 @@ function makeApp(store, env) {
     if (!r || !PUSH.actions.has(r.action)) return null;
     return Promise.resolve().then(() => PUSH.route(r)).catch(errOut);
   };
+  const fastRingtone = body => {
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !RT_ACTIONS.has(r.action)) return null;
+    return Promise.resolve().then(() => rtRoute(r)).catch(err => ({ ok: false, error: err.message || String(err), code: err.code || 'ERR' }));
+  };
   const fastExp = body => {                         // a user whose 24 h trial is over: every action except reading / chat to an admin answers "choose a plan"
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
     if (!r || !r.token || typeof globalThis.expiredGate_ !== 'function') return null;
@@ -1285,7 +1341,7 @@ function makeApp(store, env) {
   };
   const handle0 = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastRtc(body) || fastTr(body));
+    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastRtc(body) || fastTr(body) || fastRingtone(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);
@@ -1300,6 +1356,7 @@ function makeApp(store, env) {
   return { handle,
            waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r),
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
+           rtMax: RT_MAX, rtRe: RT_MIME, rtUp: (t, q, b) => rtUpload(t, q, b).catch(errOut),
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
            updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
@@ -1368,6 +1425,22 @@ function start(app, env) {
       const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
       rq.on('data', c => { n += c.length; if (n > app.mediaMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
       rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.mediaMax / 1048576) + ' MB).', code: 'MEDIA' } : await app.mediaUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
+      return;
+    }
+    if (rq.method === 'GET' && url.pathname === '/ringtone/file' && app.mediaOpen) {        // a user's own custom tone (signed link; CORS on so the app can save a copy on this phone)
+      return app.mediaOpen(Object.fromEntries(url.searchParams), rq.headers.range).then(o => {
+        if (!o.r) { rs.writeHead(o.code, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }, cors)); return rs.end(String(o.error)); }
+        const ct = String(o.r.headers.get('content-type') || '').toLowerCase().split(';')[0];
+        const h = Object.assign({ 'Content-Type': app.rtRe.test(ct) ? ct : 'application/octet-stream', 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes' }, cors);
+        ['content-length', 'content-range'].forEach(n => { const v = o.r.headers.get(n); if (v) h[n] = v; });
+        rs.writeHead(o.code, h);
+        const src = Readable.fromWeb(o.r.body); src.on('error', () => rs.destroy()); rs.on('close', () => src.destroy()); src.pipe(rs);
+      }).catch(() => { rs.writeHead(500, cors); rs.end('Error'); });
+    }
+    if (rq.method === 'POST' && url.pathname === '/ringtone/upload' && app.rtUp) {           // raw audio body, session token in the Authorization header
+      const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
+      rq.on('data', c => { n += c.length; if (n > app.rtMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
+      rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.rtMax / 1048576) + ' MB).', code: 'RT' } : await app.rtUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
       return;
     }
     if (rq.method === 'GET' && url.pathname === '/wa/media' && app.waOpen) {                // WhatsApp profile photo / photo / video / voice / file (signed link, Range for seeking)

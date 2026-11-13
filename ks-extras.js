@@ -417,12 +417,70 @@
   function load(kind){
     return idb('readonly', function(st){ return st.get(kind); }).then(function(rec){
       if (cache[kind] && cache[kind].url) try { URL.revokeObjectURL(cache[kind].url); } catch (e) {}
-      cache[kind] = rec && rec.blob ? { url:URL.createObjectURL(rec.blob), name:rec.name || 'my sound' } : null;
+      cache[kind] = rec && rec.blob ? { url:URL.createObjectURL(rec.blob), name:rec.name || 'my sound', id:rec.id || '' } : null;
       return cache[kind];
     }).catch(function(){ cache[kind] = null; return null; });
   }
-  function save(kind, file){ return idb('readwrite', function(st){ return st.put({ blob:file, name:file.name }, kind); }).then(function(){ return load(kind); }); }
+  function save(kind, blob, name, id){ return idb('readwrite', function(st){ return st.put({ blob:blob, name:name || blob.name || 'my sound', id:id || '' }, kind); }).then(function(){ return load(kind); }); }
+  function localRec(kind){ return idb('readonly', function(st){ return st.get(kind); }).catch(function(){ return null; }); }
   function drop(kind){ return idb('readwrite', function(st){ return st.delete(kind); }).then(function(){ return load(kind); }); }
+
+  /* ---------- saved on the server (Drive), so the tone follows your account to every phone ---------- */
+  var AUDIO_MIME = { mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', opus:'audio/ogg', m4a:'audio/mp4', aac:'audio/aac', amr:'audio/amr', flac:'audio/flac' };
+  function mimeOf(f){
+    var t = String(f.type || '').toLowerCase();
+    if (/^audio\//.test(t)) return t;
+    var m = /\.(\w+)$/.exec(f.name || ''); return (m && AUDIO_MIME[m[1].toLowerCase()]) || 'audio/mpeg';
+  }
+  function loggedIn(){ try { return typeof S !== 'undefined' && !!S.token && typeof API_URL !== 'undefined'; } catch (e) { return false; } }
+  function remote(action, payload){
+    if (!loggedIn() || typeof callServer !== 'function') return Promise.reject(new Error('Please log in first.'));
+    return callServer(Object.assign({ action:action, token:S.token }, payload || {})).then(function(j){ if (!j || !j.ok) throw new Error((j && j.error) || 'Request failed'); return j; });
+  }
+  function upload(kind, blob, name, mime){
+    return new Promise(function(res, rej){
+      if (!loggedIn()){ rej(new Error('Please log in first.')); return; }
+      var q = new URLSearchParams({ kind:kind, name:name || 'tone', mime:mime });
+      var x = new XMLHttpRequest(); x.open('POST', API_URL + '/ringtone/upload?' + q.toString());
+      x.setRequestHeader('Authorization', 'Bearer ' + S.token); x.setRequestHeader('Content-Type', 'application/octet-stream');
+      x.onload = function(){ var j; try { j = JSON.parse(x.responseText); } catch (e) { rej(new Error('Unexpected server response.')); return; } if (!j.ok) rej(new Error(j.error || 'Upload failed')); else res(j); };
+      x.onerror = x.ontimeout = function(){ rej(new Error('Upload failed - check your internet connection.')); };
+      x.send(blob);
+    });
+  }
+  function download(it){
+    var q = new URLSearchParams({ id:it.id, u:it.t.u, e:it.t.e, k:it.t.k });
+    return fetch(API_URL + '/ringtone/file?' + q.toString()).then(function(r){ if (!r.ok) throw new Error('Could not load your tone (' + r.status + ')'); return r.arrayBuffer(); })
+      .then(function(buf){ return new Blob([buf], { type: it.m || 'audio/mpeg' }); });
+  }
+  var syncedFor = '';
+  /* after login (also on a new phone): fetch the tones saved on the account; an older tone that only exists on this phone is uploaded once */
+  function syncRemote(){
+    if (!loggedIn() || syncedFor === S.token) return;
+    var tok = S.token; syncedFor = tok;
+    remote('ringtoneGet').then(function(r){
+      var items = r.items || {}, jobs = [];
+      ['call', 'msg'].forEach(function(kind){
+        var it = items[kind];
+        if (it){
+          var job = (cache[kind] && cache[kind].id === it.id) ? Promise.resolve() :
+            download(it).then(function(b){ return save(kind, b, it.n, it.id); });
+          jobs.push(job.then(function(){
+            if (it.use && cfg()[ID[kind].tone] !== 'custom') put(ID[kind].tone, 'custom');
+            if (!it.use && cfg()[ID[kind].tone] === 'custom') put(ID[kind].tone, 'default');
+          }));
+        } else if (cache[kind]){
+          jobs.push(localRec(kind).then(function(rec){
+            if (!rec || !rec.blob) return;
+            return upload(kind, rec.blob, rec.name, rec.blob.type || 'audio/mpeg').then(function(j){ var n = j.items && j.items[kind]; return save(kind, rec.blob, rec.name, n && n.id); });
+          }));
+        } else if (cfg()[ID[kind].tone] === 'custom'){ put(ID[kind].tone, 'default'); }
+      });
+      return Promise.all(jobs.map(function(p){ return p.catch(function(){}); })).then(function(){ ['msg','call'].forEach(refresh); if (window.ksSyncSw) window.ksSyncSw(); });
+    }).catch(function(){ if (syncedFor === tok) syncedFor = ''; });   // offline: try again later
+  }
+  setInterval(function(){ try { syncRemote(); } catch (e) {} }, 2500);   // runs once per login; log in on another phone and your tone is downloaded there
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) { try { syncRemote(); } catch (e) {} } });
 
   /* ---------- playing ---------- */
   var cur = { msg:null, call:null };
@@ -473,6 +531,7 @@
         '<button type="button" class="btn soft sm" data-sndact="stop">⏹ Stop</button>' +
         (c ? '<button type="button" class="btn ghost sm" data-sndact="del">🗑 Remove my file</button>' : '') +
       '</div>' +
+      '<div class="muted" style="font-size:12px;margin-top:6px">☁️ Your uploaded file is saved to your account, so it plays on any phone you log in to (while the app is open).</div>' +
       '<input type="file" class="hidden" data-sndfile accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.opus,.amr">' +
       '<label style="margin-top:10px">Vibration pattern</label>' +
       '<select class="select" data-sndsel="vib">' + vo + '</select>' +
@@ -490,6 +549,7 @@
     var kind = kindOf(t); if (!kind) return;
     if (t.matches('[data-sndsel]')){
       put(t.dataset.sndsel === 'tone' ? ID[kind].tone : ID[kind].vib, t.value);
+      if (t.dataset.sndsel === 'tone' && cache[kind]) remote('ringtoneUse', { kind:kind, use:t.value === 'custom' ? 1 : 0 }).catch(function(){});   // your choice follows you to other phones
       if (t.dataset.sndsel === 'tone'){ stopAudio(kind); if (kind === 'msg') window.ksPlayMsg(); else { if (!window.ksRingStart()) window.ksCallBeep(); } }
       else { try { navigator.vibrate && navigator.vibrate(vibArr(kind)); } catch (x) {} }
       note('Saved');
@@ -499,11 +559,13 @@
       var okType = /^audio\//.test(f.type) || /\.(mp3|wav|ogg|m4a|aac|opus|amr|flac)$/i.test(f.name);
       if (!okType){ note('Please choose an audio file (mp3, wav, ogg, m4a …)', true); return; }
       if (f.size > MAX){ note('File is too big. Maximum 8 MB', true); return; }
-      save(kind, f).then(function(c){
+      if (!loggedIn()){ note('Please log in first', true); return; }
+      note('Uploading to your account ...');
+      upload(kind, f, f.name, mimeOf(f)).then(function(r){ var n = r.items && r.items[kind]; return save(kind, f, f.name, n && n.id); }).then(function(c){
         if (!c){ note('Could not save this file', true); return; }
-        put(ID[kind].tone, 'custom'); refresh(kind); note('Your ' + (kind === 'msg' ? 'notification tone' : 'ringtone') + ' is set ✓');
+        put(ID[kind].tone, 'custom'); refresh(kind); note('Your ' + (kind === 'msg' ? 'notification tone' : 'ringtone') + ' is saved to your account ✓');
         if (kind === 'msg') window.ksPlayMsg(); else window.ksRingStart();
-      }).catch(function(){ note('Could not save this file', true); });
+      }).catch(function(e){ note((e && e.message) || 'Could not upload this file', true); });
     }
   });
   document.addEventListener('click', function(e){
@@ -517,7 +579,8 @@
     else if (a === 'vib'){ try { if (navigator.vibrate) navigator.vibrate(vibArr(kind)); else note('This device does not support vibration', true); } catch (x) {} }
     else if (a === 'del'){
       stopAudio(kind);
-      drop(kind).then(function(){ if (cfg()[ID[kind].tone] === 'custom') put(ID[kind].tone, 'default'); refresh(kind); note('Removed. Default sound is back'); });
+      remote('ringtoneDel', { kind:kind }).then(function(){ return drop(kind); }).then(function(){ if (cfg()[ID[kind].tone] === 'custom') put(ID[kind].tone, 'default'); refresh(kind); note('Removed. Default sound is back'); })
+        .catch(function(e){ note((e && e.message) || 'Could not remove the file', true); });
     }
   });
   load('msg').then(function(){ return load('call'); }).then(function(){ ['msg','call'].forEach(refresh); if (window.ksSyncSw) window.ksSyncSw(); });
