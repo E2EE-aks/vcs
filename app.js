@@ -528,20 +528,36 @@ const avSrc = id => (AV[id] && AV[id].src) || '';
   document.addEventListener('visibilitychange', () => { if (!document.hidden && S.token && Date.now() - last > 60000) ping(); });
 })();
 /* ---------- Share to this app (Instagram reel / any link  ->  Share  ->  this app  ->  Links) ---------- */
+function shareStore(text, title){
+  try {
+    text = String(text || ''); title = String(title || '');
+    const m = /https?:\/\/[^\s<>"]+/i.exec(text + ' ' + title);
+    const link = m ? m[0] : '';
+    let name = title.trim() || text.replace(link, '').replace(/\s+/g, ' ').trim();
+    if (name === link) name = '';
+    if (!name && /instagram\.com/i.test(link)) name = 'Instagram reel';
+    if (!(link || name)) return false;
+    localStorage.setItem('ks_share', JSON.stringify({ name: name.slice(0, 300), link: link.slice(0, 1000), at: Date.now() }));
+    return true;
+  } catch(e){ return false; }
+}
+/* the installed Chrome app (manifest share_target) opens us with ?st=&sx=&su= */
 (function shareCatch(){
   try {
     const q = new URLSearchParams(location.search);
     if (!(q.has('st') || q.has('sx') || q.has('su'))) return;
-    const text = [q.get('sx'), q.get('su'), q.get('st')].filter(Boolean).join(' ');
-    const m = /https?:\/\/[^\s<>"]+/i.exec(text);
-    const link = m ? m[0] : '';
-    let name = (q.get('st') || '').trim() || text.replace(link, '').replace(/\s+/g, ' ').trim();
-    if (name === link) name = '';
-    if (!name && /instagram\.com/i.test(link)) name = 'Instagram reel';
-    if (link || name) localStorage.setItem('ks_share', JSON.stringify({ name: name.slice(0, 300), link: link.slice(0, 1000), at: Date.now() }));
+    shareStore([q.get('sx'), q.get('su')].filter(Boolean).join(' '), q.get('st'));
     history.replaceState(null, '', location.pathname);
   } catch(e){}
 })();
+/* the Android (APK) app calls this when something is shared to it */
+window.ksShareIn = function(text, subject){
+  const k = String(text) + '|' + String(subject);
+  if (window.__ksShareLast === k && Date.now() - (window.__ksShareAt || 0) < 30000) return;
+  window.__ksShareLast = k; window.__ksShareAt = Date.now();
+  if (!shareStore(text, subject)) return;
+  if (S.token && S.d) { try { shareConsume(); } catch(e){} }
+};
 function shareConsume(){
   let d = null;
   try { d = JSON.parse(localStorage.getItem('ks_share') || 'null'); localStorage.removeItem('ks_share'); } catch(e){}
