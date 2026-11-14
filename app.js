@@ -657,8 +657,10 @@ function applyAccess(){
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
   const chatOnly = ['att','exp','work','pw','link','lic','vcs','rack','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', !(S.me && S.me.primary)); hide('pay', !(S.me && S.me.primary));
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', true); hide('updates', !!(S.me && S.me.primary)); hide('pay', !(S.me && S.me.primary));
   if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary)) || (S.view === 'pay' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
+  try { if (S.me && S.me.primary && (S.view === 'version' || S.view === 'updates')){ DEP.tab = S.view; S.view = 'deploy'; } } catch(e){}   // Version + Updates live inside Deploy for the main admin
+  try { if (S.me && S.me.primary && localStorage.getItem('ks_apk_chain')) akcResume(); } catch(e){}
   if (S.view === 'livechat' && !(S.me && S.me.primary)) S.view = chatOnly ? 'chat' : 'dashboard';
   if (chatOnly && S.view === 'dashboard') S.view = 'chat';
 }
@@ -1192,13 +1194,26 @@ function photosCard(){
 /* =====================================================================
    VIEW: DEPLOY  (main admin only) — publish updated files to GitHub, Render redeploys by itself
    ===================================================================== */
-const DEP = { rd:null, rdBusy:false, rdTimer:null, st:null, files:null, commits:[], hist:null, hpath:'', err:'', prog:null, timer:null, ticks:0 };
+const DEP = { tab:'deploy', rd:null, rdBusy:false, rdTimer:null, st:null, files:null, commits:[], hist:null, hpath:'', err:'', prog:null, timer:null, ticks:0, akcMsg:'' };
+/* Version + Updates now live INSIDE the Deploy page (tabs). For the main admin the old Version / Updates menu items just open those tabs. */
+const inVer = () => S.view === 'version' || (S.view === 'deploy' && DEP.tab === 'version');
+const inUpd = () => S.view === 'updates' || (S.view === 'deploy' && DEP.tab === 'updates');
+function depTabs(){
+  const t = DEP.tab || 'deploy';
+  return `<div class="actions" style="margin-bottom:14px;flex-wrap:wrap;gap:8px">${[['deploy', '🚀 Deploy'], ['version', '📱 Version'], ['updates', '⬇️ Updates']].map(([k, l]) => `<button class="btn ${t === k ? '' : 'soft'}" onclick="depTab('${k}')">${l}</button>`).join('')}</div>`;
+}
+function depTab(k){
+  DEP.tab = k; render();
+  if (k === 'version') verLoad(); else if (k === 'updates') updLoad(); else depLoad();
+}
 const depBase = p => String(p).split('/').pop();
 const depBackend = p => /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i.test(depBase(p));
 const depWhen = t => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
 async function depLoad(){
   /* fast: show the tab at once (from the last result if we have one), then load status, files, live checks and Render IN PARALLEL */
   if (S.view === 'deploy') render();
+  if (DEP.tab === 'version') verLoad(); else if (DEP.tab === 'updates') updLoad();
+  akcResume();                                    // an APK build that was started after the last deploy carries on here
   try { DEP.st = await api('deployStatus'); } catch(e){ DEP.st = { configured:false }; DEP.err = e.message; }
   if (S.view === 'deploy') render();
   if (!DEP.st.configured) return;
@@ -1246,6 +1261,10 @@ function depProgHtml(){
     <div class="muted" style="margin-top:8px;font-size:calc(12.5px*var(--fs))">${esc(p.msg || '')} · <code>${esc(p.short || '')}</code>${p.state === 'pending' ? ' · updates by itself every 5 seconds' : ''}</div>`;
 }
 function vDeploy(){
+  const t = DEP.tab || 'deploy';
+  return depTabs() + (t === 'version' ? vVersion() : t === 'updates' ? vUpdates() : vDeployMain());
+}
+function vDeployMain(){
   if (!DEP.st) return '<div class="card"><div class="empty-state">Loading…</div></div>';
   if (!DEP.st.configured) return `<div class="card"><h3>🚀 Connect GitHub (one time)</h3>
     <p class="muted" style="margin-bottom:10px">So the app can publish files for you, give it a key to <b>one</b> repository. The key stays on the server (Render) — it is never shown in the app.</p>
@@ -1264,12 +1283,14 @@ function vDeploy(){
       <span class="muted">${esc(depWhen(c.at))}</span></div>
       <div class="l2">${esc(c.by || '')} · <code>${esc(c.short)}</code>${path ? ` <button class="btn soft sm" style="margin-left:8px" onclick="depRestore('${esc(path)}','${esc(c.sha)}')">↩ Restore this version</button>` : ''}</div></div>`;
   return `<div class="card" style="margin-bottom:16px"><h3>📡 Live status <button class="btn ghost sm" onclick="depLoad()">↻ Refresh</button></h3>
-      <div id="depProg">${depProgHtml()}</div></div>
+      <div id="depProg">${depProgHtml()}</div>
+      <div id="akcBox" style="margin-top:10px">${akcHtml()}</div></div>
     <div class="card" style="margin-bottom:16px"><h3>🚀 Publish to GitHub</h3>
       <p class="muted" style="margin-bottom:12px">Repository <b>${esc(DEP.st.repo)}</b> · branch <b>${esc(DEP.st.branch)}</b>. Choose the updated files; they go to GitHub as <b>one commit</b> and Render redeploys by itself (about 1–2 minutes).</p>
       ${DEP.err ? `<div class="log-item bad"><div class="l1"><b>${esc(DEP.err)}</b></div></div>` : ''}
       <div class="field"><label>Files <span class="muted">(any file — app.js, style.css, index.html, images, fonts, zip … pick as many as you like)</span></label>
         <input class="input" type="file" id="depFiles" multiple></div>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0;cursor:pointer"><input type="checkbox" id="depAuto" ${akcOn() ? 'checked' : ''} style="margin-top:3px"><span>After both Render deploys are live: <b>build the APK</b> from all app files (Version) and <b>upload it to Updates</b> automatically</span></label>
       <div class="actions"><button class="btn" onclick="depReview()">Review &amp; publish →</button></div>
       <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">No file-type or small-size limit (up to 25 MB per file, 60 MB per upload). A JS/JSON mistake only shows a warning — you can always bring the old version back from File history. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
     <div class="card" style="margin-bottom:16px"><h3>⬇️ Download website files</h3>
@@ -1288,6 +1309,10 @@ function vDeploy(){
         <div style="margin-top:8px">${files.map(f => `<div class="l2">📄 ${esc(f.path)} <span class="muted">${(f.size / 1024).toFixed(1)} KB</span> <button class="btn soft sm" style="margin-left:6px" onclick="depDownload('${esc(f.path)}')">⬇</button></div>`).join('')}</div></details></div>`;
 }
 function bindDeploy(){
+  if (DEP.tab === 'version') return bindVersion();
+  if (DEP.tab === 'updates') return bindUpdates();
+  const ck = document.getElementById('depAuto');
+  if (ck) ck.onchange = () => { try { localStorage.setItem('ks_apk_auto', ck.checked ? '1' : '0'); } catch(e){} };
   const sel = document.getElementById('depHSel');
   if (sel) sel.onchange = async e => {
     DEP.hpath = e.target.value; DEP.hist = null;
@@ -1399,8 +1424,65 @@ async function rdcFinish(){                                                     
   let stamp = '';
   for (let i = 0; i < 6 && !stamp; i++){ try { stamp = (await api('deployDone')).stamp; } catch(e){ await new Promise(r => setTimeout(r, 5000)); } }
   rdcSet(null); rdcRun = false;
+  if (akcOn()){ try { await akcStart(); } catch(e){ akcStop('❌ APK build could not start: ' + e.message, true); } }   // next link of the chain: APK build from all files
   toast('✅ Both deploys are live — loading the new version');
   setTimeout(() => { if (window.ksDeployDone) ksDeployDone(stamp); else location.reload(); }, 1200);
+}
+/* ---- after the LAST Render deploy is live: build the APK from ALL app files, then put that APK into Updates (survives a page reload) ---- */
+const AKC_KEY = 'ks_apk_chain';
+let akcRun = false;
+const akcOn = () => { try { return localStorage.getItem('ks_apk_auto') !== '0'; } catch(e){ return true; } };
+const akcGet = () => { try { return JSON.parse(localStorage.getItem(AKC_KEY) || 'null'); } catch(e){ return null; } };
+const akcSet = o => { try { if (o) localStorage.setItem(AKC_KEY, JSON.stringify(o)); else localStorage.removeItem(AKC_KEY); } catch(e){} };
+const akcHtml = () => DEP.akcMsg ? `<div class="log-item"><div class="l1"><b>${esc(DEP.akcMsg)}</b></div></div>` : '';
+function akcMsg(m){ DEP.akcMsg = m || ''; const el = document.getElementById('akcBox'); if (el) el.innerHTML = akcHtml(); }
+function akcStop(msg, bad){ akcSet(null); akcRun = false; akcMsg(''); if (msg) toast(msg, !!bad); }
+async function akcStart(){
+  akcMsg('📱 Selecting all app files and starting the APK build…');
+  const r = await api('verFiles'); VER.files = r.files;
+  const files = r.files.map(f => f.path).filter(verWebFile);                                   // same "all app files" selection as the Version tab (server / test / docs files left out)
+  if (!files.includes('index.html')) throw new Error('index.html is not in the repository');
+  files.forEach(p => VER.sel.add(p)); VER.seeded = true;
+  const l = await api('verList'), base = Math.max(0, ...(l.builds || []).map(b => b.id));
+  const name = VER.name.trim(), ver = VER.ver.trim();
+  await api('verBuild', { files, appName:name, appId:VER.id.trim(), version:ver });
+  akcSet({ base, at:Date.now(), title:name + ' ' + ver, ver });
+  VER.starting = true;
+  akcMsg('🔨 APK build started on GitHub…');
+  akcResume();
+}
+async function akcResume(){
+  if (akcRun || !S.token || !(S.me && S.me.primary)) return;
+  if (!akcGet()) return;
+  akcRun = true;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  while (S.token){
+    const c = akcGet(); if (!c){ akcRun = false; return; }
+    if (Date.now() - c.at > 45 * 60000) return akcStop('Auto APK stopped: it took too long. Check the Version tab.', true);
+    let l = null; try { l = await api('verList'); } catch(e){ await sleep(10000); continue; }      // the server may restart: just try again
+    const b = (l.builds || []).filter(x => x.id > c.base).sort((x, y) => x.id - y.id)[0];
+    if (!b){
+      akcMsg('⏳ Waiting for the APK build to start on GitHub…');
+      if (Date.now() - c.at > 5 * 60000) return akcStop('❌ The APK build did not start on GitHub. Check the Version tab.', true);
+    } else if (b.status !== 'completed') akcMsg('🔨 Building the APK… (about 5–8 minutes)');
+    else if (b.conclusion !== 'success') return akcStop('❌ APK build failed — open the Version tab and its Log.', true);
+    else if (!b.asset){ c.miss = (c.miss || 0) + 1; akcSet(c); if (c.miss > 12) return akcStop('❌ The finished build has no .apk file. Check the Version tab.', true); }
+    else return akcUpload(c, b);
+    await sleep(10000);
+  }
+  akcRun = false;
+}
+async function akcUpload(c, b){
+  akcMsg('⬆ APK is ready — uploading it to Updates…');
+  try {
+    const q = new URLSearchParams({ asset:String(b.asset.id), title:c.title, version:c.ver, notes:'Auto-built APK (build #' + b.no + ')' });
+    const res = await fetch(API_URL + '/updates/from-apk?' + q.toString(), { method:'POST', headers:{ Authorization:'Bearer ' + S.token } });
+    const r = await res.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.error || 'Upload failed');
+    UPD.items = r.items; akcSet(null); akcRun = false; akcMsg('');
+    toast('✅ APK built and uploaded to Updates — everyone can download it now');
+    VER.starting = false; if (S.view === 'deploy') render();
+  } catch(e){ akcStop('❌ APK upload to Updates failed: ' + e.message + ' (the APK is still in the Version tab)', true); }
 }
 const depB64 = buf => { const u = new Uint8Array(buf); let out = ''; for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(out); };
 const depFromB64 = b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
@@ -1471,6 +1553,8 @@ const confirmBackendOk = (path, backend) => confirmBox('Restore this version of 
 const VER = { files:null, sel:new Set(), builds:[], err:'', ready:true, busy:false, starting:false, lastRun:0, timer:null,
   name:'KS', id:'com.ks.app', ver:'1.0', seeded:false,
   cloneBase:'com.ks.clone', cloneNames:'AKS 1\nAKS 2\nAKS 3\nAKS 4\nAKS 5\nAKS 6\nAKS 7\nAKS 8\nAKS 9\nAKS 10', cloneStart:1, cloneBusy:false, cloneZip:null, cloneApk:null };
+try { const x = JSON.parse(localStorage.getItem('ks_ver_cfg') || 'null'); if (x){ if (x.name) VER.name = String(x.name); if (x.id) VER.id = String(x.id); if (x.ver) VER.ver = String(x.ver); } } catch(e){}
+const verCfgSave = () => { try { localStorage.setItem('ks_ver_cfg', JSON.stringify({ name:VER.name, id:VER.id, ver:VER.ver })); } catch(e){} };
 const VER_SKIP = /^(server\.js|code\.gs|gas-shim\.js|google-store\.js|package(-lock)?\.json|readme\.md)$/i;
 const verWebFile = p => /\.(html|js|css|json|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|webmanifest|mp3|wav|mp4)$/i.test(p) && !VER_SKIP.test(p) && !/^(test|docs|\.github)\//i.test(p);
 async function verLoad(){
@@ -1482,7 +1566,7 @@ async function verLoad(){
       await verRefresh(true); VER.err = '';
     } else VER.files = [];
   } catch(e){ VER.err = e.message; VER.files = VER.files || []; if (e.code === 'AUTH' || e.code === 'PAYDUE') handleErr(e); }
-  if (S.view === 'version') render();
+  if (inVer()) render();
   verWatch();
 }
 async function verRefresh(quiet){
@@ -1541,7 +1625,7 @@ function bindVersion(){
   if ($q('verAll')) $q('verAll').onclick = () => { setAll(true); verCount(); };
   if ($q('verNone')) $q('verNone').onclick = () => { setAll(false); verCount(); };
   if ($q('verQ')) $q('verQ').oninput = e => { const q = e.target.value.trim().toLowerCase(); document.querySelectorAll('#verList [data-vp]').forEach(l => l.style.display = !q || l.dataset.vp.includes(q) ? '' : 'none'); };
-  ['verName:name', 'verId:id', 'verVer:ver'].forEach(x => { const [i, k] = x.split(':'); if ($q(i)) $q(i).oninput = e => { VER[k] = e.target.value; }; });
+  ['verName:name', 'verId:id', 'verVer:ver'].forEach(x => { const [i, k] = x.split(':'); if ($q(i)) $q(i).oninput = e => { VER[k] = e.target.value; verCfgSave(); }; });
   if ($q('verRef')) $q('verRef').onclick = async () => { await verRefresh(); verDraw(); verWatch(); };
   if ($q('verGo')) $q('verGo').onclick = verBuild;
   const vcN = () => VER.cloneNames.split('\n').map(x => x.trim()).filter(Boolean);
@@ -1560,7 +1644,7 @@ function bindVersion(){
     }
   };
 }
-function verDraw(){ const el = document.getElementById('verBuilds'); if (S.view === 'version' && el) el.innerHTML = verBuildsHtml(); }
+function verDraw(){ const el = document.getElementById('verBuilds'); if (inVer() && el) el.innerHTML = verBuildsHtml(); }
 async function verBuild(){
   if (VER.busy) return;
   const files = [...VER.sel]; if (!files.length) return toast('Choose the files first', true);
@@ -1610,7 +1694,7 @@ function verWatch(){
   const need = () => VER.starting || VER.builds.some(b => b.status !== 'completed');
   if (!need()) return;
   VER.timer = setInterval(async () => {
-    if (S.view !== 'version' || ++VER.ticks > 120){ clearInterval(VER.timer); return; }
+    if (!inVer() || ++VER.ticks > 120){ clearInterval(VER.timer); return; }
     const before = VER.lastRun; await verRefresh(true);
     if (VER.starting && VER.lastRun > before) VER.starting = false;
     if (VER.starting && VER.ticks > 12) VER.starting = false;
@@ -1641,7 +1725,7 @@ const updSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(
 async function updLoad(){
   try { const r = await api('updList'); UPD.items = r.items; UPD.can = !!r.canManage; UPD.ready = r.ready !== false; UPD.max = r.max || UPD.max; UPD.err = ''; }
   catch(e){ UPD.err = e.message; UPD.items = UPD.items || []; if (e.code === 'AUTH' || e.code === 'PAYDUE') handleErr(e); }
-  if (S.view === 'updates') render();
+  if (inUpd()) render();
 }
 function updItemHtml(u){
   return `<div class="log-item upd"><div class="l1"><b style="word-break:break-word">${esc(u.title)}</b>${u.version ? `<span class="tag adm">${esc(u.version)}</span>` : ''}
@@ -1719,7 +1803,7 @@ async function updSubmit(){
     });
     if (!r.ok){ const e = new Error(r.error || 'Upload failed'); e.code = r.code; throw e; }
     UPD.items = r.items; UPD.open = false; toast('✅ Update uploaded — everyone can download it now');
-    if (S.view === 'updates') render();
+    if (inUpd()) render();
   } catch(e){ if (document.body.contains(btn)){ btn.disabled = false; prog.innerHTML = ''; } handleErr(e); }
   finally { UPD.busy = false; busy(false); }
 }
@@ -2292,6 +2376,7 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
 
 function go(v){
   setMenu(false);
+  if (v === 'deploy') DEP.tab = 'deploy';
   if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
   if (v !== 'chat') document.body.classList.remove('chat-conv');
   if (v === 'settings' || v === 'profile') S.setSec = null;
@@ -2311,7 +2396,7 @@ function go(v){
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
-$('#refreshBtn').onclick = async () => { try { S.bdays = null; await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); if (S.view === 'updates') updLoad(); } catch(e){ handleErr(e); } };
+$('#refreshBtn').onclick = async () => { try { S.bdays = null; await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); if (inUpd()) updLoad(); } catch(e){ handleErr(e); } };
 /* ---------- payment / access countdown (Dashboard) ---------- */
 let payTimer = null;
 const payOff = () => (S.me && S.me.serverNow) ? S.me.serverNow - (S.meAt || Date.now()) : 0;   // server clock minus this device's clock

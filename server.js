@@ -994,6 +994,21 @@ function makeApp(store, env) {
     try { return await withWb(() => { const list = updRead(); list.unshift(item); updWrite(list); return { ok: true, items: list.map(updView) }; }); }
     catch (e) { try { await gh('DELETE', '/contents/' + ghPath(path), { message: 'Undo failed upload', sha: item.sha, branch: UPD_BRANCH }); } catch (x) {} throw e; }
   }
+  // APK built by the Version tab -> copy it straight into Updates (server side, so the browser never has to download + re-upload it).
+  async function updFromApk(token, q) {
+    await withWb(() => updAdmin(token));
+    if (!updReady()) globalThis.fail_('GitHub is not connected yet. Add GITHUB_TOKEN and GITHUB_REPO on Render first.', 'NOGH');
+    const aid = String(q.asset || ''); if (!/^\d+$/.test(aid)) globalThis.fail_('Invalid APK file.', 'UPD');
+    const m = await gh('GET', '/releases/assets/' + aid);
+    const name = updName(m.name || 'app.apk'), notes = updClean(q.notes, 600);
+    const dup = await withWb(() => { const list = updRead(); return list.some(x => x.name === name && notes && x.notes === notes) ? list.map(updView) : null; });
+    if (dup) return { ok: true, items: dup };                                   // this build is already in Updates (e.g. the page was reloaded half way)
+    const r = await fetch('https://api.github.com/repos/' + GH.repo + '/releases/assets/' + aid,
+      { headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/octet-stream', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } });
+    if (!r.ok) globalThis.fail_('GitHub could not give this APK (error ' + r.status + ').', 'GITHUB');
+    const buf = Buffer.from(await r.arrayBuffer());
+    return updUpload(token, { name, title: q.title, version: q.version, notes }, buf);
+  }
   // Download: check the pass, then stream the file from GitHub straight to the user (never kept in memory).
   async function updOpen(q) {
     const id = String(q.id || ''), [exp, sig] = String(q.k || '').split('.'), good = updTicketSig(id, exp);
@@ -1358,7 +1373,7 @@ function makeApp(store, env) {
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            rtMax: RT_MAX, rtRe: RT_MIME, rtUp: (t, q, b) => rtUpload(t, q, b).catch(errOut),
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
-           updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
+           updMax: UPD_MAX, upload: (token, q, buf) => updUpload(token, q, buf).catch(errOut), fromApk: (token, q) => updFromApk(token, q).catch(errOut), updOpen: q => updOpen(q).catch(e => ({ code: 500, error: e.message || 'Error' })),
            oauth: q => (chain = chain.then(() => runOauth(q), () => runOauth(q)).catch(e => page(500, e.message))) };
 }
 
@@ -1407,6 +1422,11 @@ function start(app, env) {
       const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
       rq.on('data', c => { n += c.length; if (n > app.updMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
       rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.updMax / 1048576) + ' MB).', code: 'UPD' } : await app.upload(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
+      return;
+    }
+    if (rq.method === 'POST' && url.pathname === '/updates/from-apk' && app.fromApk) {       // copy a finished Version-tab APK into Updates (token in the Authorization header)
+      const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, '');
+      rq.resume(); rq.on('end', async () => send(200, await app.fromApk(token, Object.fromEntries(url.searchParams))));
       return;
     }
     if (rq.method === 'GET' && url.pathname === '/chat/media' && app.mediaOpen) {           // stream a chat photo / video from Drive (signed link, Range for video seeking)
