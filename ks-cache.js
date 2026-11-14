@@ -11,6 +11,9 @@
   function apiBase(){ try { return typeof API_URL !== 'undefined' ? API_URL : ''; } catch (e) { return ''; } }
   function getSaved(){ try { return localStorage.getItem(KEY); } catch (e) { return null; } }
   function setSaved(v){ try { localStorage.setItem(KEY, v); } catch (e) {} }
+  function keepView(){                                              // so the reload brings the user back to the SAME screen (not the dashboard)
+    try { if (typeof S !== 'undefined' && S.view) localStorage.setItem('ks_keep_view', JSON.stringify({ v: S.view, tab: (typeof DEP !== 'undefined' && DEP.tab) || '', t: Date.now() })); } catch (e) {}
+  }
   function typing(){ var a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA)$/.test(a.tagName) && a.value && a.type !== 'button'); }
 
   async function clearCaches(){
@@ -32,12 +35,12 @@
       if (typing()) return;                                         // try again later; never while you type a message
       await clearCaches();
       setSaved(now);
-      reloading = true; location.reload();                          // load the new version once
+      reloading = true; keepView(); location.reload();              // load the new version once
     } catch (e) {} finally { busy = false; }
   }
   window.ksDeployDone = async function(stamp){                      // called by the admin's own browser right after the last deploy is live
     try { await clearCaches(); if (stamp) setSaved(String(stamp)); } catch (e) {}
-    reloading = true; location.reload();
+    reloading = true; keepView(); location.reload();
   };
 
   setTimeout(check, 1500);                                          // site opened / reloaded

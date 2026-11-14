@@ -46,7 +46,9 @@
   if (PN){
     PN.addListener('registration', function(t){ tokenNow = t && t.value || ''; sendToken(); });
     PN.addListener('registrationError', function(){});
-    PN.addListener('pushNotificationReceived', function(){});           // app is open: the app's own sounds / ringing already handle it
+    PN.addListener('pushNotificationReceived', function(n){            // app is open: the app's own sounds / ringing already handle it; a new update -> show the install pop-up right away
+      try { var d = (n && n.data) || {}; if (d.kind === 'upd' && typeof appUpCheck === 'function') setTimeout(function(){ appUpCheck(true); }, 1500); } catch(e){}
+    });
     PN.addListener('pushNotificationActionPerformed', function(ev){      // the notification was tapped
       pendingTap = (ev && ev.notification && ev.notification.data) || {};
     });
@@ -69,7 +71,7 @@
     if (pendingTap){
       var d = pendingTap; pendingTap = null;
       try {
-        if (d.kind === 'upd' && typeof go === 'function') go('updates');
+        if (d.kind === 'upd' && typeof appUpCheck === 'function') appUpCheck(true);
         else if (d.kind === 'fail' && typeof go === 'function') go('deploy');
         else if (d.kind === 'msg' && d.with && typeof go === 'function'){ go('chat'); setTimeout(function(){ try { chatOpen(d.with); } catch(e){} }, 500); }
       } catch(e){}

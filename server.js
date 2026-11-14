@@ -919,6 +919,25 @@ function makeApp(store, env) {
     }
   }
 
+  // ---------- "X is online": a phone notification to the main admin when a user opens the app again after being away ----------
+  const ONLINE_AWAY = 10 * 60 * 1000, bootAt = Date.now();             // away for 10+ minutes = a new visit; the first 3 minutes after a restart are ignored (no flood after a deploy)
+  const onlineSeen = new Map();                                         // uid -> last time we told the admin
+  function onlineNote(uid) {
+    uid = String(uid || ''); if (!uid || uid === 'ADMIN' || Date.now() - bootAt < 3 * 60 * 1000) return;
+    const cache = globalThis.CacheService.getScriptCache(), P = globalThis.PropertiesService.getScriptProperties();
+    const prev = Number(cache.get('seen_' + uid) || P.getProperty('LS_' + uid) || 0), now = Date.now();
+    if (prev && now - prev < ONLINE_AWAY) return;                       // still the same visit
+    if (now - (onlineSeen.get(uid) || 0) < ONLINE_AWAY) return;
+    onlineSeen.set(uid, now);
+    setImmediate(() => { try {
+      if (!PUSH.has('ADMIN')) return;
+      const acc = globalThis.getAccount_(uid, globalThis.readSettings_().values);
+      if (!acc || !acc.active) return;
+      PUSH.send('ADMIN', { title: '🟢 ' + (acc.name || acc.username || 'A user') + ' is online', body: 'Just opened the app', channel: 'messages', tag: 'online-' + uid, ttl: 600, data: { kind: 'msg', with: uid } }).catch(e => warn('online push', e && e.message));
+    } catch (e) {} });
+  }
+  { const orig = globalThis.touchSeen_; if (typeof orig === 'function') globalThis.touchSeen_ = uid => { try { onlineNote(uid); } catch (e) {} return orig(uid); }; }
+
   // ---------- Failure alert: a phone notification to the main admin when a Render deploy or an APK build fails (the server looks every minute) ----------
   const failSeen = { rd: null, ver: null };                                  // ids already known; the first look only remembers what is there (no old alarms after a restart)
   const RD_FAILED = new Set(['build_failed', 'update_failed', 'pre_deploy_failed']);

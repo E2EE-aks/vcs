@@ -508,6 +508,10 @@ function updateEmpSel(){
 }
 $('#empSel').onchange = e => { pickEmp(e.target.value); render(); };
 function enterApp(){
+  try {                                                                  // back from a deploy reload: open the same screen again (only if it was a moment ago)
+    const k = JSON.parse(localStorage.getItem('ks_keep_view') || 'null'); localStorage.removeItem('ks_keep_view');
+    if (k && k.v && TITLES[k.v] && Date.now() - k.t < 3 * 60000){ S.view = k.v; if (k.v === 'deploy' && k.tab) DEP.tab = k.tab; }
+  } catch(e){}
   $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
   refreshUser();
   go(S.view);
@@ -522,13 +526,13 @@ let AV = (function(){ try{ return JSON.parse(localStorage.getItem('ks_av_v1') ||
 const avSave = () => { try{ localStorage.setItem('ks_av_v1', JSON.stringify(AV)); }catch(e){} };
 const avSrc = id => (AV[id] && AV[id].src) || '';
 /* ---------- Android app: on open, tell the user when a newer .apk was uploaded in the Updates tab ---------- */
-const APPUP = { last:0, shown:false };
+const APPUP = { last:0, shown:'', w:null };
 function appUpInfo(){
   try { const s = String((window.KsDl && window.KsDl.info && window.KsDl.info()) || ''), i = s.lastIndexOf('|'); if (i < 0) return null; return { name:s.slice(0, i), at:Number(s.slice(i + 1)) || 0 }; } catch(e){ return null; }
 }
 async function appUpCheck(force){
   try {
-    const me = appUpInfo(); if (!me || !S.token || APPUP.shown) return;
+    const me = appUpInfo(); if (!me || !S.token || (APPUP.w && document.body.contains(APPUP.w))) return;
     if (!force && Date.now() - APPUP.last < 10 * 60 * 1000) return;
     APPUP.last = Date.now();
     const r = await api('updList'); UPD.items = r.items; UPD.can = !!r.canManage;
@@ -537,13 +541,14 @@ async function appUpCheck(force){
     if (!u) return;
     const same = u.version && norm(u.version) === norm(me.name);                           // already on this version
     const newer = Date.parse(u.at) > me.at + 120000;                                       // uploaded after this app was installed
-    if (same || !newer) return;
-    APPUP.shown = true;
-    const w = openModal(`<h3>🔔 New update available</h3>
+    if (same || !newer || APPUP.shown === u.id) return;
+    APPUP.shown = u.id;
+    const w = openModal(`<h3>🔔 New version ready — install now?</h3>
       <p class="sub"><b style="word-break:break-word">${esc(u.title)}</b>${u.version ? ' · ' + esc(u.version) : ''} · ${updSize(u.size)}</p>
       ${u.notes ? `<div class="log-item" style="white-space:pre-wrap;margin:8px 0">${esc(u.notes)}</div>` : ''}
-      <p class="muted">Tap Download, then open the downloaded file to install it over this app. Your data stays safe.</p>
-      <div class="foot"><button class="btn ghost" data-x>Later</button><button class="btn" data-ok>⬇ Download update</button></div>`);
+      <p class="muted">Tap Install: the update downloads and the phone's install screen opens by itself. It installs over this app and your data stays safe.</p>
+      <div class="foot"><button class="btn ghost" data-x>Later</button><button class="btn" data-ok>⬇ Install update</button></div>`);
+    APPUP.w = w;
     w.querySelector('[data-x]').onclick = () => w.remove();
     w.querySelector('[data-ok]').onclick = async ev => {
       const b = ev.currentTarget; b.disabled = true;
@@ -552,6 +557,7 @@ async function appUpCheck(force){
     };
   } catch(e){}
 }
+setInterval(() => { if (!document.hidden && S.token) appUpCheck(true); }, 5 * 60 * 1000);       // a new update shows up while the app is open
 /* ---------- keep the server awake while the app is open, and wake it as soon as the app comes back to the screen ---------- */
 (function keepAwake(){
   let last = 0;
@@ -1489,6 +1495,7 @@ async function akcUpload(c, b){
     UPD.items = r.items; akcSet(null); akcRun = false; akcMsg('');
     toast('✅ APK built and uploaded to Updates — everyone can download it now');
     VER.starting = false;
+    setTimeout(() => appUpCheck(true), 500);                                  // this phone: "new version ready — install now?"
     if (akcFlag('ks_apk_clean')) await akcClean(c, b);
     if (S.view === 'deploy') render();
   } catch(e){ akcStop('❌ APK upload to Updates failed: ' + e.message + ' (the APK is still in the Version tab)', true); }
@@ -2396,7 +2403,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') setMenu(fals
 
 function go(v){
   setMenu(false);
-  if (v === 'deploy') DEP.tab = 'deploy';
   if (v === 'chat' && S.view !== 'chat') S.chat.with = null;
   if (v !== 'chat') document.body.classList.remove('chat-conv');
   if (v === 'settings' || v === 'profile') S.setSec = null;
@@ -2414,7 +2420,7 @@ function go(v){
   if (v === 'telegram' && window.tgInit) tgInit();
   if (v === 'whatsapp' && window.waInit) waInit();
 }
-$('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) go(b.dataset.v); });
+$('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b){ if (b.dataset.v === 'deploy') DEP.tab = 'deploy'; go(b.dataset.v); } });
 $('#logoutBtn').onclick = $('#logoutBtn2').onclick = $('#logoutBtn3').onclick = logout;
 $('#refreshBtn').onclick = async () => { try { S.bdays = null; await loadAll(); render(); toast('Data refreshed'); if (isAdmin()) loadLogs(); if (inUpd()) updLoad(); } catch(e){ handleErr(e); } };
 /* ---------- payment / access countdown (Dashboard) ---------- */
