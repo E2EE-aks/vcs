@@ -332,6 +332,26 @@ jobs:
           sed -i "s/versionCode [0-9]*/versionCode $RUN_NO/; s/versionName \".*\"/versionName \"$APP_VER\"/" android/app/build.gradle
           grep -n "versionCode\|versionName" android/app/build.gradle
 
+      - name: Fixed signing key (every new APK installs OVER the old one)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Android only updates an app when the new APK has the SAME signing key. A fresh runner makes a new random key every time
+          # ("App not installed as package conflicts with an existing package"). So the key is made ONCE, kept on the app-updates branch, and reused.
+          mkdir -p ~/.android
+          P=signing/debug.keystore; B=app-updates; T="$RUNNER_TEMP/ks.keystore"
+          get() { rm -f "$T"; gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/$P?ref=$B" > "$T" 2>/dev/null && [ -s "$T" ] && keytool -list -keystore "$T" -storepass android >/dev/null 2>&1 && cp "$T" ~/.android/debug.keystore; }
+          if get; then echo "Using the saved signing key"; exit 0; fi
+          rm -f ~/.android/debug.keystore
+          keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$B" >/dev/null 2>&1 || gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$B" -f sha="$GITHUB_SHA" >/dev/null 2>&1 || true
+          if gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="Add app signing key" -f branch="$B" -f content="$(base64 -w0 ~/.android/debug.keystore)" >/dev/null 2>&1; then
+            echo "Saved a new signing key (first build with a fixed key)"
+          else
+            sleep 6
+            if get; then echo "Using the key saved by another build"; else echo "::warning::Could not save the signing key - this APK is signed with a one-time key"; fi
+          fi
+
       - name: Build the APK
         working-directory: android
         run: |
@@ -365,6 +385,26 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+
+      - name: Fixed signing key (every new APK installs OVER the old one)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Android only updates an app when the new APK has the SAME signing key. A fresh runner makes a new random key every time
+          # ("App not installed as package conflicts with an existing package"). So the key is made ONCE, kept on the app-updates branch, and reused.
+          mkdir -p ~/.android
+          P=signing/debug.keystore; B=app-updates; T="$RUNNER_TEMP/ks.keystore"
+          get() { rm -f "$T"; gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/$P?ref=$B" > "$T" 2>/dev/null && [ -s "$T" ] && keytool -list -keystore "$T" -storepass android >/dev/null 2>&1 && cp "$T" ~/.android/debug.keystore; }
+          if get; then echo "Using the saved signing key"; exit 0; fi
+          rm -f ~/.android/debug.keystore
+          keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$B" >/dev/null 2>&1 || gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$B" -f sha="$GITHUB_SHA" >/dev/null 2>&1 || true
+          if gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="Add app signing key" -f branch="$B" -f content="$(base64 -w0 ~/.android/debug.keystore)" >/dev/null 2>&1; then
+            echo "Saved a new signing key (first build with a fixed key)"
+          else
+            sleep 6
+            if get; then echo "Using the key saved by another build"; else echo "::warning::Could not save the signing key - this APK is signed with a one-time key"; fi
+          fi
 
       - name: Re-package the APK (new name + package id)
         run: |
@@ -413,8 +453,8 @@ jobs:
           java -jar apktool.jar b -o unsigned.apk dec 2>&1 | tail -40; [ -f unsigned.apk ] || { echo "::error::apktool could not rebuild this APK (protected / obfuscated apps usually cannot be repacked)"; exit 1; }
           BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
           "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
-          keytool -genkeypair -keystore ks.jks -storepass android -keypass android -alias key -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Clone" >/dev/null 2>&1
-          "$BT/apksigner" sign --ks ks.jks --ks-pass pass:android --key-pass pass:android --out signed.apk aligned.apk
+          [ -s ~/.android/debug.keystore ] || keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          "$BT/apksigner" sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out signed.apk aligned.apk
           "$BT/apksigner" verify signed.apk && echo "signed OK"
 
       - name: Publish the APK
