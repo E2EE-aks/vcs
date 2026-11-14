@@ -71,7 +71,8 @@
     if (pendingTap){
       var d = pendingTap; pendingTap = null;
       try {
-        if (d.kind === 'upd' && typeof appUpCheck === 'function') appUpCheck(true);
+        if (d.kind === 'att' && typeof go === 'function') go('attendance');
+        else if (d.kind === 'upd' && typeof appUpCheck === 'function') appUpCheck(true);
         else if (d.kind === 'fail' && typeof go === 'function') go('deploy');
         else if (d.kind === 'msg' && d.with && typeof go === 'function'){ go('chat'); setTimeout(function(){ try { chatOpen(d.with); } catch(e){} }, 500); }
       } catch(e){}

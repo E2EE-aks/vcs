@@ -938,6 +938,40 @@ function makeApp(store, env) {
   }
   { const orig = globalThis.touchSeen_; if (typeof orig === 'function') globalThis.touchSeen_ = uid => { try { onlineNote(uid); } catch (e) {} return orig(uid); }; }
 
+  // ---------- Daily reminder (default 11:00, Mon–Sat): "mark today's attendance" -> only to people who have not marked today yet ----------
+  // Env (optional): ATT_REMIND_AT = "11:00" (24 h, server time zone TZ, default Asia/Kolkata). If the server was asleep at 11:00 it sends as soon as it wakes (until 18:00).
+  const ATT_AT = /^\d\d:\d\d$/.test(String(env.ATT_REMIND_AT || '')) ? String(env.ATT_REMIND_AT) : '11:00', ATT_TZ = env.TZ || 'Asia/Kolkata';
+  function attNow() {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: ATT_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+    return { date: p.year + '-' + p.month + '-' + p.day, hm: p.hour + ':' + p.minute, wd: p.weekday, m: Number(p.month), d: Number(p.day) };
+  }
+  let attBusy = false;
+  async function attWatch() {
+    const n = attNow();
+    if (attBusy || n.wd === 'Sun' || n.hm < ATT_AT || n.hm >= '18:00') return;
+    attBusy = true;
+    try {
+      const ids = await withWb(() => {
+        const P = globalThis.PropertiesService.getScriptProperties();
+        if (P.getProperty('ATT_REMIND_DAY') === n.date) return [];
+        P.setProperty('ATT_REMIND_DAY', n.date);                                      // claim today first, so it is never sent twice
+        const s = globalThis.readSettings_().values, out = [];
+        for (const a of [globalThis.getAccount_('ADMIN', s)].concat(globalThis.readUsers_())) {
+          try {
+            if (!a || !a.active || !PUSH.has(a.id) || (a.perms && a.perms.att === 'none')) continue;
+            globalThis.buildCtx_(a.id);
+            let marked = false;
+            for (const e of globalThis.readEmployees_()) { const m = globalThis.readAttendance_(globalThis.empSheet_(e)); if (m[n.m] && m[n.m][n.d]) marked = true; }
+            if (!marked) out.push(a.id);
+          } catch (e) {}
+        }
+        return out;
+      });
+      await Promise.all(ids.map(id => PUSH.send(id, { title: '🗓️ Attendance', body: 'Aaj ki attendance Present mark kar lo', channel: 'messages', tag: 'att-' + n.date, ttl: 6 * 3600, data: { kind: 'att', view: 'attendance' } }).catch(e => warn('attendance push', e && e.message))));
+    } finally { attBusy = false; }
+  }
+  { const t = setInterval(() => attWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
+
   // ---------- Failure alert: a phone notification to the main admin when a Render deploy or an APK build fails (the server looks every minute) ----------
   const failSeen = { rd: null, ver: null };                                  // ids already known; the first look only remembers what is there (no old alarms after a restart)
   const RD_FAILED = new Set(['build_failed', 'update_failed', 'pre_deploy_failed']);
