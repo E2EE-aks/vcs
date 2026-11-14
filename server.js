@@ -919,6 +919,35 @@ function makeApp(store, env) {
     }
   }
 
+  // ---------- Failure alert: a phone notification to the main admin when a Render deploy or an APK build fails (the server looks every minute) ----------
+  const failSeen = { rd: null, ver: null };                                  // ids already known; the first look only remembers what is there (no old alarms after a restart)
+  const RD_FAILED = new Set(['build_failed', 'update_failed', 'pre_deploy_failed']);
+  async function failWatch() {
+    if (!(GH.repo && GH.token) || !PUSH.has('ADMIN')) return;
+    try {
+      const rr = await gh('GET', '/actions/workflows/' + VER_WF + '/runs?per_page=8');
+      const runs = rr.workflow_runs || [], first = !failSeen.ver;
+      failSeen.ver = failSeen.ver || new Set();
+      for (const r of runs) {
+        if (r.status !== 'completed' || failSeen.ver.has(r.id)) continue;
+        failSeen.ver.add(r.id);
+        if (!first && r.conclusion === 'failure') await PUSH.send('ADMIN', { title: '❌ APK build failed', body: (r.display_title || 'Build #' + r.run_number) + ' — open Deploy → Version → Log', channel: 'messages', tag: 'fail-apk-' + r.id, data: { kind: 'fail', view: 'deploy' } });
+      }
+    } catch (e) { /* GitHub not reachable now: try again next minute */ }
+    if (!(RD.key && RD.svc)) return;
+    try {
+      const l = await rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=6');
+      const ds = (Array.isArray(l) ? l : []).map(x => x.deploy || x), first = !failSeen.rd;
+      failSeen.rd = failSeen.rd || new Set();
+      for (const d of ds) {
+        if (!RD_FAILED.has(d.status) || failSeen.rd.has(d.id)) continue;
+        failSeen.rd.add(d.id);
+        if (!first) await PUSH.send('ADMIN', { title: '❌ Render deploy failed', body: String((d.commit && d.commit.message) || 'Deploy').split('\n')[0].slice(0, 100) + ' — open Deploy → Render', channel: 'messages', tag: 'fail-rd-' + d.id, data: { kind: 'fail', view: 'deploy' } });
+      }
+    } catch (e) {}
+  }
+  { const t = setInterval(() => failWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
+
   // ---------- Updates tab: the main admin uploads app-update files, every signed-in user can download them ----------
   // The files are stored in the GitHub repository on a SEPARATE branch (default "app-updates"), so uploading never makes Render redeploy.
   // The list (title, version, notes, file name ...) is kept in the sheet's "_App Properties" tab. Uses the same GITHUB_TOKEN / GITHUB_REPO as Deploy.
@@ -991,8 +1020,21 @@ function makeApp(store, env) {
     await updEnsureBranch();
     const put = await gh('PUT', '/contents/' + ghPath(path), { message: 'Add update: ' + title.slice(0, 80), content: buf.toString('base64'), branch: UPD_BRANCH });
     const item = { id, title, version: updClean(q.version, 40), notes: updClean(q.notes, 600), name, size: buf.length, at: new Date().toISOString(), path, sha: put.content.sha };
-    try { return await withWb(() => { const list = updRead(); list.unshift(item); updWrite(list); return { ok: true, items: list.map(updView) }; }); }
+    let out;
+    try { out = await withWb(() => { const list = updRead(); list.unshift(item); updWrite(list); return { ok: true, items: list.map(updView) }; }); }
     catch (e) { try { await gh('DELETE', '/contents/' + ghPath(path), { message: 'Undo failed upload', sha: item.sha, branch: UPD_BRANCH }); } catch (x) {} throw e; }
+    PUSH.broadcast({ title: '⬇️ New update available', body: title + (item.version ? ' · ' + item.version : ''), channel: 'messages', tag: 'upd-' + id, ttl: 86400, data: { kind: 'upd', view: 'updates' } }).catch(e => warn('update push', e && e.message));
+    if (/^Auto-built APK/.test(item.notes)) updPruneAuto().catch(e => warn('update cleanup', e && e.message));      // keep only the newest few auto-built APKs
+    return out;
+  }
+  const UPD_KEEP_AUTO = 3;
+  async function updPruneAuto() {
+    const old = await withWb(() => updRead().filter(x => /^Auto-built APK/.test(x.notes || '')).slice(UPD_KEEP_AUTO));    // list is newest first
+    for (const u of old) {
+      try { await gh('DELETE', '/contents/' + ghPath(u.path), { message: 'Remove old auto-built update: ' + u.name, sha: u.sha, branch: UPD_BRANCH }); }
+      catch (e) { if (!(e.code === 'GITHUB' && /could not find/i.test(e.message))) throw e; }
+    }
+    if (old.length) await withWb(() => { const ids = new Set(old.map(x => x.id)); updWrite(updRead().filter(x => !ids.has(x.id))); return true; });
   }
   // APK built by the Version tab -> copy it straight into Updates (server side, so the browser never has to download + re-upload it).
   async function updFromApk(token, q) {

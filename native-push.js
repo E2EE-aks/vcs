@@ -69,7 +69,9 @@
     if (pendingTap){
       var d = pendingTap; pendingTap = null;
       try {
-        if (d.kind === 'msg' && d.with && typeof go === 'function'){ go('chat'); setTimeout(function(){ try { chatOpen(d.with); } catch(e){} }, 500); }
+        if (d.kind === 'upd' && typeof go === 'function') go('updates');
+        else if (d.kind === 'fail' && typeof go === 'function') go('deploy');
+        else if (d.kind === 'msg' && d.with && typeof go === 'function'){ go('chat'); setTimeout(function(){ try { chatOpen(d.with); } catch(e){} }, 500); }
       } catch(e){}
     }
   }, 2500);

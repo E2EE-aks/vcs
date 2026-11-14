@@ -1290,7 +1290,9 @@ function vDeployMain(){
       ${DEP.err ? `<div class="log-item bad"><div class="l1"><b>${esc(DEP.err)}</b></div></div>` : ''}
       <div class="field"><label>Files <span class="muted">(any file — app.js, style.css, index.html, images, fonts, zip … pick as many as you like)</span></label>
         <input class="input" type="file" id="depFiles" multiple></div>
-      <label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0;cursor:pointer"><input type="checkbox" id="depAuto" ${akcOn() ? 'checked' : ''} style="margin-top:3px"><span>After both Render deploys are live: <b>build the APK</b> from all app files (Version) and <b>upload it to Updates</b> automatically</span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0;cursor:pointer"><input type="checkbox" id="depAuto" ${akcOn() ? 'checked' : ''} style="margin-top:3px"><span>After both Render deploys are live: <b>build the APK</b> from all app files (Version) and <b>upload it to Updates</b> automatically (everyone gets a notification)</span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 6px 26px;cursor:pointer"><input type="checkbox" id="depInc" ${akcFlag('ks_apk_inc') ? 'checked' : ''} style="margin-top:3px"><span>Version number +1 on every auto build (1.0 → 1.1 → 1.2)</span></label>
+      <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 10px 26px;cursor:pointer"><input type="checkbox" id="depClean" ${akcFlag('ks_apk_clean') ? 'checked' : ''} style="margin-top:3px"><span>Delete the old builds of this app afterwards (keeps the new one; clones are not touched)</span></label>
       <div class="actions"><button class="btn" onclick="depReview()">Review &amp; publish →</button></div>
       <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">No file-type or small-size limit (up to 25 MB per file, 60 MB per upload). A JS/JSON mistake only shows a warning — you can always bring the old version back from File history. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
     <div class="card" style="margin-bottom:16px"><h3>⬇️ Download website files</h3>
@@ -1313,6 +1315,7 @@ function bindDeploy(){
   if (DEP.tab === 'updates') return bindUpdates();
   const ck = document.getElementById('depAuto');
   if (ck) ck.onchange = () => { try { localStorage.setItem('ks_apk_auto', ck.checked ? '1' : '0'); } catch(e){} };
+  [['depInc', 'ks_apk_inc'], ['depClean', 'ks_apk_clean']].forEach(([i, k]) => { const x = document.getElementById(i); if (x) x.onchange = () => { try { localStorage.setItem(k, x.checked ? '1' : '0'); } catch(e){} }; });
   const sel = document.getElementById('depHSel');
   if (sel) sel.onchange = async e => {
     DEP.hpath = e.target.value; DEP.hist = null;
@@ -1432,6 +1435,8 @@ async function rdcFinish(){                                                     
 const AKC_KEY = 'ks_apk_chain';
 let akcRun = false;
 const akcOn = () => { try { return localStorage.getItem('ks_apk_auto') !== '0'; } catch(e){ return true; } };
+const akcFlag = k => { try { return localStorage.getItem(k) !== '0'; } catch(e){ return true; } };            // ks_apk_inc (version +1) / ks_apk_clean (delete old builds): on by default
+const akcNextVer = v => { const p = String(v || '1.0').split('.').map(x => parseInt(x, 10) || 0); p[p.length - 1]++; return p.join('.'); };     // 1.0 -> 1.1, 2.3.1 -> 2.3.2
 const akcGet = () => { try { return JSON.parse(localStorage.getItem(AKC_KEY) || 'null'); } catch(e){ return null; } };
 const akcSet = o => { try { if (o) localStorage.setItem(AKC_KEY, JSON.stringify(o)); else localStorage.removeItem(AKC_KEY); } catch(e){} };
 const akcHtml = () => DEP.akcMsg ? `<div class="log-item"><div class="l1"><b>${esc(DEP.akcMsg)}</b></div></div>` : '';
@@ -1444,9 +1449,11 @@ async function akcStart(){
   if (!files.includes('index.html')) throw new Error('index.html is not in the repository');
   files.forEach(p => VER.sel.add(p)); VER.seeded = true;
   const l = await api('verList'), base = Math.max(0, ...(l.builds || []).map(b => b.id));
-  const name = VER.name.trim(), ver = VER.ver.trim();
+  const name = VER.name.trim(), old = VER.ver.trim();
+  const ver = akcFlag('ks_apk_inc') ? akcNextVer(old) : old;                                  // every auto build gets the next version
   await api('verBuild', { files, appName:name, appId:VER.id.trim(), version:ver });
-  akcSet({ base, at:Date.now(), title:name + ' ' + ver, ver });
+  if (ver !== old){ VER.ver = ver; verCfgSave(); }
+  akcSet({ base, at:Date.now(), title:name + ' ' + ver, ver, name });
   VER.starting = true;
   akcMsg('🔨 APK build started on GitHub…');
   akcResume();
@@ -1481,8 +1488,21 @@ async function akcUpload(c, b){
     if (!r.ok) throw new Error(r.error || 'Upload failed');
     UPD.items = r.items; akcSet(null); akcRun = false; akcMsg('');
     toast('✅ APK built and uploaded to Updates — everyone can download it now');
-    VER.starting = false; if (S.view === 'deploy') render();
+    VER.starting = false;
+    if (akcFlag('ks_apk_clean')) await akcClean(c, b);
+    if (S.view === 'deploy') render();
   } catch(e){ akcStop('❌ APK upload to Updates failed: ' + e.message + ' (the APK is still in the Version tab)', true); }
+}
+/* old builds of THIS app (same app name) are deleted once the new APK is safely in Updates; clones (other names) are never touched */
+async function akcClean(c, b){
+  try {
+    await verRefresh(true);
+    const mine = (VER.builds || []).filter(x => x.status === 'completed' && x.id !== b.id && c.name && String(x.title || '').startsWith(c.name + ' '));
+    if (!mine.length) return;
+    await api('verDelete', { items:mine.map(x => ({ id:x.id, no:x.no })) });
+    await verRefresh(true); verDraw();
+    toast('🧹 ' + mine.length + ' old build' + (mine.length === 1 ? '' : 's') + ' cleaned up');
+  } catch(e){ /* cleanup is optional: never fail the chain because of it */ }
 }
 const depB64 = buf => { const u = new Uint8Array(buf); let out = ''; for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(out); };
 const depFromB64 = b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };

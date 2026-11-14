@@ -95,5 +95,13 @@ module.exports = function ({ env, warn, withWb }) {
   const call = (to, c) => send(to, { title: c.kind === 'video' ? '📹 Incoming video call' : '📞 Incoming call', body: c.fromName || 'Someone', channel: 'calls_v2',
     tag: 'call-' + c.id, ttl: 40, call: true, data: { kind: 'call', callId: c.id, with: c.from } });
 
-  return { actions: ACTIONS, route, send, chat, call, ready: () => !!account() };
+  // same notification to every user that has a phone registered (e.g. "new update available")
+  async function broadcast(m) {
+    if (!account()) return 0;
+    let props = {}; try { props = P().getProperties(); } catch (e) { return 0; }
+    const ids = Object.keys(props).filter(k => k.indexOf('FCM_') === 0 && props[k] && props[k] !== '[]').map(k => k.slice(4));
+    await Promise.all(ids.map(id => send(id, m).catch(e => warn('broadcast', e && e.message))));
+    return ids.length;
+  }
+  return { actions: ACTIONS, route, send, chat, call, broadcast, has: uid => tokens(uid).length > 0, ready: () => !!account() };
 };
