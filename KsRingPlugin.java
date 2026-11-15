@@ -84,7 +84,7 @@ public class KsRingPlugin extends Plugin {
       ch.setDescription("Incoming voice and video calls");
       AudioAttributes aa = new AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SONIC)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build();
       ch.setSound(uri, aa);
       ch.enableVibration(true);
