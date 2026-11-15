@@ -32,9 +32,9 @@
   }
   async function sendToken(){
     if (!tokenNow || typeof S === 'undefined' || !S.token || !S.d) return;
-    var key = S.token + '|' + tokenNow; if (doneFor === key) return;
+    var ch = window.ksRingChannel || '', key = S.token + '|' + tokenNow + '|' + ch; if (doneFor === key) return;
     try {
-      var j = await callServer({ action:'pushRegister', token:S.token, fcm:tokenNow });
+      var j = await callServer({ action:'pushRegister', token:S.token, fcm:tokenNow, ch:ch });
       if (j && j.ok) doneFor = key;
     } catch(e){}
   }

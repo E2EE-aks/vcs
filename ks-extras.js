@@ -531,7 +531,7 @@
         '<button type="button" class="btn soft sm" data-sndact="stop">⏹ Stop</button>' +
         (c ? '<button type="button" class="btn ghost sm" data-sndact="del">🗑 Remove my file</button>' : '') +
       '</div>' +
-      '<div class="muted" style="font-size:12px;margin-top:6px">☁️ Your uploaded file is saved to your account, so it plays on any phone you log in to (while the app is open).</div>' +
+      '<div class="muted" style="font-size:12px;margin-top:6px">☁️ Your uploaded file is saved to your account, so it plays on any phone you log in to. In the Android app it also rings when the app is closed (Android 10 or newer; the file plays once per call, so choose a longer clip).</div>' +
       '<input type="file" class="hidden" data-sndfile accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.opus,.amr">' +
       '<label style="margin-top:10px">Vibration pattern</label>' +
       '<select class="select" data-sndsel="vib">' + vo + '</select>' +
@@ -583,5 +583,35 @@
         .catch(function(e){ note((e && e.message) || 'Could not remove the file', true); });
     }
   });
+  /* ---------- Android app: your ringtone also for calls that arrive while the app is closed ----------
+     The phone plays the sound of a notification channel, so the file is handed to the native KsRing plugin, which saves it
+     and makes a call channel with it. The channel name goes to the server with this phone's push token (native-push.js). */
+  var NK = 'ks_ring_applied', NC = 'ks_ring_ch', nBusy = false;
+  window.ksRingChannel = ''; try { window.ksRingChannel = localStorage.getItem(NC) || ''; } catch (e) {}
+  function ringPlugin(){ try { var C = window.Capacitor; if (!C || !(C.isNativePlatform ? C.isNativePlatform() : false)) return null; return (C.Plugins && C.Plugins.KsRing) || (C.registerPlugin ? C.registerPlugin('KsRing') : null); } catch (e) { return null; } }
+  function toB64(blob){ return new Promise(function(res, rej){ var r = new FileReader(); r.onload = function(){ res(String(r.result).split(',')[1] || ''); }; r.onerror = function(){ rej(r.error); }; r.readAsDataURL(blob); }); }
+  function nativeSync(){
+    var KR = ringPlugin(); if (!KR || nBusy) return;
+    var applied = ''; try { applied = localStorage.getItem(NK) || ''; } catch (e) {}
+    var want = tone('call') === 'custom' && cache.call;
+    if (!want){
+      if (!applied) return;
+      nBusy = true;
+      KR.clearCallTone().catch(function(){}).then(function(){ try { localStorage.removeItem(NK); localStorage.removeItem(NC); } catch (e) {} window.ksRingChannel = ''; nBusy = false; });
+      return;
+    }
+    localRec('call').then(function(rec){
+      if (!rec || !rec.blob) return;
+      var id = rec.id || ('l' + rec.blob.size), key = id + '|' + rec.blob.size;
+      if (applied === key && window.ksRingChannel) return;
+      nBusy = true;
+      var ext = (/\.(\w{1,5})$/.exec(rec.name || '') || [])[1] || 'mp3';
+      return toB64(rec.blob).then(function(b){ return KR.setCallTone({ data:b, id:id, mime:rec.blob.type || 'audio/mpeg', ext:ext }); }).then(function(r){
+        if (r && r.channel){ try { localStorage.setItem(NK, key); localStorage.setItem(NC, r.channel); } catch (e) {} window.ksRingChannel = r.channel; }
+      });
+    }).catch(function(){}).then(function(){ nBusy = false; });
+  }
+  setInterval(function(){ try { nativeSync(); } catch (e) {} }, 3000);
+
   load('msg').then(function(){ return load('call'); }).then(function(){ ['msg','call'].forEach(refresh); if (window.ksSyncSw) window.ksSyncSw(); });
 })();

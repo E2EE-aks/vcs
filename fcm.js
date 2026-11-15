@@ -43,7 +43,7 @@ module.exports = function ({ env, warn, withWb }) {
     const t = String(req.fcm || '');
     if (t.length < 20 || t.length > 400) globalThis.fail_('Bad device token.', 'PUSH');
     const a = tokens(uid).filter(x => x.t !== t);
-    if (req.action === 'pushRegister') a.push({ t, at: Date.now() });
+    if (req.action === 'pushRegister') { const ch = /^calls_c_[A-Za-z0-9]{1,24}$/.test(String(req.ch || '')) ? String(req.ch) : ''; a.push(ch ? { t, at: Date.now(), ch } : { t, at: Date.now() }); }   // ch = this phone's own-ringtone call channel
     await saveTokens(uid, a);
     return { ok: true, ready: !!account() };
   }
@@ -56,7 +56,7 @@ module.exports = function ({ env, warn, withWb }) {
     await Promise.all(list.map(async x => {
       const data = {}; Object.keys(m.data || {}).forEach(k => { data[k] = String(m.data[k]); });
       const body = { message: { token: x.t, notification: { title: String(m.title || '').slice(0, 80), body: String(m.body || '').slice(0, 160) }, data,
-        android: { priority: 'HIGH', ttl: (m.ttl || 900) + 's', notification: { channel_id: m.channel || 'messages', tag: m.tag || undefined, sound: m.call ? 'ks_ringtone' : 'default',
+        android: { priority: 'HIGH', ttl: (m.ttl || 900) + 's', notification: { channel_id: (m.call && x.ch) ? x.ch : (m.channel || 'messages'), tag: m.tag || undefined, sound: m.call ? 'ks_ringtone' : 'default',
           notification_priority: m.call ? 'PRIORITY_MAX' : 'PRIORITY_HIGH' } } } };
       try {
         const r = await fetch('https://fcm.googleapis.com/v1/projects/' + encodeURIComponent(account().project_id) + '/messages:send',

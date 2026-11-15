@@ -7992,7 +7992,7 @@ async function vcDial(kind){
 function vcShowIncoming(inc){
   VC.incoming = inc; VC.kind = inc.kind; VC.peer = { id:inc.from, name:inc.fromName };
   vcOpen(inc.fromName, inc.from, 'Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call…'); vcBar('incoming'); vcRingStart(true);
-  if (document.hidden) ksNotify('📞 Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call', (inc.fromName || 'Someone') + ' is calling you', 'ks-call', { requireInteraction:true, silent: !ksOn('csnd') && !ksOn('cvib'), vibrate: ksOn('cvib') ? [1000, 300, 1000, 300, 1000, 300, 1000] : [] });
+  if (document.hidden) ksNotify('📞 Incoming ' + (inc.kind === 'video' ? 'video' : 'voice') + ' call', (inc.fromName || 'Someone') + ' is calling you', 'ks-call', { requireInteraction:true, silent: (!ksOn('csnd') && !ksOn('cvib')) || (ksOn('csnd') && !!(window.ksCallCustom && window.ksCallCustom())),   /* the app rings itself (your file), so no second system sound */ vibrate: ksOn('cvib') ? [1000, 300, 1000, 300, 1000, 300, 1000] : [] });
 }
 async function vcAccept(){
   const inc = VC.incoming; if (!inc || VC.busy) return;
