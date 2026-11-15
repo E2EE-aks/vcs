@@ -353,10 +353,17 @@ jobs:
       - name: Fixed signing key (every new APK installs OVER the old one)
         env:
           GH_TOKEN: ${{ github.token }}
+          KS_B64: ${{ secrets.SIGNING_KEYSTORE }}
         run: |
           # Android only updates an app when the new APK has the SAME signing key. A fresh runner makes a new random key every time
           # ("App not installed as package conflicts with an existing package"). So the key is made ONCE, kept on the app-updates branch, and reused.
           mkdir -p ~/.android
+          # best option: a fixed key kept in the repository secret SIGNING_KEYSTORE (base64). Same key on every build = every APK installs over the old one.
+          if [ -n "$KS_B64" ]; then
+            printf '%s' "$KS_B64" | tr -d ' \n\r' | base64 -d > "$RUNNER_TEMP/secret.keystore" 2>/dev/null
+            if keytool -list -keystore "$RUNNER_TEMP/secret.keystore" -storepass android >/dev/null 2>&1; then cp "$RUNNER_TEMP/secret.keystore" ~/.android/debug.keystore; echo "Using the signing key from the SIGNING_KEYSTORE secret"; exit 0; fi
+            echo "::warning::SIGNING_KEYSTORE secret is set but is not a valid key - using the saved key instead"
+          fi
           P=signing/debug.keystore; B=app-updates; T="$RUNNER_TEMP/ks.keystore"
           get() { rm -f "$T"; gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/$P?ref=$B" > "$T" 2>/dev/null && [ -s "$T" ] && keytool -list -keystore "$T" -storepass android >/dev/null 2>&1 && cp "$T" ~/.android/debug.keystore; }
           if get; then echo "Using the saved signing key"; exit 0; fi
@@ -411,10 +418,17 @@ jobs:
       - name: Fixed signing key (every new APK installs OVER the old one)
         env:
           GH_TOKEN: ${{ github.token }}
+          KS_B64: ${{ secrets.SIGNING_KEYSTORE }}
         run: |
           # Android only updates an app when the new APK has the SAME signing key. A fresh runner makes a new random key every time
           # ("App not installed as package conflicts with an existing package"). So the key is made ONCE, kept on the app-updates branch, and reused.
           mkdir -p ~/.android
+          # best option: a fixed key kept in the repository secret SIGNING_KEYSTORE (base64). Same key on every build = every APK installs over the old one.
+          if [ -n "$KS_B64" ]; then
+            printf '%s' "$KS_B64" | tr -d ' \n\r' | base64 -d > "$RUNNER_TEMP/secret.keystore" 2>/dev/null
+            if keytool -list -keystore "$RUNNER_TEMP/secret.keystore" -storepass android >/dev/null 2>&1; then cp "$RUNNER_TEMP/secret.keystore" ~/.android/debug.keystore; echo "Using the signing key from the SIGNING_KEYSTORE secret"; exit 0; fi
+            echo "::warning::SIGNING_KEYSTORE secret is set but is not a valid key - using the saved key instead"
+          fi
           P=signing/debug.keystore; B=app-updates; T="$RUNNER_TEMP/ks.keystore"
           get() { rm -f "$T"; gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/$P?ref=$B" > "$T" 2>/dev/null && [ -s "$T" ] && keytool -list -keystore "$T" -storepass android >/dev/null 2>&1 && cp "$T" ~/.android/debug.keystore; }
           if get; then echo "Using the saved signing key"; exit 0; fi
