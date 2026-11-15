@@ -389,7 +389,7 @@
 
   function cfg(){ var o = {}; try { o = JSON.parse(localStorage.getItem(LS) || '{}') || {}; } catch (e) {} return o; }
   function put(k, v){ var o = cfg(); o[k] = v; try { localStorage.setItem(LS, JSON.stringify(o)); } catch (e) {} if (window.ksSyncSw) window.ksSyncSw(); }
-  function tone(kind){ var t = cfg()[ID[kind].tone] || 'default'; return (t === 'custom' || TONES[kind][t]) ? t : 'default'; }
+  function tone(kind){ var t = cfg()[ID[kind].tone] || 'default'; if (kind === 'call' && t === 'custom') t = 'default'; return (t === 'custom' || TONES[kind][t]) ? t : 'default'; }
   function vib(kind){ var v = cfg()[ID[kind].vib] || 'default'; return VIBS[kind][v] ? v : 'default'; }
   function vibArr(kind){ return VIBS[kind][vib(kind)].p; }
 
@@ -520,19 +520,19 @@
   window.ksSndUI = function(kind){
     var t = tone(kind), v = vib(kind), c = cache[kind], T = TONES[kind], V = VIBS[kind], i = ID[kind];
     var to = Object.keys(T).map(function(k){ return '<option value="' + k + '"' + (t === k ? ' selected' : '') + '>' + esc(T[k].n) + '</option>'; }).join('') +
-      (c ? '<option value="custom"' + (t === 'custom' ? ' selected' : '') + '>🎵 My file: ' + esc(c.name) + '</option>' : '');
+      (c && kind === 'msg' ? '<option value="custom"' + (t === 'custom' ? ' selected' : '') + '>🎵 My file: ' + esc(c.name) + '</option>' : '');
     var vo = Object.keys(V).map(function(k){ return '<option value="' + k + '"' + (v === k ? ' selected' : '') + '>' + esc(V[k].n) + '</option>'; }).join('');
     return '<div class="ks-snd" data-snd="' + kind + '">' +
       '<label>' + (kind === 'msg' ? 'Notification tone' : 'Ringtone') + '</label>' +
       '<select class="select" data-sndsel="tone">' + to + '</select>' +
       '<div class="ks-snd-btns">' +
-        '<button type="button" class="btn soft sm" data-sndact="pick">⬆️ Upload my ' + (kind === 'msg' ? 'tone' : 'ringtone') + '</button>' +
+        (kind === 'msg' ? '<button type="button" class="btn soft sm" data-sndact="pick">⬆️ Upload my tone</button>' : '') +
         '<button type="button" class="btn soft sm" data-sndact="play">▶ Play</button>' +
         '<button type="button" class="btn soft sm" data-sndact="stop">⏹ Stop</button>' +
-        (c ? '<button type="button" class="btn ghost sm" data-sndact="del">🗑 Remove my file</button>' : '') +
+        (c && kind === 'msg' ? '<button type="button" class="btn ghost sm" data-sndact="del">🗑 Remove my file</button>' : '') +
       '</div>' +
-      '<div class="muted" style="font-size:12px;margin-top:6px">☁️ Your uploaded file is saved to your account, so it plays on any phone you log in to. In the Android app it also rings when the app is closed (Android 10 or newer; the file plays once per call, so choose a longer clip).</div>' +
-      '<input type="file" class="hidden" data-sndfile accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.opus,.amr">' +
+      (kind === 'msg' ? '<div class="muted" style="font-size:12px;margin-top:6px">☁️ Your uploaded file is saved to your account, so it plays on any phone you log in to (while the app is open).</div>' +
+      '<input type="file" class="hidden" data-sndfile accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.opus,.amr">' : '') +
       '<label style="margin-top:10px">Vibration pattern</label>' +
       '<select class="select" data-sndsel="vib">' + vo + '</select>' +
       '<div class="ks-snd-btns"><button type="button" class="btn soft sm" data-sndact="vib">📳 Test vibration</button></div>' +
