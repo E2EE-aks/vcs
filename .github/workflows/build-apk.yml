@@ -279,6 +279,24 @@ jobs:
           PY
           grep -n "action.SEND" $M
 
+      - name: Your own call ringtone when the app is closed - native plugin
+        run: |
+          set -e
+          [ -f KsRingPlugin.java ] || { echo "::warning::KsRingPlugin.java missing - your uploaded ringtone will only play while the app is open"; exit 0; }
+          JAVA_DIR=android/app/src/main/java
+          mkdir -p $JAVA_DIR/ks/ring
+          cp KsRingPlugin.java $JAVA_DIR/ks/ring/
+          python3 - <<'PY'
+          import glob
+          ma = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)[0]
+          j = open(ma, encoding='utf-8').read()
+          if 'KsRingPlugin' not in j:
+              j = j.replace('super.onCreate(savedInstanceState);', 'registerPlugin(ks.ring.KsRingPlugin.class);\n    super.onCreate(savedInstanceState);', 1)
+              open(ma, 'w', encoding='utf-8').write(j)
+          print(j[:1500])
+          PY
+          grep -c "KsRingPlugin" android/app/src/main/java/*/*/*/MainActivity.java || true
+
       - name: Firebase (notifications when the app is closed)
         run: |
           if [ -n "$GSJ" ]; then
@@ -351,6 +369,10 @@ jobs:
             sleep 6
             if get; then echo "Using the key saved by another build"; else echo "::warning::Could not save the signing key - this APK is signed with a one-time key"; fi
           fi
+
+      - name: Show the signing key fingerprint (same value on every build = updates install over the old app)
+        run: |
+          keytool -list -v -keystore ~/.android/debug.keystore -storepass android 2>/dev/null | grep -E "SHA256|SHA-256" | head -1 || true
 
       - name: Build the APK
         working-directory: android
