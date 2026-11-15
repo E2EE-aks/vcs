@@ -1,6 +1,6 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v81';
+const CACHE = 'ks-shell-v82';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-motion.css', 'ks-motion.js', 'ks-cache.js', 'login-custom.js', 'native-push.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'ftp-view.js', 'status-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
 
 self.addEventListener('install', e => {
@@ -72,6 +72,13 @@ self.addEventListener('push', e => {
   e.waitUntil((async () => {
     let pf = {}; try { const r = await (await caches.open('ks-prefs')).match('prefs'); if (r) pf = await r.json(); } catch (x) {}   // Settings > Smart options (saved by the app)
     const snd = call ? pf.csnd !== 0 : msg ? pf.msnd !== 0 : true, vib = call ? pf.cvib !== 0 : msg ? pf.mvib !== 0 : true;
+    const cl0 = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const visible = cl0.some(c => c.visibilityState === 'visible');
+    if (visible && (call || msg)) {
+      // the app is open on screen: it rings / plays your own tone itself, so no system notification (its default sound played together with your tone)
+      cl0.forEach(c => c.postMessage({ type: 'push', kind: d.kind || '', callId: d.callId || '' }));
+      return;
+    }
     await self.registration.showNotification(d.title || 'KS', {
       body: d.body || '',
       tag: d.tag || 'ks',
