@@ -228,9 +228,7 @@ $('#loginForm').addEventListener('submit', async ev => {
       r = await api(act, { ...body, client:await collectClient() });
     }
     saveToken(r.token, true);
-    await loadAll();
-    enterApp();
-    if (fast) sendLoginLoc();
+    await openAppFast(true);
   }catch(e){
     showLoginErr(e.message);
     if (e.code === 'BADLOGIN') reportLoginPhoto(u, 'Wrong username/password');   // wrong user ID or password
@@ -288,6 +286,28 @@ async function snapCamera(facingMode){
   } catch(e){ return ''; }
   finally{ stream.getTracks().forEach(t => t.stop()); }
 }
+/* after sign-in: show the app at once, load the data behind a light skeleton (no waiting on a blank login screen) */
+async function openAppFast(offerBio){
+  $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
+  $('#view').innerHTML = '<div class="skel-kpis"><i class="skel"></i><i class="skel"></i><i class="skel"></i><i class="skel"></i></div>';
+  try { await loadAll(); }
+  catch(e){ clearToken(); $('#app').classList.add('hidden'); $('#login').classList.remove('hidden'); throw e; }
+  enterApp();
+  if (offerBio) setTimeout(bioOffer, 1200);
+}
+/* one-time friendly offer to turn on fingerprint / face unlock on this phone */
+function bioOffer(){
+  try{
+    if (!BIO.ok || bioSaved() || store.get('ks_bio_asked')) return;
+    store.set('ks_bio_asked', '1', true);
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:12px;right:12px;bottom:76px;z-index:9999;background:#1d2940;color:#fff;border:1px solid #2c3b57;border-radius:14px;padding:14px;box-shadow:0 8px 30px rgba(0,0,0,.4);font-size:14px';
+    d.innerHTML = '<b>👆 Next time sign in with fingerprint / face?</b><div style="margin-top:6px;color:#93a4c0">No password typing. Your fingerprint never leaves this phone.</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="bioYes" style="flex:1">Enable</button><button class="btn ghost" id="bioNo" style="flex:1">Not now</button></div>';
+    document.body.appendChild(d);
+    d.querySelector('#bioNo').onclick = () => d.remove();
+    d.querySelector('#bioYes').onclick = async () => { d.remove(); await bioEnable(); };
+  }catch(e){}
+}
 /* ---------- fingerprint / face unlock (WebAuthn passkey on this device) ---------- */
 const BK = 'att_tracker_bio';
 const BIO = { ok:false };
@@ -299,6 +319,7 @@ async function bioDetect(){
   catch { BIO.ok = false; }
   BIO.why = !window.isSecureContext ? 'The page is not on https (address: ' + location.protocol + '//' + location.hostname + ').' : !window.PublicKeyCredential ? 'This browser has no passkey support (try Chrome).' : (BIO.ok ? '' : 'No fingerprint / face / screen lock is set up on this phone, or this in-app browser blocks it.');
 }
+function bioPrefetch(){ if (bioSaved()){ BIO.preAt = Date.now(); BIO.pre = api('bioChallenge'); BIO.pre.catch(() => {}); } }
 function bioShowBtn(){ const b = $('#bioBtn'); if (b) b.classList.toggle('hidden', !(BIO.ok && bioSaved() && !S.setup)); }
 function bioErr(e){
   if (e && (e.name === 'NotAllowedError' || e.name === 'AbortError')) return 'Cancelled. You can try again or use your password.';
@@ -309,7 +330,8 @@ async function bioLoginGo(silent){
   const saved = bioSaved(); if (!saved || !BIO.ok) return;
   const btn = $('#bioBtn'); btn.disabled = true;
   try{
-    const c = await api('bioChallenge');
+    let c = BIO.pre && Date.now() - BIO.preAt < 90000 ? await BIO.pre.catch(() => null) : null; BIO.pre = null;
+    if (!c) c = await api('bioChallenge');
     const a = await navigator.credentials.get({ publicKey:{ challenge:b64d(c.challenge), rpId:location.hostname, timeout:60000,
       allowCredentials:[{ type:'public-key', id:b64d(saved.credId) }], userVerification:'required' } });
     btn.textContent = 'Signing in…';
@@ -317,7 +339,7 @@ async function bioLoginGo(silent){
     const r = await api('bioLogin', { chId:c.chId, credId:b64e(a.rawId), clientDataJSON:b64e(a.response.clientDataJSON),
       authenticatorData:b64e(a.response.authenticatorData), signature:b64e(a.response.signature), client });
     saveToken(r.token, true);
-    await loadAll(); enterApp(); sendLoginLoc();
+    await openAppFast();
   }catch(e){
     const quiet = e && (e.name === 'NotAllowedError' || e.name === 'AbortError');
     if (!(silent && quiet)) showLoginErr(bioErr(e));
@@ -353,10 +375,11 @@ function bioDraw(list){
 async function bindBio(){
   const add = document.querySelector('#bioAdd'); if (!add) return;
   try{ bioDraw((await api('bioList')).list); }catch(e){ const el = document.querySelector('#bioList'); if (el) el.textContent = ''; }
-  add.onclick = async () => {
-    if (!BIO.ok) return toast('This device does not support biometric unlock', true);
-    add.disabled = true;
-    try{
+  add.onclick = async () => { add.disabled = true; try{ await bioEnable(); } finally{ add.disabled = false; } };
+}
+async function bioEnable(){
+  if (!BIO.ok) return toast('This device does not support biometric unlock', true);
+  try{
       const c = await api('bioChallenge', { purpose:'register' });
       const cred = await navigator.credentials.create({ publicKey:{
         rp:{ name:'KS', id:location.hostname },
@@ -369,10 +392,9 @@ async function bindBio(){
       const label = ((navigator.userAgent.match(/Android|iPhone|iPad|Windows|Mac OS X|Linux/) || ['Device'])[0]).replace('Mac OS X','Mac') + ' · ' + new Date().toISOString().slice(0,10);
       const r = await api('bioRegister', { chId:c.chId, credId:b64e(cred.rawId), clientDataJSON:b64e(cred.response.clientDataJSON), publicKey:b64e(pk), label });
       store.set(BK, JSON.stringify({ credId:b64e(cred.rawId), username:(S.me && S.me.username) || '' }), true);
-      bioDraw(r.list); toast('Fingerprint / face unlock enabled');
+      try{ bioDraw(r.list); }catch(e){} toast('Fingerprint / face unlock enabled'); return true;
     }catch(e){ if (e && e.code) handleErr(e); else toast(bioErr(e), true); }
-    finally{ add.disabled = false; }
-  };
+  finally{}
 }
 
 
@@ -611,7 +633,7 @@ function shareConsume(){
 }
 async function boot(){
   const t = store.get(TK);
-  const bioP = bioDetect();                       // runs while the network call below is already in flight
+  const bioP = bioDetect(); bioPrefetch();         // runs while the network call below is already in flight
   if (t){
     S.token = t;                                  // returning user: show the app frame at once, then load the data
     $('#login').classList.add('hidden'); $('#app').classList.remove('hidden');
