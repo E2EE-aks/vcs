@@ -316,7 +316,7 @@ jobs:
           M=android/app/src/main/AndroidManifest.xml
           RES=android/app/src/main/res
           # permissions
-          for p in POST_NOTIFICATIONS VIBRATE CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION RECORD_AUDIO MODIFY_AUDIO_SETTINGS BLUETOOTH_CONNECT INTERNET; do
+          for p in POST_NOTIFICATIONS VIBRATE CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION RECORD_AUDIO MODIFY_AUDIO_SETTINGS BLUETOOTH_CONNECT INTERNET SCHEDULE_EXACT_ALARM USE_EXACT_ALARM RECEIVE_BOOT_COMPLETED; do
             grep -q "android.permission.$p" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
           done
           # mic/camera hardware declared optional (so Play/Android never filters the app) - needed for WebView getUserMedia
