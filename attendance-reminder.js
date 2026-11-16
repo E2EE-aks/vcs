@@ -6,11 +6,13 @@
   var C = window.Capacitor;
   var native = !!C && (C.isNativePlatform ? C.isNativePlatform() : (C.getPlatform ? C.getPlatform() !== 'web' : false));
   var LN = native && C.Plugins ? C.Plugins.LocalNotifications : null;
+  var KA = null;                                  // native plugin: buttons mark the attendance WITHOUT opening the app (needs the new APK)
+  try { if (native) KA = (C.Plugins && C.Plugins.KsAtt) || (C.registerPlugin ? C.registerPlugin('KsAtt') : null); } catch(e){ KA = null; }
   var BASE = 7100, DAYS = 14, PK = 'ks_attrem_pending', CH = 'att_reminder';
   var WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], MN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var say = function(m, bad){ try { toast(m, bad); } catch(e){} };
-  var lastSig = '', info = '', busy = false;
+  var lastSig = '', info = '', busy = false, native2 = false;
 
   function key(){ var u = ''; try { u = (S.me && (S.me.username || S.me.id || S.me.name)) || ''; } catch(e){} return 'ks_attrem_cfg_' + String(u); }
   function load(){
@@ -31,7 +33,7 @@
       var ids = []; for (var i = 0; i <= DAYS; i++) ids.push({ id:BASE + i });
       try { await LN.cancel({ notifications:ids }); } catch(e){}
       var c = load(); info = '';
-      if (!c.on || !ready() || !(typeof can === 'function' ? can('att') : true)) return;
+      if (!c.on || !ready() || !(typeof can === 'function' ? can('att') : true)){ if (KA){ try { await KA.schedule({ items:[] }); } catch(e){} } return; }
       if (!(await allowed(ask))){ info = 'Notifications are blocked for this app. Allow them in the phone settings (App info → Notifications).'; return; }
       try { await LN.createChannel({ id:CH, name:'Attendance reminder', description:'Daily reminder to mark attendance', importance:4, visibility:1, vibration:true, lights:true }); } catch(e){}
       try { await LN.registerActionTypes({ types:[{ id:'ATT', actions:[{ id:'P', title:'✅ Present' }, { id:'A', title:'❌ Absent' }] }] }); } catch(e){}
@@ -44,14 +46,21 @@
         if (!first) first = dt;
         list.push({ id:BASE + o, title:'Attendance reminder', body:'Mark today (' + WD[dt.getDay()] + ', ' + d + ' ' + MN[m - 1] + '): tap ✅ Present or ❌ Absent.', channelId:CH, actionTypeId:'ATT', extra:{ y:y, m:m, d:d }, schedule:{ at:dt, allowWhileIdle:true } });
       }
-      if (list.length) await LN.schedule({ notifications:list });
+      if (KA){                                         // new APK: the phone's alarm clock + buttons that send the attendance in the background
+        try {
+          var items = list.map(function(n){ return { id:n.id, at:n.schedule.at.getTime(), y:n.extra.y, m:n.extra.m, d:n.extra.d, title:n.title, body:n.body }; });
+          await KA.schedule({ items:items, api:(typeof API_URL !== 'undefined' ? API_URL : ''), token:String(S.token || ''), asUser:String(S.as || ''), emp:String(S.emp || '') });
+          native2 = true;
+        } catch(e){ KA = null; }                       // plugin missing in this APK: fall back to the normal notification
+      }
+      if (!KA && list.length) await LN.schedule({ notifications:list });
       info = first ? 'Next reminder: ' + WD[first.getDay()] + ' ' + first.getDate() + ' ' + MN[first.getMonth()] + ', ' + t12(c.time) : (c.days.length ? 'No reminder needed right now.' : 'Choose at least one day.');
     } catch(e){ info = 'Could not set the reminder: ' + ((e && e.message) || e); }
     finally { busy = false; var el = $('#arInfo'); if (el) el.textContent = info; }
   }
   function sig(){
     var n = new Date(), c = load();
-    return JSON.stringify([c, n.toDateString(), ready() && marked(n.getFullYear(), n.getMonth() + 1, n.getDate())]);
+    return JSON.stringify([c, n.toDateString(), ready() && marked(n.getFullYear(), n.getMonth() + 1, n.getDate()), ready() ? String(S.token || '').slice(-12) + '|' + String(S.emp || '') + '|' + String(S.as || '') : '']);
   }
 
   /* a button on the notification was tapped -> mark that day as soon as the app has loaded */
@@ -100,7 +109,7 @@
       [1, 2, 3, 4, 5, 6, 0].map(function(d){ var on = c.days.indexOf(d) >= 0; return '<button type="button" class="btn sm ' + (on ? '' : 'ghost') + '" data-d="' + d + '">' + WD[d] + '</button>'; }).join('') + '</div></div>' +
       '<div class="muted" id="arInfo" style="font-size:13px;margin-top:12px">' + (info || '') + '</div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn soft sm" id="arTest">🔔 Send a test now</button><button class="btn ghost sm" id="arExact">⏱ Allow exact time</button></div>' +
-      '<div class="muted" style="font-size:12px;margin-top:10px">The notification shows two buttons. Tap ✅ Present or ❌ Absent and today is marked. If today is already marked, no reminder comes that day.</div></div>';
+      '<div class="muted" style="font-size:12px;margin-top:10px">The notification shows two buttons. Tap ✅ Present or ❌ Absent and today is marked (the new app marks it without opening). If today is already marked, no reminder comes that day.</div></div>';
   };
   window.attRemBind = function(){
     var card = $('#arCard'); if (!card || !LN) return;
@@ -115,6 +124,7 @@
     });
     $('#arTest').onclick = async function(){
       if (!(await allowed(true))){ say('Please allow notifications for this app first.', true); return; }
+      if (KA){ try { var n0 = new Date(); await KA.test({ y:n0.getFullYear(), m:n0.getMonth() + 1, d:n0.getDate() }); say('Test notification comes in 5 seconds - you can close the app now'); return; } catch(e){ KA = null; } }
       try {
         await LN.createChannel({ id:CH, name:'Attendance reminder', description:'Daily reminder to mark attendance', importance:4, visibility:1, vibration:true, lights:true });
         await LN.registerActionTypes({ types:[{ id:'ATT', actions:[{ id:'P', title:'✅ Present' }, { id:'A', title:'❌ Absent' }] }] });
