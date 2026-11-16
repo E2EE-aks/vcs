@@ -703,7 +703,7 @@ function login_(req) {
     logLogin_(acc, uname, 'Blocked', 'Account disabled', info);
     fail_('This account is disabled. Please contact the admin.', 'DISABLED');
   }
-  if (acc.needLoc) {
+  if (false && acc.needLoc) {
     // Only the DEVICE's own location counts (GPS / network). A guess from the IP address is never accepted - it can be hundreds of km off.
     var devLoc = info.lat !== '' && (info.src === 'GPS' || info.src === 'Network');
     if (!devLoc) {

@@ -471,7 +471,7 @@ let syncT = null;
 const typing = () => { const a = document.activeElement; return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && $('#view').contains(a)); };
 function startSync(){
   clearInterval(syncT); syncT = null;
-  if (S.me && S.me.group) syncT = setInterval(syncTick, 10000);
+  if (S.me && S.me.group) syncT = setInterval(syncTick, 30000);
 }
 async function syncTick(){
   if (!S.d || !S.token || document.hidden || busyN > 0 || document.querySelector('.overlay') || typing()) return;
@@ -517,7 +517,6 @@ function enterApp(){
   go(S.view);
   chatStart(); vcStart(); ludoStart();
   if (isAdmin()) loadLogs();
-  setTimeout(() => { try{ geoStart(); }catch(e){} }, 3000);          // location -> temperature, only if the user allows it
   try { shareConsume(); } catch(e){}                                  // something was shared to this app: open Links with it filled in
   setTimeout(() => appUpCheck(true), 2500);                           // Android app: is there a newer .apk?
 }
@@ -778,79 +777,13 @@ function uaInfo(hi){
   else if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) model = 'iPad';
   return { device: kind + (model ? ' · ' + model : ''), browser: br, os };
 }
-/* Location: the BEST real GPS fix wins. We keep listening for up to ~14 s and stop early once it is accurate (<= 25 m).
-   Never a cached fix (maximumAge 0). The place name comes from the GPS point itself (reverse geocode), never from the IP address. */
-let _gpsP = null, _gpsAt = 0, _ipP = null;
-function gpsStart(){ if (!_gpsP || Date.now() - _gpsAt > 90000){ _gpsAt = Date.now(); _gpsP = getGps(); } return _gpsP; }
-function ipStart(){ if (!_ipP) _ipP = getIp(); return _ipP; }
-function getGps(){
-  return new Promise(res => {
-    if (!navigator.geolocation) return res({ err:'unsupported' });
-    let best = null, wid = null, done = false, err = '';
-    const fin = () => { if (done) return; done = true; try { if (wid !== null) navigator.geolocation.clearWatch(wid); } catch {} clearInterval(iv); clearTimeout(tt);
-      res(best ? { lat:best.latitude, lng:best.longitude, acc:Math.round(best.accuracy) } : { err:err || 'timeout' }); };
-    const t0 = Date.now();
-    const iv = setInterval(() => { const sec = (Date.now() - t0) / 1000;             // good enough? stop early
-      if (best && ((best.accuracy <= 25) || (sec >= 2 && best.accuracy <= 100) || (sec >= 3.5 && best.accuracy <= 250) || (sec >= 5 && best.accuracy <= 500))) fin(); }, 250);
-    const tt = setTimeout(fin, 8000);
-    try {
-      wid = navigator.geolocation.watchPosition(
-        p => { if (!best || p.coords.accuracy < best.accuracy) best = p.coords; },
-        e => { err = e.code === 1 ? 'denied' : e.code === 2 ? 'unavailable' : 'timeout'; if (e.code === 1) fin(); },
-        { enableHighAccuracy:true, timeout:8000, maximumAge:0 });
-    } catch { err = 'unsupported'; fin(); }
-  });
-}
-async function placeOf(lat, lng){            // address of the GPS point (free OpenStreetMap, then BigDataCloud as backup)
-  const get = async (url, map) => { try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2500);
-    const r = await fetch(url, { signal:ac.signal }); clearTimeout(t); return map(await r.json()); } catch { return ''; } };
-  const uniq = arr => arr.filter((x, i) => x && arr.indexOf(x) === i).join(', ');
-  return await get(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=en&lat=${lat}&lon=${lng}`, j => {
-      const a = (j && j.address) || {}; if (!j || j.error) return '';
-      return uniq([a.road || a.pedestrian || a.neighbourhood, a.suburb || a.neighbourhood, a.city || a.town || a.village || a.county, a.state_district, a.state, a.postcode]);
-    })
-    || await get(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`,
-      j => j ? uniq([j.locality, j.city, j.principalSubdivision, j.postcode]) : '');
-}
-async function getIp(){
-  const tryUrl = async (url, map) => {
-    try { const ac = new AbortController(), t = setTimeout(() => ac.abort(), 2500);
-      const r = await fetch(url, { signal:ac.signal }); clearTimeout(t); return map(await r.json()); } catch { return null; }
-  };
-  const place = j => [j.city, j.region, j.country_code || j.country].filter(Boolean).join(', ');
-  return await tryUrl('https://ipwho.is/', j => (j && j.success !== false && j.ip) ? { ip:j.ip, city:place(j), lat:j.latitude, lng:j.longitude } : null)
-      || await tryUrl('https://ipapi.co/json/', j => (j && j.ip) ? { ip:j.ip, city:place(j), lat:j.latitude, lng:j.longitude } : null)
-      || {};
-}
-async function collectClient(fast){
+/* Location capture REMOVED: only device info (browser / OS / screen) is sent at sign-in. No GPS, no IP lookup, no address lookup. */
+async function collectClient(){
   let c = { deviceId: deviceId() };
-  if (fast){                                         // sign in right away: device info only, the location is added after login (see sendLoginLoc)
-    try { const u = uaInfo(await highEntropy()); c = { ...c, ...u, screen:`${screen.width}x${screen.height}@${window.devicePixelRatio || 1}`, tz:(Intl.DateTimeFormat().resolvedOptions().timeZone || '') }; } catch {}
-    c.noLoc = 1; return c;
-  }
-  try {
-    const [gps, ip, hi] = await Promise.all([gpsStart(), ipStart(), highEntropy()]);
-    _gpsP = null; _ipP = null;                                              // every sign-in takes a fresh fix
-    const u = uaInfo(hi);
-    c = { ...c, ...u, screen:`${screen.width}x${screen.height}@${window.devicePixelRatio || 1}`,
-      tz:(Intl.DateTimeFormat().resolvedOptions().timeZone || ''), ip:ip.ip || '', city:ip.city ? ip.city + ' (by IP)' : '' };
-    if (gps && gps.lat !== undefined){
-      // device location: GPS when the fix is within 100 m, otherwise Wi-Fi/network based (less exact)
-      Object.assign(c, { lat:gps.lat, lng:gps.lng, acc:gps.acc, src:gps.acc <= 100 ? 'GPS' : 'Network' });
-      const place = await Promise.race([placeOf(gps.lat, gps.lng), new Promise(r => setTimeout(() => r(''), 1800))]);   // never hold the sign-in for the street name
-      if (place) c.city = place;                               // the real address of the GPS point
-    } else {
-      c.locErr = (gps && gps.err) || '';
-      if (typeof ip.lat === 'number') Object.assign(c, { lat:ip.lat, lng:ip.lng, acc:'', src:'IP (approx.)' });   // only a rough guess - never counts as the user's real location
-    }
-  } catch {}
-  return c;
+  try { const u = uaInfo(await highEntropy()); c = { ...c, ...u, screen:`${screen.width}x${screen.height}@${window.devicePixelRatio || 1}`, tz:(Intl.DateTimeFormat().resolvedOptions().timeZone || '') }; } catch {}
+  c.noLoc = 1; return c;
 }
-
-/* the location is taken AFTER the login, in the background, and added to that login's entry in the Logins tab */
-async function sendLoginLoc(){
-  try { const c = await collectClient(); if (c.lat !== undefined && c.lat !== '' && S.token) await api('locUpdate', { client:c }); } catch {}
-}
+function sendLoginLoc(){}
 /* ---------- users & access (admin) ---------- */
 function permSummary(u){
   if (u.role === 'admin') return 'Full access';
@@ -1921,7 +1854,7 @@ const TH_ENUM = {
 const TH_NUM = { fs:[80,140], radius:[0,30], gap:[6,30], pad:[8,34], sbw:[180,340] };
 const TH_DEF = {
   mode:'light', brand:'#4f46e5', brand2:'#7c3aed', side:'', cust:{ light:{}, dark:{} },
-  fs:100, radius:16, gap:16, pad:20, sbw:240, maxw:'0', cols:'auto', card:'shadow', bg:'solid', ctl:'m', density:'normal', font:'sans', kpi:'170', motion:'on', sbPos:'left', nav:'full',
+  fs:100, radius:16, gap:16, pad:20, sbw:240, maxw:'0', cols:'auto', card:'shadow', bg:'solid', ctl:'m', density:'normal', font:'sans', kpi:'170', motion:'off', sbPos:'left', nav:'full',
   dash:{ hello:1, today:1, kpi:1, chart:1, table:1 }, menu:{ order:[], hide:[], label:{}, icon:{} }
 };
 const TH_T0 = {}; Object.keys(TITLES).forEach(k => { TH_T0[k] = TITLES[k][0]; });
@@ -2145,43 +2078,8 @@ function locTimeStr(tz){
   }catch(e){ return ''; }
 }
 const GEO = { busy:false, timer:null, key:'ks_geo_v3' };
-const geoGet = () => { try{ return JSON.parse(localStorage.getItem(GEO.key) || '{}') || {}; }catch(e){ return {}; } };
-const geoPut = o => { try{ localStorage.setItem(GEO.key, JSON.stringify(Object.assign(geoGet(), o))); }catch(e){} };
-async function geoSync(force){
-  if (GEO.busy || !S.token || !S.me || !S.me.id || !navigator.geolocation) return;
-  const g = geoGet();
-  if (!force && g.uid === S.me.id && Date.now() - (g.at || 0) < 25 * 60000) return;      // temperature is refreshed at most every ~25 min
-  GEO.busy = true;
-  try{
-    const pos = await new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy:true, timeout:15000, maximumAge:300000 }))
-      .catch(() => new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, { enableHighAccuracy:false, timeout:12000, maximumAge:900000 })));   // GPS first, network location as backup
-    const la = pos.coords.latitude.toFixed(3), lo = pos.coords.longitude.toFixed(3);       // ~100 m: exact enough for weather + place name, never the raw GPS
-    const jget = async url => { const ctl = typeof AbortController === 'function' ? new AbortController() : null, tm = ctl && setTimeout(() => ctl.abort(), 10000);
-      try{ const r = await fetch(url, ctl ? { signal:ctl.signal } : undefined); return await r.json(); } finally { if (tm) clearTimeout(tm); } };
-    const [w, g] = await Promise.all([                                                    // temperature + real place name at the same time
-      jget('https://api.open-meteo.com/v1/forecast?latitude=' + la + '&longitude=' + lo + '&current=temperature_2m&timezone=auto'),
-      jget('https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=' + la + '&longitude=' + lo + '&localityLanguage=en').catch(() => null)]);
-    const temp = w && w.current && w.current.temperature_2m, tz = w && w.timezone;
-    if (typeof temp !== 'number' || !tz) throw new Error('no weather');
-    const place = g && (g.locality || g.city || g.principalSubdivision) || '';              // e.g. "Rohini", "Patna" - the real place, not the time zone city
-    const city = g && g.city && g.city !== place ? g.city : '';
-    const loc = (place ? place + (city ? ', ' + city : '') : String(tz).split('/').pop().replace(/_/g, ' ')).slice(0, 60);
-    const out = await api('setMyLocation', { tz, loc, temp:Math.round(temp) });
-    S.myLoc = { uid:S.me.id, tz:out.tz || tz, loc:out.loc || loc, temp:out.temp }; if (S.chat) S.chat.meTz = out.tz || tz;
-    geoPut({ uid:S.me.id, at:Date.now() });
-  }catch(e){ geoPut({ uid:S.me && S.me.id, at:Date.now() - 20 * 60000 }); }              // try again in ~5 min
-  finally{ GEO.busy = false; }
-}
-async function geoStart(){
-  if (!navigator.geolocation || !S.token) return;
-  let st = 'prompt', perm = null;
-  try{ perm = await navigator.permissions.query({ name:'geolocation' }); st = perm.state; }catch(e){}
-  if (perm && !perm.__ks){ perm.__ks = 1; perm.onchange = () => { if (perm.state === 'granted') geoSync(true); }; }   // user allows it later in the browser settings
-  if (st === 'denied') return;
-  if (st === 'prompt'){ if (geoGet().asked) return; geoPut({ asked:1 }); }                  // the browser asks only once; no repeated pop-ups
-  await geoSync(false);
-  clearInterval(GEO.timer); GEO.timer = setInterval(() => { if (!document.hidden) geoSync(false); }, 10 * 60000);
-}
+async function geoSync(){}
+async function geoStart(){}
 /* the other person's temperature + local time, e.g. "🌡 28°C · 🕐 4:15 PM · Kolkata" */
 function chatLocLine(u){
   if (!u || u.isGroup) return '';
@@ -5859,8 +5757,8 @@ function chatReset(){ clearInterval(chatTimer); chatTimer = null; clearInterval(
 function chatStart(){
   clearInterval(chatTimer);
   chatLoadUsers();                                    // also tells the server "I am online"
-  chatTimer = setInterval(chatTick, 4000);
-  clearInterval(chatLiveT); chatLiveT = setInterval(chatLivePoll, 1500);      // fast lane: new messages + ticks of the open chat
+  chatTimer = setInterval(chatTick, 8000);
+  clearInterval(chatLiveT); chatLiveT = setInterval(chatLivePoll, 3000);      // fast lane: new messages + ticks of the open chat
 }
 /* silent request (no top progress bar) — used for polling and sending */
 async function chatApi(action, payload = {}){
@@ -8039,7 +7937,7 @@ async function vcTick(){
   } catch (e) { chatErr(e); }
   finally { VC.polling = false; }
 }
-function vcStart(){ clearInterval(VC.timer); VC.timer = setInterval(vcTick, 1500); }
+function vcStart(){ clearInterval(VC.timer); VC.timer = setInterval(vcTick, 3000); }
 function vcReset(){ clearInterval(VC.timer); VC.timer = null; if (VC.cid || VC.incoming || VC.busy) { VC.ending = false; vcEnd('', true); } else vcCleanup(); }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) vcTick(); });
 
@@ -8207,7 +8105,7 @@ async function ludoTick(force){
   if (!S.token || !S.d || LU.polling) return;
   const inGame = !!LU.gid;
   if (!inGame && !force){
-    if (LU.busy || document.hidden || Date.now() - LU.idleAt < 2000) return;
+    if (LU.busy || document.hidden || Date.now() - LU.idleAt < 10000) return;
     LU.idleAt = Date.now();
   }
   LU.polling = true;

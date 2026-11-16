@@ -31,7 +31,7 @@
     { g:'card', id:'bi', l:'Fingerprint button',           sel:'#bioBtn',               d:'👆 Unlock with fingerprint / face',  px:15, dc:'#cfe0ff', nohide:1 },
     { g:'card', id:'fo', l:'“Don’t have an account?” line', sel:'.lg-foot',             d:'Don’t have an account?', tn:'r',    px:13.5, dc:'#c3d0e8' },
     { g:'card', id:'fl', l:'“Ask your admin” (link part)', sel:'.lg-foot b',            d:'Ask your admin',                     px:13.5, dc:'#38bdf8' },
-    { g:'card', id:'nt', l:'Security note at the bottom',  sel:'.note',                 d:'🔒 For security, your sign-in time, location and device are recorded for the admin.', px:11.5, dc:'#7f90ad' }
+    { g:'card', id:'nt', l:'Security note at the bottom',  sel:'.note',                 d:'🔒 For security, your sign-in time and device are recorded for the admin.', px:11.5, dc:'#7f90ad' }
   ];
   var COLS = [
     ['heroA', 'Left side – colour 1', '#12234a'], ['heroB', 'Left side – colour 2', '#0a1020'],
