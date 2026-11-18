@@ -942,7 +942,7 @@ function activityDetail_(a, req) {
     if (a === 'saveUser') return req.username || req.name || '';
     if (a === 'deleteUser' || a === 'deleteEmployee' || a === 'kickUser') return String(req.id || req.uid || '');
     if (a === 'addPw' || a === 'updatePw') return req.site || req.url || '';
-    if (a === 'addLink' || a === 'updateLink') return req.name || '';
+    if (a === 'addLink' || a === 'updateLink') return '';   // link names are private: never written in the activity log
     if (a === 'addDevice' || a === 'updateDevice') return req.name || '';
     if (a === 'addDevNote' || a === 'updateDevNote') return req.title || '';
     if (a === 'addVcs') return String(req.title || '').slice(0, 60);
@@ -2530,20 +2530,38 @@ function deletePw_(req) {
 
 // Links: Movie / Web Series / Anime bookmarks (every user only sees / changes their own rows)
 var LINK_TYPES = { Movie: 1, 'Web Series': 1, Anime: 1 };
+// Name / Type / Link are stored ENCRYPTED in the sheet (AES-256-GCM by server.js, text starts with "enc:"), so nobody can read them there.
+// Old plain rows are encrypted automatically the next time Links are read.
+function lkEnc_(v) {
+  v = String(v == null ? '' : v);
+  if (v === '' || v.indexOf('enc:') === 0 || typeof ksEnc_ !== 'function') return v;
+  return 'enc:' + ksEnc_(v);
+}
+function lkDec_(v) {
+  v = String(v == null ? '' : v);
+  if (v.indexOf('enc:') !== 0 || typeof ksDec_ !== 'function') return v;
+  return ksDec_(v.slice(4));
+}
 function readLink_() {
   var sh = ownedSheet_('LINK', 5);
   var last = sh.getLastRow();
   if (last < 2) return [];
   var vals = sh.getRange(2, 1, last - 1, 5).getValues();
-  var out = [], dirty = false;
+  var out = [], dirty = false, plain = false;
   vals.forEach(function (r) {
     if (r[0] === '' && r[1] === '' && r[2] === '') return;
     var id = String(r[3] || '').trim();
     if (!id) { id = Utilities.getUuid().slice(0, 8); r[3] = id; dirty = true; }
+    if (typeof ksEnc_ === 'function') for (var c = 0; c < 3; c++) if (String(r[c]) !== '' && String(r[c]).indexOf('enc:') !== 0) plain = true;
     if (ownerOf_(r[4]) !== CTX.owner) return;
-    out.push({ id: id, name: String(r[0]), type: String(r[1]), link: String(r[2]) });
+    out.push({ id: id, name: lkDec_(r[0]), type: lkDec_(r[1]), link: lkDec_(r[2]) });
   });
   if (dirty) sh.getRange(2, 4, vals.length, 1).setValues(vals.map(function (r) { return [r[3]]; }));
+  if (plain) {                                                   // one-time: lock the old readable rows
+    var rg = sh.getRange(2, 1, vals.length, 3);
+    rg.setNumberFormat('@');
+    rg.setValues(vals.map(function (r) { return [lkEnc_(r[0]), lkEnc_(r[1]), lkEnc_(r[2])]; }));
+  }
   return out;
 }
 function validLink_(req) {
@@ -2571,7 +2589,7 @@ function addLink_(req) {
   var id = Utilities.getUuid().slice(0, 8);
   var rng = sh.getRange(row, 1, 1, 5);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.type, p.link, id, CTX.owner]]);
+  rng.setValues([[lkEnc_(p.name), lkEnc_(p.type), lkEnc_(p.link), id, CTX.owner]]);
   p.id = id;
   return { ok: true, link: p };
 }
@@ -2582,7 +2600,7 @@ function updateLink_(req) {
   if (row < 0) fail_('Entry not found. Please refresh.');
   var rng = sh.getRange(row, 1, 1, 3);
   rng.setNumberFormat('@');
-  rng.setValues([[p.name, p.type, p.link]]);
+  rng.setValues([[lkEnc_(p.name), lkEnc_(p.type), lkEnc_(p.link)]]);
   p.id = String(req.id);
   return { ok: true, link: p };
 }

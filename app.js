@@ -710,8 +710,7 @@ const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', t
    A normal site (gstatic) must load first, so being offline never counts as "AdGuard".  Set DNS_REQUIRED = false to show Links always. */
 const DNS_REQUIRED = true;
 const DNS_TEST = ['https://googleads.g.doubleclick.net/pagead/id', 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js', 'https://adservice.google.com/'];
-const DNSOK = { ok: !DNS_REQUIRED };
-try { if (DNS_REQUIRED){ const c = JSON.parse(sessionStorage.getItem('ks_adg') || 'null'); if (c && Date.now() - c.at < 5 * 60000) DNSOK.ok = !!c.ok; } } catch(e){}
+const DNSOK = { ok: !DNS_REQUIRED };      // hidden until the check below has proven AdGuard DNS (nothing is remembered between refreshes)
 function dnsProbe(u){                              // 'ok' = reached, 'blocked' = lookup failed, 'slow' = no answer in time (unknown)
   return new Promise(res => {
     const c = new AbortController(), t = setTimeout(() => { c.abort(); res('slow'); }, 5000);
@@ -722,11 +721,9 @@ let dnsBusy = false;
 async function dnsCheck(){
   if (!DNS_REQUIRED || dnsBusy) return; dnsBusy = true;
   try {
-    if (await dnsProbe('https://www.gstatic.com/generate_204') !== 'ok') return;      // offline / very slow: keep the last answer
-    const r = await Promise.all(DNS_TEST.map(dnsProbe));
-    if (r.includes('slow') && !r.includes('blocked')) return;
-    const ok = r.includes('blocked');
-    try { sessionStorage.setItem('ks_adg', JSON.stringify({ ok, at: Date.now() })); } catch(e){}
+    const ctl = await dnsProbe('https://www.gstatic.com/generate_204');
+    const r = ctl === 'ok' ? await Promise.all(DNS_TEST.map(dnsProbe)) : [];
+    const ok = r.includes('blocked');                    // anything else (no AdGuard, offline, slow) = Links hidden
     if (ok !== DNSOK.ok){
       DNSOK.ok = ok;
       if (S.token && S.d){ const was = S.view; applyAccess(); if (S.view !== was) go(S.view); }
