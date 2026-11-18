@@ -170,7 +170,7 @@ function saveToken(t, remember){
   S.token = t;
   store.set(TK, t, true);                 // always kept on the phone: only the Log out button signs a user out
 }
-function clearToken(){ S.token = null; store.del(TK); }
+function clearToken(){ S.token = null; store.del(TK); try { localStorage.removeItem('ks_boot_v1'); } catch(e){} }
 function forceLogout(msg){
   liveReset(); clearInterval(syncT); syncT = null; setMenu(false);
   clearToken(); S.d = null; S.me = null; S.as = null; S.users = null; S.logs = null; S.photos = null; DEP.st = null; clearInterval(licTimer); licTimer = null; S.licAlerted = false; DEP.files = null; DEP.hist = null; DEP.prog = null; clearInterval(DEP.timer); UPD.items = null; UPD.open = false; S.view = 'dashboard'; S.setSec = null; closeModals(); chatReset(); vcReset(); ludoReset(); mailReset(); try { if (window.tgReset) tgReset(); } catch(e) {} try { if (window.waReset) waReset(); } catch(e) {} try { if (window.musicReset) musicReset(); } catch(e) {} try { if (window.youtubeReset) youtubeReset(); } catch(e) {}
@@ -467,11 +467,28 @@ $('#resetForm').addEventListener('submit', async ev => {
 });
 function showLoginErr(m){ const er = $('#loginErr'); er.textContent = m; er.classList.remove('hidden'); }
 
+/* Fast open: the last data is kept on this device so the home page shows at once; fresh data replaces it a moment later.
+   Passwords are never kept here, and it is wiped on sign-out. */
+const BOOTK = 'ks_boot_v1';
+function bootSave(d){
+  try {
+    if (S.as || !S.token || !d) return;
+    const c = Object.assign({}, d); delete c.passwords;
+    localStorage.setItem(BOOTK, JSON.stringify({ k: String(S.token).slice(-24), at: Date.now(), d: c }));
+  } catch(e){ try { localStorage.removeItem(BOOTK); } catch(x){} }
+}
+function bootLoad(t){
+  try {
+    const c = JSON.parse(localStorage.getItem(BOOTK) || 'null');
+    if (c && c.d && c.k === String(t).slice(-24) && Date.now() - c.at < 7 * 864e5) return c.d;
+  } catch(e){}
+  return null;
+}
 async function loadAll(){
   let r;
   try { r = await api('getAll'); }
   catch(e){ if (S.as && e.code !== 'AUTH'){ S.as = null; r = await api('getAll'); } else throw e; }   // the user being viewed was deleted
-  S.sig = sigOf(r.data); ingest(r.data);
+  S.sig = sigOf(r.data); ingest(r.data); setTimeout(() => bootSave(r.data), 300);
   const jobs = [];
   if (canAddUsers()) jobs.push(loadUsers()); else S.users = null;
   if (isAdmin()) jobs.push(loadGroups()); else S.groups = null;
@@ -502,7 +519,7 @@ async function syncTick(){
   if (!r || !r.ok || !S.d || document.querySelector('.overlay') || typing()) return;     // never disturb someone who is typing
   const sg = sigOf(r.data);
   if (sg === S.sig) return;
-  S.sig = sg; ingest(r.data); refreshUser(); applyAccess(); render();
+  S.sig = sg; ingest(r.data); setTimeout(() => bootSave(r.data), 300); refreshUser(); applyAccess(); render();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden && syncT) syncTick(); });
 const emp = () => (S.d.employees || []).find(e => e.id === S.emp) || { id:'', name:'', designation:'', salary:0, basis:0 };
@@ -640,16 +657,25 @@ async function boot(){
     $('#view').innerHTML = '<div class="skel-kpis"><i class="skel"></i><i class="skel"></i><i class="skel"></i><i class="skel"></i></div><div class="card"><div class="skel-box"><i class="skel w60"></i><i class="skel"></i><i class="skel w80"></i><i class="skel w40"></i></div></div>';
     /* Only a real "session is invalid" answer signs the user out. A sleeping / slow server (Render free sleeps after 15 min) or a bad
        network just means: wait and try again - the saved login is kept. */
-    let bad = false;
+    let bad = false, warm = false;
+    const cd = bootLoad(t);                       // saved copy of the last visit -> the home page opens instantly
+    if (cd){ try { ingest(cd); S.sig = ''; applyAccess(); enterApp(); warm = true; } catch(e){ warm = false; } }
     for (let i = 0; i < 8; i++){
-      try { await loadAll(); enterApp(); return; }
+      try {
+        await loadAll();
+        if (warm){ try { refreshUser(); if (!typing() && !document.querySelector('.overlay')) render(); } catch(e){} }
+        else enterApp();
+        return;
+      }
       catch(e){
         if (e && e.code === 'AUTH'){ bad = true; break; }
         if (e && (e.code === 'EXPIRED' || e.code === 'PAYDUE')) return;
-        if (i === 1) $('#view').insertAdjacentHTML('beforeend', '<p class="muted" id="wakeMsg" style="text-align:center;margin:18px">⏳ Server is waking up… please wait, you stay signed in.</p>');
+        if (i === 1 && !warm) $('#view').insertAdjacentHTML('beforeend', '<p class="muted" id="wakeMsg" style="text-align:center;margin:18px">⏳ Server is waking up… please wait, you stay signed in.</p>');
         await new Promise(r => setTimeout(r, Math.min(2000 * (i + 1), 8000)));
       }
     }
+    if (!bad && warm) return;                     // offline: keep showing the saved copy
+    if (bad && warm){ try { forceLogout(); } catch(e){} return; }
     if (!bad){
       $('#view').innerHTML = '<div class="card" style="text-align:center"><h3>Cannot reach the server</h3><p class="muted">You are still signed in. Check your internet and try again.</p><button class="btn" onclick="location.reload()">Try again</button></div>';
       return;

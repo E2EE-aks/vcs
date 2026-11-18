@@ -54,7 +54,7 @@ function makeApp(store, env) {
   };
 
   // ---------- Google Calendar (per-user OAuth; refresh tokens encrypted in the sheet) ----------
-  const REFRESH = Number(env.REFRESH_SECONDS || 20) * 1000;
+  const REFRESH = Number(env.REFRESH_SECONDS || 300) * 1000;   // whole-sheet reload interval (was 20 s: every poll after 20 s idle re-downloaded ALL sheets = slow). All app writes go through this server's memory, so 5 min is safe.
   const calKey = crypto.createHash('sha256').update('cal:' + secret).digest();
   const enc = t => { const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', calKey, iv);
     const ct = Buffer.concat([c.update(String(t), 'utf8'), c.final()]); return Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64url'); };
@@ -1463,7 +1463,7 @@ function makeApp(store, env) {
     if (r0 && r0.action === 'chatSend') p.then(res => { if (res && res.ok) PUSH.chat(r0, res).catch(e => warn('push', e && e.message)); }, () => {});
     return p;
   };
-  return { handle,
+  return { handle, warm: () => withWb(async () => {}),   // load the sheet right at start-up so the first visitor does not wait for it
            waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r),
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            rtMax: RT_MAX, rtRe: RT_MIME, rtUp: (t, q, b) => rtUpload(t, q, b).catch(errOut),
@@ -1604,5 +1604,11 @@ if (require.main === module) {
   if (!email || !key || !env.SHEET_ID) { console.error('Set GOOGLE_SERVICE_ACCOUNT_JSON and SHEET_ID.'); process.exit(1); }
   const { GoogleStore } = require('./google-store');
   const app = makeApp(new GoogleStore({ email, key, sheetId: env.SHEET_ID }), Object.assign({}, env, { GOOGLE_PRIVATE_KEY: key }));
-  start(app, env).listen(env.PORT || 3000, () => console.log('API running on port ' + (env.PORT || 3000)));
+  start(app, env).listen(env.PORT || 3000, () => {
+    console.log('API running on port ' + (env.PORT || 3000));
+    app.warm().then(() => console.log('Sheet pre-loaded'), e => console.warn('pre-load failed', e && e.message));
+    // Render free sleeps after 15 min without visitors (cold start = ~1 min). Calling our own public address keeps it awake.
+    const self = env.RENDER_EXTERNAL_URL || env.PUBLIC_URL;
+    if (self && env.KEEP_AWAKE !== '0') setInterval(() => { fetch(String(self).replace(/\/+$/, '') + '/?ka=1').catch(() => {}); }, 10 * 60 * 1000);
+  });
 }
