@@ -705,13 +705,44 @@ function deny(){ toast('You have view-only access to this section', true); }
 const SECT = { attendance:'att', expenses:'exp', work:'work', timetable:'tt', passwords:'pw', links:'link', lic:'lic', vcs:'vcs', rack:'rack' };
 const SECT_NAME = { attendance:'Attendance', expenses:'Expenses', work:'Work', timetable:'Time Table', passwords:'Passwords', links:'Links', lic:'LIC', vcs:'VCS Complaints', rack:'Rack Mapping' };
 
+/* ---------- Links tab only when this device uses AdGuard DNS ----------
+   How it knows: AdGuard DNS blocks ad domains (the lookup fails at once). Without AdGuard DNS they load normally.
+   A normal site (gstatic) must load first, so being offline never counts as "AdGuard".  Set DNS_REQUIRED = false to show Links always. */
+const DNS_REQUIRED = true;
+const DNS_TEST = ['https://googleads.g.doubleclick.net/pagead/id', 'https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js', 'https://adservice.google.com/'];
+const DNSOK = { ok: !DNS_REQUIRED };
+try { if (DNS_REQUIRED){ const c = JSON.parse(sessionStorage.getItem('ks_adg') || 'null'); if (c && Date.now() - c.at < 5 * 60000) DNSOK.ok = !!c.ok; } } catch(e){}
+function dnsProbe(u){                              // 'ok' = reached, 'blocked' = lookup failed, 'slow' = no answer in time (unknown)
+  return new Promise(res => {
+    const c = new AbortController(), t = setTimeout(() => { c.abort(); res('slow'); }, 5000);
+    fetch(u, { mode: 'no-cors', cache: 'no-store', signal: c.signal }).then(() => { clearTimeout(t); res('ok'); }, () => { clearTimeout(t); res(c.signal.aborted ? 'slow' : 'blocked'); });
+  });
+}
+let dnsBusy = false;
+async function dnsCheck(){
+  if (!DNS_REQUIRED || dnsBusy) return; dnsBusy = true;
+  try {
+    if (await dnsProbe('https://www.gstatic.com/generate_204') !== 'ok') return;      // offline / very slow: keep the last answer
+    const r = await Promise.all(DNS_TEST.map(dnsProbe));
+    if (r.includes('slow') && !r.includes('blocked')) return;
+    const ok = r.includes('blocked');
+    try { sessionStorage.setItem('ks_adg', JSON.stringify({ ok, at: Date.now() })); } catch(e){}
+    if (ok !== DNSOK.ok){
+      DNSOK.ok = ok;
+      if (S.token && S.d){ const was = S.view; applyAccess(); if (S.view !== was) go(S.view); }
+    }
+  } catch(e){} finally { dnsBusy = false; }
+}
+setTimeout(dnsCheck, 300); setInterval(() => { if (!document.hidden) dnsCheck(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) dnsCheck(); });
+window.addEventListener('online', dnsCheck);
 function applyAccess(){
   const p = perms();
   const hide = (v, h) => { const b = document.querySelector(`#nav [data-v="${v}"]`); if (b) b.classList.toggle('hidden', h); };
   const chatOnly = ['att','exp','work','pw','link','lic','vcs','rack','tt'].every(k => p[k] === 'none') && !isAdmin();
   hide('dashboard', chatOnly);
-  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none'); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', true); hide('updates', !!(S.me && S.me.primary)); hide('pay', !(S.me && S.me.primary));
-  if ((SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary)) || (S.view === 'pay' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
+  hide('attendance', p.att === 'none'); hide('expenses', p.exp === 'none'); hide('work', p.work === 'none'); hide('timetable', p.tt === 'none'); hide('passwords', p.pw === 'none'); hide('links', p.link === 'none' || !DNSOK.ok); hide('lic', p.lic === 'none'); hide('vcs', p.vcs === 'none'); hide('rack', true); hide('logins', !isAdmin()); hide('deploy', !(S.me && S.me.primary)); hide('version', true); hide('updates', !!(S.me && S.me.primary)); hide('pay', !(S.me && S.me.primary));
+  if ((S.view === 'links' && !DNSOK.ok) || (SECT[S.view] && p[SECT[S.view]] === 'none') || (S.view === 'logins' && !isAdmin()) || (S.view === 'deploy' && !(S.me && S.me.primary)) || (S.view === 'version' && !(S.me && S.me.primary)) || (S.view === 'pay' && !(S.me && S.me.primary))) S.view = chatOnly ? 'chat' : 'dashboard';
   try { if (S.me && S.me.primary && (S.view === 'version' || S.view === 'updates')){ DEP.tab = S.view; S.view = 'deploy'; } } catch(e){}   // Version + Updates live inside Deploy for the main admin
   try { if (S.me && S.me.primary && localStorage.getItem('ks_apk_chain')) akcResume(); } catch(e){}
   if (S.view === 'livechat' && !(S.me && S.me.primary)) S.view = chatOnly ? 'chat' : 'dashboard';
@@ -2587,7 +2618,7 @@ function dashSearch(q){
   if (P.work !== 'none') add('Work', (D.work || []).filter(x => hit([x.date, x.name, x.product, x.number].join(' '))).sort((a, b) => String(b.date).localeCompare(String(a.date)))
     .map(x => row('🛠️', x.name || '—', [fmtDateNice(x.date), x.product, x.number].filter(Boolean).join(' · '), `go('work')`)));
   if (P.pw !== 'none') add('Passwords', (D.passwords || []).filter(x => hit([x.url, x.user].join(' '))).map(x => row('🔑', x.url || '—', x.user || '', `go('passwords')`)));
-  if (P.link !== 'none') add('Links', (D.links || []).filter(x => hit([x.name, x.type, x.link].join(' '))).map(x => row('🔗', x.name || '—', [x.type, x.link].filter(Boolean).join(' · '), `go('links')`)));
+  if (P.link !== 'none' && DNSOK.ok) add('Links', (D.links || []).filter(x => hit([x.name, x.type, x.link].join(' '))).map(x => row('🔗', x.name || '—', [x.type, x.link].filter(Boolean).join(' · '), `go('links')`)));
   box.classList.remove('hidden');
   box.innerHTML = groups.length ? groups.map(g => `<div class="dsrch-g">${esc(g[0])}</div>${g[1].join('')}`).join('') : '<div class="empty-state">Nothing found</div>';
 }
