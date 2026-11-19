@@ -225,6 +225,37 @@ jobs:
                   return "err " + e.getMessage();
                 }
               }
+              @android.webkit.JavascriptInterface
+              public String saveImg(String name, String mime, String b64, String album) {
+                try {
+                  byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                  String safe = (name == null || name.length() == 0) ? "page.png" : name.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  if (mime == null || mime.length() == 0) mime = "image/png";
+                  String alb = (album == null || album.length() == 0) ? "PDF Pages" : album.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  java.io.OutputStream o;
+                  if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, safe);
+                    v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime);
+                    v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/" + alb);
+                    android.net.Uri u = c.getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+                    o = c.getContentResolver().openOutputStream(u);
+                    o.write(data);
+                    o.close();
+                  } else {
+                    java.io.File d = new java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), alb);
+                    d.mkdirs();
+                    java.io.File f = new java.io.File(d, safe);
+                    o = new java.io.FileOutputStream(f);
+                    o.write(data);
+                    o.close();
+                    android.media.MediaScannerConnection.scanFile(c, new String[]{ f.getAbsolutePath() }, new String[]{ mime }, null);
+                  }
+                  return "ok";
+                } catch (Exception e) {
+                  return "err " + e.getMessage();
+                }
+              }
             }
             private void ksDl() {
               try {
