@@ -1357,7 +1357,10 @@ function vDeployMain(){
         <input class="input" type="file" id="depFolder" webkitdirectory directory multiple>
         <label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0 0;cursor:pointer"><input type="checkbox" id="depStrip" checked style="margin-top:3px"><span>Don't create the folder's own name in the repository (its files go straight inside the repository / the sub-folder below)</span></label>
         <input class="input" id="depPrefix" style="margin-top:6px" placeholder="Upload into a sub-folder (optional), e.g. assets" autocapitalize="off" autocorrect="off" spellcheck="false">
-        <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">.git, node_modules and .DS_Store are skipped automatically. Some phone browsers (Android Chrome) cannot pick a folder — use a computer there, or choose the files above.</div></div>
+        <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">Phone browsers cannot pick a folder — use the ZIP option below.</div>
+        <label style="display:block;margin-top:10px;font-weight:600">🗜️ Or a ZIP of the folder <span class="muted" style="font-weight:400">(works on phone too — every file inside is uploaded with its sub-folders)</span></label>
+        <input class="input" type="file" id="depZip" accept=".zip,application/zip,application/x-zip-compressed">
+        <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">The two options below apply to the folder and the ZIP. .git, node_modules and .DS_Store are skipped automatically.</div></div>
       <label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0;cursor:pointer"><input type="checkbox" id="depAuto" ${akcOn() ? 'checked' : ''} style="margin-top:3px"><span>After both Render deploys are live: <b>build the APK</b> from all app files (Version) and <b>upload it to Updates</b> automatically (everyone gets a notification)</span></label>
       <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 6px 26px;cursor:pointer"><input type="checkbox" id="depInc" ${akcFlag('ks_apk_inc') ? 'checked' : ''} style="margin-top:3px"><span>Version number +1 on every auto build (1.0 → 1.1 → 1.2)</span></label>
       <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 10px 26px;cursor:pointer"><input type="checkbox" id="depClean" ${akcFlag('ks_apk_clean') ? 'checked' : ''} style="margin-top:3px"><span>Delete the old builds of this app afterwards (keeps the new one; clones are not touched)</span></label>
@@ -1583,11 +1586,34 @@ async function akcClean(c, b){
 }
 const depB64 = buf => { const u = new Uint8Array(buf); let out = ''; for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(out); };
 const depFromB64 = b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
+/* ---- read a ZIP inside the browser (so a folder can be uploaded from a phone: pick the ZIP, every file inside goes to GitHub) ---- */
+async function depUnzip(file){
+  if (typeof DecompressionStream === 'undefined') throw new Error('this browser cannot open ZIP files (update Chrome/Safari)');
+  const buf = await file.arrayBuffer(), dv = new DataView(buf), u8 = new Uint8Array(buf), td = new TextDecoder('utf-8');
+  let e = -1; for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 70000); i--){ if (dv.getUint32(i, true) === 0x06054b50){ e = i; break; } }
+  if (e < 0) throw new Error('this is not a valid ZIP file');
+  const n = dv.getUint16(e + 10, true); let p = dv.getUint32(e + 16, true); const out = [];
+  for (let k = 0; k < n; k++){
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const method = dv.getUint16(p + 10, true), csz = dv.getUint32(p + 20, true), usz = dv.getUint32(p + 24, true), nl = dv.getUint16(p + 28, true), el = dv.getUint16(p + 30, true), cl = dv.getUint16(p + 32, true), lo = dv.getUint32(p + 42, true);
+    const name = td.decode(u8.subarray(p + 46, p + 46 + nl)); p += 46 + nl + el + cl;
+    if (name.endsWith('/') || /^__MACOSX\//.test(name)) continue;
+    out.push({ name:name.split('/').pop(), webkitRelativePath:name, size:usz, arrayBuffer: async () => {
+      const ds = lo + 30 + dv.getUint16(lo + 26, true) + dv.getUint16(lo + 28, true), raw = buf.slice(ds, ds + csz);
+      if (method === 0) return raw;
+      if (method !== 8) throw new Error(name + ': unsupported ZIP compression');
+      return new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+    } });
+  }
+  if (!out.length) throw new Error('the ZIP has no files');
+  return out;
+}
 async function depReview(){
   const T = depTgt(), MB = 1024 * 1024;
   const fl = [...(document.getElementById('depFiles').files || [])];
-  const fo = document.getElementById('depFolder'), fl2 = fo ? [...(fo.files || [])] : [];
-  if (!fl.length && !fl2.length) return toast('Choose the files or a folder to publish first', true);
+  const fo = document.getElementById('depFolder'), fz = document.getElementById('depZip'), fl2 = fo ? [...(fo.files || [])] : [];
+  if (fz && fz.files && fz.files[0]){ try { fl2.push(...await depUnzip(fz.files[0])); } catch(e){ return toast('Could not read the ZIP: ' + e.message, true); } }
+  if (!fl.length && !fl2.length) return toast('Choose the files, a folder or a ZIP to publish first', true);
   if (!T.repo) return toast('Choose a repository first', true);
   if (!T.main && DEP.pubFiles === null) await depPubLoad();
   const existing = T.main ? (DEP.files || []) : (DEP.pubFiles || []), exSet = new Set(existing.map(x => x.path));
@@ -1647,7 +1673,7 @@ async function depReview(){
       else {
         toast(T.main ? 'Published ' + res.changed.length + ' file' + (res.changed.length === 1 ? '' : 's') + ' — watch the Live status card'
           : '✅ Published ' + res.changed.length + ' file' + (res.changed.length === 1 ? '' : 's') + ' to ' + T.repo + (res.branch ? ' (' + res.branch + ')' : ''));
-        document.getElementById('depFiles').value = ''; if (fo) fo.value = '';
+        document.getElementById('depFiles').value = ''; if (fo) fo.value = ''; if (fz) fz.value = '';
       }
       if (res.warnings && res.warnings.length) setTimeout(() => toast('⚠ Published, but check: ' + res.warnings.join(' | '), true), 1200);
       if (T.main){ await depLoad(); if (!res.unchanged) depWatch(); }
