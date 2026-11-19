@@ -1048,6 +1048,64 @@ function makeApp(store, env) {
   }
   { const t = setInterval(() => failWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
 
+  // ---------- LIC alert on WhatsApp: when a premium falls due (or a policy matures) a WhatsApp message goes to the agent's number ----------
+  // Env (optional): LIC_WA_TO = number (default 9621755459) · LIC_WA_AT = "08:00" (24 h, server TZ, default Asia/Kolkata) · LIC_WA_BEFORE = "0" or e.g. "3,0" = days before the due date to also remind.
+  // The message is sent from the main admin's linked WhatsApp (WhatsApp tab > Connect). If WhatsApp is not linked/connected the server simply tries again every minute, so nothing is lost.
+  const LICW_TO = String(env.LIC_WA_TO || '9621755459'), LICW_AT = /^\d\d:\d\d$/.test(String(env.LIC_WA_AT || '')) ? String(env.LIC_WA_AT) : '08:00';
+  const LICW_BEFORE = String(env.LIC_WA_BEFORE || '0').split(',').map(x => parseInt(x, 10)).filter(x => x >= 0 && x <= 30);
+  const LICW_STEP = { monthly: 1, quarterly: 3, halfyearly: 6, yearly: 12 };
+  const licIso_ = d => d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+  function licAdd_(iso, n) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); if (!m) return ''; const mo = +m[2] - 1 + n, last = new Date(Date.UTC(+m[1], mo + 1, 0)).getUTCDate(); return licIso_(new Date(Date.UTC(+m[1], mo, Math.min(+m[3], last)))); }
+  function licDiff_(a, b) { const A = a.split('-').map(Number), B = b.split('-').map(Number); return Math.round((Date.UTC(B[0], B[1] - 1, B[2]) - Date.UTC(A[0], A[1] - 1, A[2])) / 86400000); }
+  function licNext_(x, today) {                                          // same rule as the LIC tab: next premium date, today or later
+    const anchor = x.dueDate || x.startDate, step = LICW_STEP[x.freq]; if (!anchor || (!step && !x.dueDate)) return '';
+    let due = anchor;
+    if (step) { for (let k = 1; due < today && k < 2400; k++) due = licAdd_(anchor, k * step); } else if (due < today) return '';
+    if (x.endDate && due > x.endDate) return '';
+    return due;
+  }
+  const licRs_ = n => '₹' + Number(n || 0).toLocaleString('en-IN');
+  const licD_ = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? (+m[3]) + '-' + m[2] + '-' + m[1] : iso; };
+  let licwBusy = false;
+  async function licWatch() {
+    const n = attNow();
+    if (licwBusy || n.hm < LICW_AT || n.hm >= '22:00' || !WA.isOpen('ADMIN')) return;      // only once the daily time has come and WhatsApp is connected
+    licwBusy = true;
+    try {
+      const todo = await withWb(() => {
+        const P = globalThis.PropertiesService.getScriptProperties(), s = globalThis.readSettings_().values, a = globalThis.getAccount_('ADMIN', s);
+        if (!a) return [];
+        globalThis.buildCtx_(a.id);
+        let sent = {}; try { sent = JSON.parse(P.getProperty('LIC_WA_SENT') || '{}') || {}; } catch (e) {}
+        const out = [];
+        for (const x of globalThis.readLic_()) {
+          const who = (x.name || 'Policy') + (x.policyNo ? ' (' + x.policyNo + ')' : '');
+          const due = licNext_(x, n.date);
+          if (due) for (const b of LICW_BEFORE) {
+            if (licDiff_(n.date, due) !== b) continue;
+            const key = 'p|' + x.id + '|' + due + '|' + b; if (sent[key]) continue;
+            out.push({ key, text: (b === 0 ? '⚠️ *LIC Premium aaj due hai*' : '🔔 *LIC Premium ' + b + ' din me due*') + '\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n💰 Premium: ' + licRs_(x.amount) + (x.freq ? ' (' + x.freq + ')' : '') + '\n📅 Due date: ' + licD_(due) + (x.phone ? '\n📞 ' + x.phone : '') });
+          }
+          if (x.endDate && x.endDate === n.date) {                         // policy end / maturity date reached
+            const key = 'm|' + x.id + '|' + x.endDate; if (!sent[key]) out.push({ key, text: '✅ *LIC Policy aaj mature / expire ho rahi hai*\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n📅 End date: ' + licD_(x.endDate) + (x.totalAmount ? '\n💰 Amount: ' + licRs_(x.totalAmount) : '') + (x.phone ? '\n📞 ' + x.phone : '') });
+          }
+        }
+        return out;
+      });
+      for (const t of todo) {
+        try { await WA.sendText('ADMIN', LICW_TO, t.text); }
+        catch (e) { warn('LIC WhatsApp alert', e && e.message); break; }              // not sent -> not marked -> tried again next minute
+        await withWb(() => {                                                         // mark as sent only after it really went out (never twice)
+          const P = globalThis.PropertiesService.getScriptProperties(); let sent = {}; try { sent = JSON.parse(P.getProperty('LIC_WA_SENT') || '{}') || {}; } catch (e) {}
+          sent[t.key] = n.date; const keep = {}; Object.keys(sent).filter(k => licDiff_(sent[k], n.date) <= 60).forEach(k => { keep[k] = sent[k]; });
+          P.setProperty('LIC_WA_SENT', JSON.stringify(keep));
+        });
+        await new Promise(r => setTimeout(r, 2500));
+      }
+    } catch (e) { warn('LIC watcher', e && e.message); } finally { licwBusy = false; }
+  }
+  { const t = setInterval(() => licWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
+
   // ---------- Updates tab: the main admin uploads app-update files, every signed-in user can download them ----------
   // The files are stored in the GitHub repository on a SEPARATE branch (default "app-updates"), so uploading never makes Render redeploy.
   // The list (title, version, notes, file name ...) is kept in the sheet's "_App Properties" tab. Uses the same GITHUB_TOKEN / GITHUB_REPO as Deploy.

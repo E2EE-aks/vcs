@@ -617,6 +617,15 @@ module.exports = function makeWhatsApp(o) {
     h['Content-Length'] = size; return { code: 200, headers: h, body: c.buf };
   }
 
+  /* server-side alert: send a text from this user's linked WhatsApp to any number (used by the LIC due-date watcher in server.js) */
+  async function sendText(uid, to, text) {
+    const r = await connected(uid), jid = toJid(to);
+    await sendGuard(r, jid);
+    await r.sock.sendMessage(jid, { text: String(text || '').slice(0, 4000) });
+    return true;
+  }
+  function isOpen(uid) { const s = users.get(uid); return !!(s && s.status === 'open' && s.sock); }
+
   /* every few minutes: copy changed login keys to the sheet; on a deploy (SIGTERM) do a last copy before the process ends */
   setInterval(() => { users.forEach((s, uid) => { if (s.status === 'open') backup(uid); }); }, 3 * 60 * 1000).unref();
   let bye = false;
@@ -625,5 +634,5 @@ module.exports = function makeWhatsApp(o) {
     const ids = [...users.keys()].filter(u => hasSaved(u));
     Promise.race([Promise.all(ids.map(u => backup(u))), new Promise(r => setTimeout(r, 9000))]).catch(() => {}).then(() => process.exit(0));
   });
-  return { actions: ACTIONS, route, upload, media, max: MAX };
+  return { actions: ACTIONS, route, upload, media, max: MAX, sendText, isOpen };
 };
