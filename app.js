@@ -5119,6 +5119,15 @@ function saveBlob(name, blob){
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
+function saveGallery(name, blob, album){                      // Pictures -> gallery (Android app); browser: normal download
+  return new Promise(res => {
+    if (window.KsDl && window.KsDl.saveImg){
+      const fr = new FileReader();
+      fr.onload = () => { try { res(window.KsDl.saveImg(name, blob.type || 'image/png', String(fr.result).split(',')[1] || '', album || 'PDF Pages') === 'ok'); } catch(e){ res(false); } };
+      fr.onerror = () => res(false); fr.readAsDataURL(blob);
+    } else { saveBlob(name, blob); res(true); }
+  });
+}
 const STAMP = () => new Date().toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
 const dayName = iso => { const [y, m, d] = iso.split('-').map(Number); return isNaN(d) ? '' : WD[new Date(y, m-1, d).getDay()]; };
 const monLabel = k => { const m = +k.slice(5, 7); return m >= 1 && m <= 12 ? `${MONTHS[m-1]} ${k.slice(0, 4)}` : k; };

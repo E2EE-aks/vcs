@@ -5,7 +5,7 @@
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var V = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/';
   var LIB = { pdf:V + 'pdf.min.js', worker:V + 'pdf.worker.min.js', zip:'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js' };
-  var X = { file:null, pw:'', fmt:'png', min:64, busy:false, msg:'', err:'', needPw:false, out:[], base:'pdf' };
+  var X = { file:null, pw:'', mode:'pages', scale:3, fmt:'png', min:64, busy:false, msg:'', err:'', needPw:false, out:[], base:'pdf' };
   try { TITLES.pdf2pics = ['PDF to Pics', 'Save the pictures of a PDF in full quality']; } catch(e){}
   var esc = function(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); };
   var say = function(m, bad){ try { toast(m, bad); } catch(e){} };
@@ -35,15 +35,19 @@
         '<input type="file" id="pxFile" accept="application/pdf,.pdf" style="display:none">' +
         '<label class="px-l">PDF password' + (X.needPw ? ' <span style="color:var(--bad)">(required)</span>' : ' (leave empty if it has none)') + '</label>' +
         '<input class="input" id="pxPw" type="password" autocomplete="off" placeholder="Password" value="' + esc(X.pw) + '">' +
+        '<label class="px-l">What to save</label>' +
+        '<select class="select" id="pxMode"><option value="pages"' + (X.mode === 'pages' ? ' selected' : '') + '>Full pages - every page as a picture, exactly as it looks (recommended)</option>' +
+          '<option value="embedded"' + (X.mode === 'embedded' ? ' selected' : '') + '>Only the pictures stored inside the PDF</option></select>' +
+        (X.mode === 'pages' ? '<label class="px-l">Page quality</label><select class="select" id="pxScale">' + [[2, 'Normal (2x)'], [3, 'High (3x)'], [4, 'Very high (4x, big files)']].map(function(m){ return '<option value="' + m[0] + '"' + (X.scale === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('') + '</select>' : '') +
         '<label class="px-l">Save pictures as</label>' +
         '<select class="select" id="pxFmt"><option value="png"' + (X.fmt === 'png' ? ' selected' : '') + '>PNG - exact, no quality loss (recommended)</option>' +
           '<option value="jpg"' + (X.fmt === 'jpg' ? ' selected' : '') + '>JPG 100% - smaller files, almost no loss</option></select>' +
-        '<label class="px-l">Skip tiny pictures (icons, lines)</label>' +
-        '<select class="select" id="pxMin">' + [[0, 'Save everything'], [64, 'Smaller than 64 px'], [150, 'Smaller than 150 px'], [300, 'Smaller than 300 px']].map(function(m){ return '<option value="' + m[0] + '"' + (X.min === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('') + '</select>' +
+        (X.mode === 'embedded' ? '<label class="px-l">Skip tiny pictures (icons, lines)</label>' : '') +
+        (X.mode === 'embedded' ? '<select class="select" id="pxMin">' : '<select class="select" id="pxMin" style="display:none">') + [[0, 'Save everything'], [64, 'Smaller than 64 px'], [150, 'Smaller than 150 px'], [300, 'Smaller than 300 px']].map(function(m){ return '<option value="' + m[0] + '"' + (X.min === m[0] ? ' selected' : '') + '>' + m[1] + '</option>'; }).join('') + '</select>' +
         '<div style="margin-top:14px"><button class="btn block" data-a="go"' + (!X.file || b ? ' disabled' : '') + '>' + (b ? esc(X.msg || 'Working…') : '⬇ Get the pictures') + '</button></div>' +
         (X.err ? '<div class="px-err">' + esc(X.err) + '</div>' : '') + '</div>' +
-      (n ? '<div class="px-box"><div class="px-row"><b>' + n + ' picture' + (n === 1 ? '' : 's') + ' found</b><span style="flex:1"></span>' +
-        '<button class="btn" data-a="zip"' + (b ? ' disabled' : '') + '>💾 Save all (ZIP)</button></div><div class="px-grid">' +
+      (n ? '<div class="px-box"><div class="px-row"><b>' + n + (X.mode === 'pages' ? ' page' : ' picture') + (n === 1 ? '' : 's') + (X.mode === 'pages' ? ' ready' : ' found') + '</b><span style="flex:1"></span>' +
+        '<button class="btn" data-a="gal"' + (b ? ' disabled' : '') + '>🖼 Save all to Gallery</button><button class="btn ghost" data-a="zip"' + (b ? ' disabled' : '') + '>💾 ZIP</button></div><div class="px-grid">' +
         X.out.map(function(o, i){ return '<div class="px-it" data-i="' + i + '"><img src="' + o.url + '" alt=""><div>' + o.w + ' × ' + o.h + ' px · ' + kb(o.blob.size) + '<br>page ' + o.page + '</div><button data-a="one">💾 Save</button></div>'; }).join('') +
         '</div></div>' : (X.done ? '<div class="px-box"><div class="px-empty">No pictures found in this PDF.<br>(Pages that are only text, or scanned pages saved as one big picture per page, show up as pictures too.)</div></div>' : '')) +
       '<div class="muted" style="font-size:12px;margin:0 2px 10px">The PDF stays on this phone - nothing is uploaded. The first time, a PDF library is loaded from the internet.</div>';
@@ -104,8 +108,20 @@
       X.needPw = false;
       var OPS = L.OPS, seen = {}, ext = X.fmt === 'jpg' ? 'jpg' : 'png', total = doc.numPages, cnt = 0;
       for (var p = 1; p <= total; p++){
-        X.msg = 'Page ' + p + ' of ' + total + ' · ' + X.out.length + ' pictures'; var bt = $('[data-a="go"]'); if (bt) bt.textContent = X.msg;
-        var page = await doc.getPage(p), ops = await page.getOperatorList();
+        X.msg = 'Page ' + p + ' of ' + total; var bt = $('[data-a="go"]'); if (bt) bt.textContent = X.msg;
+        var page = await doc.getPage(p);
+        if (X.mode === 'pages'){
+          var vp = page.getViewport({ scale:X.scale }), mx = 16000000, ar = vp.width * vp.height;       // keep canvas inside phone limits
+          if (ar > mx) vp = page.getViewport({ scale:X.scale * Math.sqrt(mx / ar) });
+          var pc = document.createElement('canvas'); pc.width = Math.floor(vp.width); pc.height = Math.floor(vp.height);
+          var pg = pc.getContext('2d'); pg.fillStyle = '#fff'; pg.fillRect(0, 0, pc.width, pc.height);
+          await page.render({ canvasContext:pg, viewport:vp }).promise;
+          var pb = await toBlob(pc, X.fmt); var pw_ = pc.width, ph_ = pc.height; pc.width = pc.height = 0;
+          if (pb){ cnt++; X.out.push({ blob:pb, url:URL.createObjectURL(pb), w:pw_, h:ph_, page:p, name:X.base + '-page-' + (p < 10 ? '0' : '') + p + '.' + ext }); }
+          if (page.cleanup) try { page.cleanup(); } catch(e){}
+          continue;
+        }
+        var ops = await page.getOperatorList();
         for (var i = 0; i < ops.fnArray.length; i++){
           var fn = ops.fnArray[i], a = ops.argsArray[i], img = null;
           if (fn === OPS.paintImageXObject){ var id = a[0]; if (seen[id]) continue; seen[id] = 1; img = await getObj(page, id); }
@@ -119,7 +135,7 @@
         if (page.cleanup) try { page.cleanup(); } catch(e){}
       }
       try { doc.destroy(); } catch(e){}
-      X.done = true; say(X.out.length ? X.out.length + ' picture(s) found ✓' : 'No pictures found in this PDF', !X.out.length);
+      X.done = true; say(X.out.length ? X.out.length + (X.mode === 'pages' ? ' page(s) ready ✓' : ' picture(s) found ✓') : 'No pictures found in this PDF', !X.out.length);
     } catch(e){ X.err = (e && e.message) || 'Something went wrong'; say(X.err, true); }
     X.busy = false; X.msg = ''; draw();
   }
@@ -133,6 +149,15 @@
     } catch(e){ say((e && e.message) || 'Could not make the ZIP', true); }
   }
 
+  async function galAll(){
+    if (!X.out.length || X.busy) return;
+    X.busy = true; var ok = 0, bt = $('[data-a="gal"]');
+    for (var i = 0; i < X.out.length; i++){
+      if (bt) bt.textContent = 'Saving ' + (i + 1) + ' of ' + X.out.length + '…';
+      if (await saveGallery(X.out[i].name, X.out[i].blob, 'PDF Pages')) ok++;
+    }
+    X.busy = false; draw(); say(ok === X.out.length ? '🖼 ' + ok + ' picture(s) saved in Gallery (Pictures/PDF Pages)' : 'Saved ' + ok + ' of ' + X.out.length + ' - some failed', ok !== X.out.length);
+  }
   window.vPdf2pics = function(){ return '<div id="pxRoot"></div>'; };
   window.pdf2picsAfter = function(){
     var r = $('#pxRoot'); if (!r) return;
@@ -142,7 +167,8 @@
       if (a === 'pick'){ var f = $('#pxFile'); if (f) f.click(); }
       else if (a === 'go') run();
       else if (a === 'zip') zipAll();
-      else if (a === 'one'){ var it = b.closest('[data-i]'), o = it && X.out[+it.dataset.i]; if (o) saveBlob(o.name, o.blob); }
+      else if (a === 'gal') galAll();
+      else if (a === 'one'){ var it = b.closest('[data-i]'), o = it && X.out[+it.dataset.i]; if (o) saveGallery(o.name, o.blob, 'PDF Pages').then(function(k){ say(k ? '🖼 Saved in Gallery' : 'Could not save', !k); }); }
     };
     r.onchange = function(e){
       var t = e.target;
@@ -151,6 +177,8 @@
         if (!(/pdf/i.test(f.type) || /\.pdf$/i.test(f.name))){ say('Please choose a PDF file', true); return; }
         clearOut(); X.file = f; X.err = ''; X.needPw = false; X.base = f.name.replace(/\.pdf$/i, '').replace(/[\\\/:*?"<>|]+/g, '-').slice(0, 60) || 'pdf'; draw();
       }
+      else if (t.id === 'pxMode'){ X.mode = t.value; clearOut(); draw(); }
+      else if (t.id === 'pxScale') X.scale = +t.value;
       else if (t.id === 'pxFmt') X.fmt = t.value;
       else if (t.id === 'pxMin') X.min = +t.value;
     };
