@@ -658,18 +658,18 @@ function makeApp(store, env) {
 
   // ---------- Deploy tab (main admin only): publish updated files to GitHub; Render auto-deploys from the branch ----------
   // Needs env vars on Render:  GITHUB_TOKEN (fine-grained token, Contents: read & write on ONE repo), GITHUB_REPO ("owner/name"), optional GITHUB_BRANCH (default main).
-  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'deployDone', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket', 'verDelete']);
+  const DEPLOY_ACTIONS = new Set(['deployStatus', 'deployRepos', 'deployFiles', 'deployUpload', 'deployHistory', 'deployRestore', 'deployProgress', 'deployDownload', 'deployZip', 'renderStatus', 'renderDeploy', 'deployDone', 'verFiles', 'verBuild', 'verClone', 'verList', 'verTicket', 'verDelete']);
   const GH = { repo: String(env.GITHUB_REPO || '').trim(), branch: String(env.GITHUB_BRANCH || 'main').trim(), token: String(env.GITHUB_TOKEN || '').trim() };
   const DEP_BACKEND = /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i;   // changing these changes the server itself (only a warning in the app, never blocks)
-  const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 60, CLONE_MAX = 95 * 1024 * 1024;   // CLONE_MAX: apk/zip in clone-src/ (GitHub itself refuses files over 100 MB)   // generous limits: any file type (text or binary), many files
+  const DEP_MAX = 25 * 1024 * 1024, DEP_TOTAL = 60 * 1024 * 1024, DEP_FILES = 300, CLONE_MAX = 95 * 1024 * 1024;   // CLONE_MAX: apk/zip in clone-src/ (GitHub itself refuses files over 100 MB)   // generous limits: any file type (text or binary), many files
   const depBase = p => String(p).split('/').pop();
   function depPathOk(p) {
     p = String(p || '');
     return p.length > 0 && p.length < 240 && !/[\\:*?"<>|\x00-\x1f]/.test(p) && !p.startsWith('/') && !p.includes('..') && !p.includes('//')
       && p.split('/').every(s => s && s !== '.git' && s !== 'node_modules');
   }
-  async function gh(method, url, body) {
-    const r = await fetch('https://api.github.com/repos/' + GH.repo + url, { method,
+  async function gh(method, url, body, repo) {          // repo: optional "owner/name" (default = GITHUB_REPO)
+    const r = await fetch('https://api.github.com/repos/' + (repo || GH.repo) + url, { method,
       headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy', 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined });
     const j = await r.json().catch(() => ({}));
@@ -696,24 +696,47 @@ function makeApp(store, env) {
   const depCommits = list => (Array.isArray(list) ? list : []).map(c => ({ sha: c.sha, short: String(c.sha).slice(0, 7), msg: String((c.commit && c.commit.message) || '').split('\n')[0],
     by: c.commit && c.commit.author ? c.commit.author.name : '', at: c.commit && c.commit.author ? c.commit.author.date : '' }));
   // ONE commit for all the files (so Render redeploys once, with a consistent set of files)
-  async function depCommit(files, message) {          // files: [{ path, buf: Buffer }]
-    const br = encodeURIComponent(GH.branch);
-    const ref = await gh('GET', '/git/ref/heads/' + br), head = ref.object.sha;
-    const hc = await gh('GET', '/git/commits/' + head);
-    const tree = await gh('GET', '/git/trees/' + hc.tree.sha + '?recursive=1');
+  const depRepoOk = r => /^[A-Za-z0-9_.\-]{1,100}\/[A-Za-z0-9_.\-]{1,100}$/.test(String(r || '')) && !String(r).split('/').some(x => /^\.+$/.test(x));
+  const depBranchOk = b => /^[\w.\-\/]{1,100}$/.test(String(b || '')) && !String(b).includes('..');
+  function depTarget(req) {                        // which repository + branch an action works on (default: the one in the env vars)
+    const repo = String(req.repo || '').trim() || GH.repo, branch = String(req.branch || '').trim() || (repo === GH.repo ? GH.branch : '');
+    if (!depRepoOk(repo)) globalThis.fail_('Invalid repository name.', 'DEPLOY');
+    if (branch && !depBranchOk(branch)) globalThis.fail_('Invalid branch name.', 'DEPLOY');
+    return { repo, branch };
+  }
+  async function depDefaultBranch(repo) { const j = await gh('GET', '', null, repo); return j.default_branch || 'main'; }
+  async function depCommit(files, message, repo, branch) {          // files: [{ path, buf: Buffer }]
+    repo = repo || GH.repo; branch = branch || GH.branch;
+    const br = encodeURIComponent(branch);
+    let ref;
+    try { ref = await gh('GET', '/git/ref/heads/' + br, null, repo); }
+    catch (e) {                                     // a brand-new EMPTY repository has no branch yet: the first file creates it, then the rest is one normal commit
+      if (e.code !== 'GITHUB') throw e;
+      let empty = false;
+      try { await gh('GET', '/commits?per_page=1', null, repo); } catch (e2) { empty = e2.code === 'GITHUB' && /409|empty/i.test(e2.message); }
+      if (!empty) throw e;
+      const f0 = files[0];
+      await gh('PUT', '/contents/' + ghPath(f0.path), { message, content: f0.buf.toString('base64') }, repo);
+      if (files.length === 1) return { sha: '', url: 'https://github.com/' + repo, changed: [{ path: f0.path, isNew: true }], skipped: [], repo, branch };
+      files = files.slice(1);
+      ref = await gh('GET', '/git/ref/heads/' + br, null, repo);
+    }
+    const head = ref.object.sha;
+    const hc = await gh('GET', '/git/commits/' + head, null, repo);
+    const tree = await gh('GET', '/git/trees/' + hc.tree.sha + '?recursive=1', null, repo);
     const cur = new Map((tree.tree || []).filter(x => x.type === 'blob').map(x => [x.path, x.sha]));
     const changed = files.filter(f => cur.get(f.path) !== gitBlobSha(f.buf));
     const skipped = files.filter(f => !changed.includes(f)).map(f => f.path);
-    if (!changed.length) return { unchanged: true, skipped };
+    if (!changed.length) return { unchanged: true, skipped, repo, branch };
     const entries = [];
     for (const f of changed) {                      // every file goes up as a blob, so text and binary (images, zip, fonts …) work the same
-      const bl = await gh('POST', '/git/blobs', { content: f.buf.toString('base64'), encoding: 'base64' });
+      const bl = await gh('POST', '/git/blobs', { content: f.buf.toString('base64'), encoding: 'base64' }, repo);
       entries.push({ path: f.path, mode: '100644', type: 'blob', sha: bl.sha });
     }
-    const nt = await gh('POST', '/git/trees', { base_tree: hc.tree.sha, tree: entries });
-    const nc = await gh('POST', '/git/commits', { message, tree: nt.sha, parents: [head] });
-    await gh('PATCH', '/git/refs/heads/' + br, { sha: nc.sha });
-    return { sha: String(nc.sha).slice(0, 7), url: nc.html_url, changed: changed.map(f => ({ path: f.path, isNew: !cur.has(f.path) })), skipped };
+    const nt = await gh('POST', '/git/trees', { base_tree: hc.tree.sha, tree: entries }, repo);
+    const nc = await gh('POST', '/git/commits', { message, tree: nt.sha, parents: [head] }, repo);
+    await gh('PATCH', '/git/refs/heads/' + br, { sha: nc.sha }, repo);
+    return { sha: String(nc.sha).slice(0, 7), url: nc.html_url, changed: changed.map(f => ({ path: f.path, isNew: !cur.has(f.path) })), skipped, repo, branch };
   }
 
   // ---------- Version tab: build an Android APK from chosen repository files (GitHub Actions workflow .github/workflows/build-apk.yml) ----------
@@ -851,8 +874,22 @@ function makeApp(store, env) {
     if (!ready) globalThis.fail_('GitHub is not connected yet. Add GITHUB_TOKEN and GITHUB_REPO on Render first.', 'NOGH');
     const S0 = globalThis.readSettings_().values, acc = globalThis.getAccount_('ADMIN', S0) || {};
     const ctx = { uid: 'ADMIN', username: acc.username || 'admin', name: acc.name || '' };
+    if (a === 'deployRepos') {                     // every repository this token can write to (for the "which repository?" choice)
+      const out = [];
+      for (let pg = 1; pg <= 3; pg++) {
+        const r = await fetch('https://api.github.com/user/repos?per_page=100&sort=pushed&page=' + pg, { headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } });
+        const j = await r.json().catch(() => []);
+        if (!r.ok) { if (pg === 1) globalThis.fail_(r.status === 401 ? 'GitHub rejected the token (expired or wrong). Make a new token and update GITHUB_TOKEN on Render.' : 'GitHub could not list the repositories (error ' + r.status + ').', 'GITHUB'); break; }
+        (Array.isArray(j) ? j : []).forEach(x => { if (!x.archived && !(x.permissions && x.permissions.push === false)) out.push({ repo: x.full_name, private: !!x.private, branch: x.default_branch || 'main', empty: x.size === 0, at: x.pushed_at || '' }); });
+        if (!Array.isArray(j) || j.length < 100) break;
+      }
+      if (GH.repo && !out.some(x => x.repo === GH.repo)) out.unshift({ repo: GH.repo, private: true, branch: GH.branch, empty: false, at: '' });
+      return { ok: true, repos: out, current: GH.repo };
+    }
     if (a === 'deployFiles') {
-      const [t, cm] = await Promise.all([gh('GET', '/git/trees/' + encodeURIComponent(GH.branch) + '?recursive=1'), gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&per_page=15')]);   // both at once
+      const T = depTarget(req); if (!T.branch) T.branch = await depDefaultBranch(T.repo);
+      const [t, cm] = await Promise.all([gh('GET', '/git/trees/' + encodeURIComponent(T.branch) + '?recursive=1', null, T.repo), gh('GET', '/commits?sha=' + encodeURIComponent(T.branch) + '&per_page=15', null, T.repo)])
+        .catch(e => { if (T.repo !== GH.repo && e.code === 'GITHUB') return [{ tree: [] }, []]; throw e; });   // another repository that is still empty: just no files yet
       const files = (t.tree || []).filter(x => x.type === 'blob' && depPathOk(x.path)).slice(0, 3000).map(x => ({ path: x.path, size: x.size || 0 }));
       return { ok: true, files, commits: depCommits(cm) };
     }
@@ -890,8 +927,9 @@ function makeApp(store, env) {
         bufs.push({ path: f.path, buf });
       }
       const msg = String(req.message || '').trim().slice(0, 120) || ('Update ' + bufs.map(f => depBase(f.path)).slice(0, 6).join(', ') + ' (from the app)');
-      const r = await depCommit(bufs, msg);
-      if (!r.unchanged) globalThis.logActivity_('deployUpload', ctx, { path: r.changed.map(x => x.path).join(', ') });
+      const T = depTarget(req); if (!T.branch) T.branch = await depDefaultBranch(T.repo);
+      const r = await depCommit(bufs, msg, T.repo, T.branch);
+      if (!r.unchanged) globalThis.logActivity_('deployUpload', ctx, { path: (T.repo === GH.repo ? '' : T.repo + ': ') + r.changed.map(x => x.path).join(', ').slice(0, 400) });
       return Object.assign({ ok: true, warnings: warn }, r);
     }
     if (a === 'deployRestore') {

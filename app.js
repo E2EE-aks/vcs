@@ -1209,7 +1209,7 @@ function photosCard(){
 /* =====================================================================
    VIEW: DEPLOY  (main admin only) — publish updated files to GitHub, Render redeploys by itself
    ===================================================================== */
-const DEP = { tab:'deploy', rd:null, rdBusy:false, rdTimer:null, st:null, files:null, commits:[], hist:null, hpath:'', err:'', prog:null, timer:null, ticks:0, akcMsg:'' };
+const DEP = { pubRepo:'', pubBranch:'', repos:null, reposErr:'', pubFiles:null, tab:'deploy', rd:null, rdBusy:false, rdTimer:null, st:null, files:null, commits:[], hist:null, hpath:'', err:'', prog:null, timer:null, ticks:0, akcMsg:'' };
 /* Version + Updates now live INSIDE the Deploy page (tabs). For the main admin the old Version / Updates menu items just open those tabs. */
 const inVer = () => S.view === 'version' || (S.view === 'deploy' && DEP.tab === 'version');
 const inUpd = () => S.view === 'updates' || (S.view === 'deploy' && DEP.tab === 'updates');
@@ -1224,6 +1224,48 @@ function depTab(k){
 const depBase = p => String(p).split('/').pop();
 const depBackend = p => /^(server\.js|code\.gs|package\.json|google-store\.js|gas-shim\.js)$/i.test(depBase(p));
 const depWhen = t => { const d = new Date(t); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }); };
+/* ---- which repository / branch the files go to (default = the one set on Render; others come from the token's repository list) ---- */
+const depRepoInfo = r => (DEP.repos || []).find(x => x.repo === r);
+function depTgt(){
+  const def = (DEP.st && DEP.st.repo) || '', repo = DEP.pubRepo || def;
+  const branch = String(DEP.pubBranch || '').trim() || (repo === def ? DEP.st.branch : ((depRepoInfo(repo) || {}).branch || ''));
+  return { repo, branch, main: repo === def && branch === ((DEP.st && DEP.st.branch) || '') };
+}
+function depRepoOptions(){
+  const def = (DEP.st && DEP.st.repo) || '', cur = depTgt().repo, list = DEP.repos && DEP.repos.length ? DEP.repos : [{ repo:def, private:true, branch:'', empty:false }];
+  return list.map(x => `<option value="${esc(x.repo)}" ${x.repo === cur ? 'selected' : ''}>${esc(x.repo)}${x.private ? ' 🔒' : ''}${x.repo === def ? ' (default)' : ''}${x.empty ? ' · empty' : ''}</option>`).join('');
+}
+function depRepoNote(){
+  const T = depTgt(), i = depRepoInfo(T.repo), def = (DEP.st && DEP.st.repo) || '';
+  let h = '';
+  if (DEP.reposErr) h += '⚠ ' + esc(DEP.reposErr) + '<br>';
+  h += !DEP.repos ? 'Loading your repositories…' : DEP.repos.length + ' repositories found' + (i && i.empty ? ' · this one is empty — the first upload creates the branch' : '') + (!T.main && DEP.pubFiles ? ' · ' + DEP.pubFiles.length + ' files in it' : '');
+  if (!T.main) h += '<br>Render deploy and the automatic APK only run for the default repository (' + esc(def) + ').';
+  h += '<br>Repository missing? GitHub → Settings → Developer settings → your token → Repository access → add it, then press ↻.';
+  return h;
+}
+function depRepoDraw(){
+  const sel = document.getElementById('depRepo'), br = document.getElementById('depBranch'), n = document.getElementById('depRepoNote');
+  if (sel) sel.innerHTML = depRepoOptions();
+  if (br && document.activeElement !== br) br.value = depTgt().branch;
+  if (n) n.innerHTML = depRepoNote();
+}
+async function depReposLoad(force){
+  if (DEP.repos && !force) return;
+  try { DEP.repos = (await api('deployRepos')).repos; DEP.reposErr = ''; } catch(e){ DEP.reposErr = e.message; DEP.repos = DEP.repos || []; }
+  let saved = ''; try { saved = localStorage.getItem('ks_dep_repo') || ''; } catch(e){}
+  if (!DEP.pubRepo && saved && DEP.repos.some(x => x.repo === saved)) DEP.pubRepo = saved;
+  if (DEP.pubRepo && !DEP.repos.some(x => x.repo === DEP.pubRepo)){ DEP.pubRepo = ''; DEP.pubBranch = ''; }
+  depRepoDraw();
+  if (!depTgt().main) depPubLoad();
+}
+async function depPubLoad(){                      // the file list of the chosen repository (to show "replaces" / "NEW" in the review)
+  const T = depTgt(); DEP.pubFiles = null;
+  if (T.main) return depRepoDraw();
+  try { const r = await api('deployFiles', { repo:T.repo, branch:T.branch || undefined }); if (depTgt().repo === T.repo) DEP.pubFiles = r.files || []; }
+  catch(e){ DEP.pubFiles = []; toast(e.message, true); }
+  depRepoDraw();
+}
 async function depLoad(){
   /* fast: show the tab at once (from the last result if we have one), then load status, files, live checks and Render IN PARALLEL */
   if (S.view === 'deploy') render();
@@ -1237,7 +1279,8 @@ async function depLoad(){
     .then(() => { if (S.view === 'deploy') render(); });
   const prog = depPoll().then(() => { depDraw(); if (DEP.prog && DEP.prog.state === 'pending' && Date.now() - new Date(DEP.prog.at).getTime() < 15 * 60000) depWatch(true); });
   const rend = rdLoad(true).then(() => rdcResume());
-  await Promise.all([files, prog, rend]);
+  const repos = depReposLoad();
+  await Promise.all([files, prog, rend, repos]);
 }
 /* ---- live progress: the same x/3 checks GitHub shows next to the commit (pending -> 1/3 -> 2/3 -> 3/3 = live) ---- */
 async function depPoll(){
@@ -1301,10 +1344,20 @@ function vDeployMain(){
       <div id="depProg">${depProgHtml()}</div>
       <div id="akcBox" style="margin-top:10px">${akcHtml()}</div></div>
     <div class="card" style="margin-bottom:16px"><h3>🚀 Publish to GitHub</h3>
-      <p class="muted" style="margin-bottom:12px">Repository <b>${esc(DEP.st.repo)}</b> · branch <b>${esc(DEP.st.branch)}</b>. Choose the updated files; they go to GitHub as <b>one commit</b> and Render redeploys by itself (about 1–2 minutes).</p>
+      <p class="muted" style="margin-bottom:12px">Choose the <b>repository</b>, then the files or a whole folder. They go to GitHub as <b>one commit</b>. For the default repository Render redeploys by itself (about 1–2 minutes).</p>
       ${DEP.err ? `<div class="log-item bad"><div class="l1"><b>${esc(DEP.err)}</b></div></div>` : ''}
+      <div class="field"><label>Repository <button class="btn ghost sm" type="button" onclick="depReposLoad(true)">↻</button></label>
+        <select class="select" id="depRepo">${depRepoOptions()}</select>
+        <div class="muted" id="depRepoNote" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">${depRepoNote()}</div></div>
+      <div class="field"><label>Branch <span class="muted">(empty = the repository's main branch)</span></label>
+        <input class="input" id="depBranch" value="${esc(depTgt().branch)}" placeholder="main" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
       <div class="field"><label>Files <span class="muted">(any file — app.js, style.css, index.html, images, fonts, zip … pick as many as you like)</span></label>
         <input class="input" type="file" id="depFiles" multiple></div>
+      <div class="field"><label>📁 Or a whole folder <span class="muted">(all files inside it, with sub-folders)</span></label>
+        <input class="input" type="file" id="depFolder" webkitdirectory directory multiple>
+        <label style="display:flex;gap:8px;align-items:flex-start;margin:8px 0 0;cursor:pointer"><input type="checkbox" id="depStrip" checked style="margin-top:3px"><span>Don't create the folder's own name in the repository (its files go straight inside the repository / the sub-folder below)</span></label>
+        <input class="input" id="depPrefix" style="margin-top:6px" placeholder="Upload into a sub-folder (optional), e.g. assets" autocapitalize="off" autocorrect="off" spellcheck="false">
+        <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">.git, node_modules and .DS_Store are skipped automatically. Some phone browsers (Android Chrome) cannot pick a folder — use a computer there, or choose the files above.</div></div>
       <label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0;cursor:pointer"><input type="checkbox" id="depAuto" ${akcOn() ? 'checked' : ''} style="margin-top:3px"><span>After both Render deploys are live: <b>build the APK</b> from all app files (Version) and <b>upload it to Updates</b> automatically (everyone gets a notification)</span></label>
       <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 6px 26px;cursor:pointer"><input type="checkbox" id="depInc" ${akcFlag('ks_apk_inc') ? 'checked' : ''} style="margin-top:3px"><span>Version number +1 on every auto build (1.0 → 1.1 → 1.2)</span></label>
       <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 10px 26px;cursor:pointer"><input type="checkbox" id="depClean" ${akcFlag('ks_apk_clean') ? 'checked' : ''} style="margin-top:3px"><span>Delete the old builds of this app afterwards (keeps the new one; clones are not touched)</span></label>
@@ -1331,6 +1384,14 @@ function bindDeploy(){
   const ck = document.getElementById('depAuto');
   if (ck) ck.onchange = () => { try { localStorage.setItem('ks_apk_auto', ck.checked ? '1' : '0'); } catch(e){} };
   [['depInc', 'ks_apk_inc'], ['depClean', 'ks_apk_clean']].forEach(([i, k]) => { const x = document.getElementById(i); if (x) x.onchange = () => { try { localStorage.setItem(k, x.checked ? '1' : '0'); } catch(e){} }; });
+  const rs = document.getElementById('depRepo'), bi = document.getElementById('depBranch');
+  if (rs) rs.onchange = () => {
+    DEP.pubRepo = rs.value === ((DEP.st && DEP.st.repo) || '') ? '' : rs.value; DEP.pubBranch = '';
+    try { localStorage.setItem('ks_dep_repo', DEP.pubRepo); } catch(e){}
+    if (bi) bi.value = depTgt().branch;
+    depPubLoad();
+  };
+  if (bi) bi.onchange = () => { DEP.pubBranch = bi.value.trim(); depPubLoad(); };
   const sel = document.getElementById('depHSel');
   if (sel) sel.onchange = async e => {
     DEP.hpath = e.target.value; DEP.hist = null;
@@ -1523,20 +1584,41 @@ async function akcClean(c, b){
 const depB64 = buf => { const u = new Uint8Array(buf); let out = ''; for (let i = 0; i < u.length; i += 0x8000) out += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(out); };
 const depFromB64 = b64 => { const bin = atob(b64), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
 async function depReview(){
+  const T = depTgt(), MB = 1024 * 1024;
   const fl = [...(document.getElementById('depFiles').files || [])];
-  if (!fl.length) return toast('Choose the files to publish first', true);
-  const rows = []; let total = 0;
+  const fo = document.getElementById('depFolder'), fl2 = fo ? [...(fo.files || [])] : [];
+  if (!fl.length && !fl2.length) return toast('Choose the files or a folder to publish first', true);
+  if (!T.repo) return toast('Choose a repository first', true);
+  if (!T.main && DEP.pubFiles === null) await depPubLoad();
+  const existing = T.main ? (DEP.files || []) : (DEP.pubFiles || []), exSet = new Set(existing.map(x => x.path));
+  const rows = [], frows = []; let total = 0, skipped = 0;
   for (const f of fl){
-    if (f.size > 25 * 1024 * 1024) return toast(f.name + ' is too big (max 25 MB per file)', true);
+    if (f.size > 25 * MB) return toast(f.name + ' is too big (max 25 MB per file)', true);
     total += f.size;
-    const m = (DEP.files || []).filter(x => depBase(x.path).toLowerCase() === f.name.toLowerCase());
+    const m = existing.filter(x => depBase(x.path).toLowerCase() === f.name.toLowerCase());
     rows.push({ name:f.name, file:f, size:f.size, matches:m });
   }
-  if (total > 60 * 1024 * 1024) return toast('The files together are too big for one upload (max 60 MB)', true);
-  const backend = rows.some(r => depBackend(r.name));
+  const strip = !document.getElementById('depStrip') || document.getElementById('depStrip').checked;
+  const pre = String((document.getElementById('depPrefix') || {}).value || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  for (const f of fl2){
+    let parts = String(f.webkitRelativePath || f.name).split('/');
+    if (strip && parts.length > 1) parts = parts.slice(1);
+    const path = (pre ? pre + '/' : '') + parts.join('/');
+    if (parts.some((x, i) => x === '.git' || x === 'node_modules' || (i === parts.length - 1 && /^(\.DS_Store|Thumbs\.db)$/i.test(x))) || /[\\:*?"<>|\x00-\x1f]/.test(path) || path.includes('..') || path.includes('//') || path.length >= 240){ skipped++; continue; }
+    if (f.size > 25 * MB) return toast(path + ' is too big (max 25 MB per file)', true);
+    total += f.size; frows.push({ path, file:f, size:f.size, isNew:!exSet.has(path) });
+  }
+  if (!rows.length && !frows.length) return toast('Nothing to publish in that folder', true);
+  if (rows.length + frows.length > 300) return toast('Too many files for one upload (max 300) — upload the folder in parts', true);
+  if (total > 60 * MB) return toast('The files together are too big for one upload (max 60 MB)', true);
+  const backend = T.main && (rows.some(r => depBackend(r.name)) || frows.some(r => depBackend(r.path)));
+  const sz = n => n > MB ? (n / MB).toFixed(1) + ' MB' : (n / 1024).toFixed(1) + ' KB', nNew = frows.filter(r => r.isNew).length;
   const w = openModal(`<h3>Publish to GitHub</h3>
-    <p class="sub">${esc(DEP.st.repo)} · ${esc(DEP.st.branch)} — one commit, then the site redeploys.</p>
-    ${rows.map((r, i) => `<div class="log-item"><div class="l1"><b>${esc(r.name)}</b> <span class="muted">${r.size > 1048576 ? (r.size / 1048576).toFixed(1) + ' MB' : (r.size / 1024).toFixed(1) + ' KB'}</span></div>
+    <p class="sub">${esc(T.repo)} · ${esc(T.branch || 'main branch')} — one commit${T.main ? ', then the site redeploys.' : '.'}</p>
+    ${frows.length ? `<div class="log-item"><div class="l1"><b>📁 Folder — ${frows.length} file${frows.length === 1 ? '' : 's'}</b> <span class="muted">${sz(frows.reduce((n, r) => n + r.size, 0))}</span></div>
+      <div class="l2"><span class="pill exp">NEW</span> ${nNew} new · ${frows.length - nNew} replace existing${skipped ? ' · ' + skipped + ' skipped (.git, node_modules …)' : ''}</div>
+      <details><summary class="muted" style="cursor:pointer">See the list</summary><div style="max-height:220px;overflow:auto;margin-top:6px">${frows.map(r => `<div class="l2">${r.isNew ? '🆕' : '♻️'} ${esc(r.path)}</div>`).join('')}</div></details></div>` : ''}
+    ${rows.map((r, i) => `<div class="log-item"><div class="l1"><b>${esc(r.name)}</b> <span class="muted">${sz(r.size)}</span></div>
       <div class="l2">${r.matches.length > 1 ? `Replace: <select class="select" data-i="${i}">${r.matches.map(x => `<option>${esc(x.path)}</option>`).join('')}</select>`
         : r.matches.length ? `Replaces <code>${esc(r.matches[0].path)}</code>` : `<span class="pill exp">NEW</span> not in the repository yet — saved as:`}
         ${!r.matches.length ? `<input class="input" data-p="${i}" value="${esc(r.name)}" style="margin-top:6px" placeholder="folder/file.ext">` : ''}</div></div>`).join('')}
@@ -1547,20 +1629,29 @@ async function depReview(){
   w.querySelector('[data-go]').onclick = async ev => {
     const btn = ev.currentTarget; btn.disabled = true;
     try {
-      const files = [];
+      const files = [], seen = new Set();
       for (let i = 0; i < rows.length; i++){
         const r = rows[i], s = w.querySelector(`select[data-i="${i}"]`), p = w.querySelector(`input[data-p="${i}"]`);
         const path = (s ? s.value : (r.matches[0] ? r.matches[0].path : ((p && p.value.trim()) || r.name))).replace(/^\/+/, '');
-        files.push({ path, b64: depB64(await r.file.arrayBuffer()) });
+        seen.add(path); files.push({ path, b64:depB64(await r.file.arrayBuffer()) });
+      }
+      for (const r of frows){
+        if (seen.has(r.path)) continue;                                   // a loose file with the same path wins
+        files.push({ path:r.path, b64:depB64(await r.file.arrayBuffer()) });
       }
       const t0 = Date.now();
-      const res = await api('deployUpload', { files, message:(w.querySelector('#depMsg').value || '').trim(), confirmBackend:true });
+      const res = await api('deployUpload', { files, repo:T.repo, branch:T.branch, message:(w.querySelector('#depMsg').value || '').trim(), confirmBackend:true });
       w.remove();
-      if (!res.unchanged) rdcStart(t0);                 // Render deploy x2, then clear the saved copy once
+      if (T.main && !res.unchanged) rdcStart(t0);      // Render deploy x2, then clear the saved copy once
       if (res.unchanged) toast('Nothing changed — these files are already the same on GitHub');
-      else { toast('Published ' + res.changed.length + ' file' + (res.changed.length === 1 ? '' : 's') + ' — watch the Live status card'); document.getElementById('depFiles').value = ''; }
+      else {
+        toast(T.main ? 'Published ' + res.changed.length + ' file' + (res.changed.length === 1 ? '' : 's') + ' — watch the Live status card'
+          : '✅ Published ' + res.changed.length + ' file' + (res.changed.length === 1 ? '' : 's') + ' to ' + T.repo + (res.branch ? ' (' + res.branch + ')' : ''));
+        document.getElementById('depFiles').value = ''; if (fo) fo.value = '';
+      }
       if (res.warnings && res.warnings.length) setTimeout(() => toast('⚠ Published, but check: ' + res.warnings.join(' | '), true), 1200);
-      await depLoad(); if (!res.unchanged) depWatch();
+      if (T.main){ await depLoad(); if (!res.unchanged) depWatch(); }
+      else { await depPubLoad(); depLoad(); }
     } catch(e){ btn.disabled = false; handleErr(e); }
   };
 }
