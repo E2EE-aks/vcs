@@ -683,7 +683,7 @@ function makeApp(store, env) {
     if (!r.ok) {
       const why = r.status === 401 ? 'GitHub rejected the token (expired or wrong). Make a new token and update GITHUB_TOKEN on Render.'
         : r.status === 404 ? 'GitHub could not find the repository, branch or file. Check GITHUB_REPO / GITHUB_BRANCH and that the token has access to that repository.'
-        : r.status === 403 ? 'GitHub refused: ' + (j.message || 'no reason given') + ' (the token needs "Contents: Read and write" on this repository, or the branch is protected, or the rate limit was hit).'
+        : r.status === 403 ? 'GitHub refused: ' + (j.message || 'no reason given') + ' — failed step: ' + method + ' ' + url.split('?')[0].slice(0, 60) + ' on ' + (repo || GH.repo) + (r.headers.get('x-accepted-github-permissions') ? ' (needs: ' + r.headers.get('x-accepted-github-permissions') + ')' : '') + '. Token in use starts with: ' + GH.token.slice(0, 14) + '…' + GH.token.slice(-4)
         : r.status === 422 ? 'GitHub could not save this change (' + (j.message || 'conflict') + '). Refresh the list and try again.'
         : 'GitHub error ' + r.status + ': ' + (j.message || '');
       globalThis.fail_(why, 'GITHUB');
