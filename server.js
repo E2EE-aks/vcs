@@ -669,14 +669,21 @@ function makeApp(store, env) {
       && p.split('/').every(s => s && s !== '.git' && s !== 'node_modules');
   }
   async function gh(method, url, body, repo) {          // repo: optional "owner/name" (default = GITHUB_REPO)
-    const r = await fetch('https://api.github.com/repos/' + (repo || GH.repo) + url, { method,
-      headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy', 'Content-Type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined });
-    const j = await r.json().catch(() => ({}));
+    let r, j;
+    for (let tries = 0; ; tries++) {
+      r = await fetch('https://api.github.com/repos/' + (repo || GH.repo) + url, { method,
+        headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy', 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : undefined });
+      j = await r.json().catch(() => ({}));
+      const limited = (r.status === 403 || r.status === 429) && /rate limit|abuse|retry/i.test(String(j.message || ''));
+      if (!limited || tries >= 4) break;                // many files at once can hit GitHub's "secondary rate limit": wait a little and try again
+      const ra = Number(r.headers.get('retry-after')) || 0;
+      await new Promise(res => setTimeout(res, Math.min(60000, ra ? ra * 1000 : 8000 * (tries + 1))));
+    }
     if (!r.ok) {
       const why = r.status === 401 ? 'GitHub rejected the token (expired or wrong). Make a new token and update GITHUB_TOKEN on Render.'
         : r.status === 404 ? 'GitHub could not find the repository, branch or file. Check GITHUB_REPO / GITHUB_BRANCH and that the token has access to that repository.'
-        : r.status === 403 ? 'GitHub refused (the token needs "Contents: Read and write" permission, or the rate limit was hit).'
+        : r.status === 403 ? 'GitHub refused: ' + (j.message || 'no reason given') + ' (the token needs "Contents: Read and write" on this repository, or the branch is protected, or the rate limit was hit).'
         : r.status === 422 ? 'GitHub could not save this change (' + (j.message || 'conflict') + '). Refresh the list and try again.'
         : 'GitHub error ' + r.status + ': ' + (j.message || '');
       globalThis.fail_(why, 'GITHUB');
@@ -731,6 +738,7 @@ function makeApp(store, env) {
     const entries = [];
     for (const f of changed) {                      // every file goes up as a blob, so text and binary (images, zip, fonts …) work the same
       const bl = await gh('POST', '/git/blobs', { content: f.buf.toString('base64'), encoding: 'base64' }, repo);
+      if (changed.length > 10) await new Promise(res => setTimeout(res, 120));
       entries.push({ path: f.path, mode: '100644', type: 'blob', sha: bl.sha });
     }
     const nt = await gh('POST', '/git/trees', { base_tree: hc.tree.sha, tree: entries }, repo);
