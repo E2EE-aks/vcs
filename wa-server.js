@@ -293,11 +293,18 @@ module.exports = function makeWhatsApp(o) {
   const isRevoke = pm => !!(pm && pm.key && pm.key.id && (pm.type === 0 || pm.type === 'REVOKE'));
 
   /* ---------- edited messages: keep every earlier version so the app can show what changed (old words red, new words green) ---------- */
-  function editInfo(message) {                              // an "edit" notice that arrives as a normal message
-    const pm = unwrap(message).protocolMessage;
-    if (pm && (pm.type === 14 || pm.type === 'MESSAGE_EDIT') && pm.editedMessage && pm.key && pm.key.id) return { key: pm.key, msg: pm.editedMessage, ts: Number(pm.timestampMs) || 0 };
+  function findEdit(o, d) {                                 // a protocolMessage "edit" can be wrapped in several ways - search all of them
+    d = d || 0; if (!o || typeof o !== 'object' || d > 7 || o instanceof Uint8Array || Buffer.isBuffer(o)) return null;
+    if (o.editedMessage && typeof o.editedMessage === 'object' && o.key && o.key.id && (o.type === undefined || o.type === 14 || o.type === 'MESSAGE_EDIT'))
+      return { key: o.key, msg: o.editedMessage.message && !o.editedMessage.conversation ? o.editedMessage.message : o.editedMessage, ts: Number(o.timestampMs) || 0 };
+    for (const k of Object.keys(o)) { const r = findEdit(o[k], d + 1); if (r) return r; }
     return null;
   }
+  const editInfo = message => findEdit(message);
+  const shapeOf = (o, d) => {                               // short list of the field names of an unknown message (to see what WhatsApp sent)
+    d = d || 0; if (!o || typeof o !== 'object' || d > 4 || o instanceof Uint8Array || Buffer.isBuffer(o)) return '';
+    return Object.keys(o).filter(k => o[k] != null && k !== 'messageContextInfo').map(k => { const v = shapeOf(o[k], d + 1); return v ? k + '>(' + v + ')' : k; }).join(',');
+  };
   function applyEdit(uid, s, key, jidHint, newMsg, ts) {
     try {
       if (!key || !key.id || !newMsg) return;
@@ -325,6 +332,7 @@ module.exports = function makeWhatsApp(o) {
     const out = !!(wm.key && wm.key.fromMe), id = (wm.key && wm.key.id) || crypto.randomBytes(6).toString('hex');
     const list = s.msgs.get(jid) || []; if (list.some(m => m.id === id)) return null;
     const m = { id, out, at: tsOf(wm.messageTimestamp), kind: k.kind, text: k.text || '', label: k.label || '', from: out ? '' : (wm.pushName || ''), status: out ? (ST[wm.status] || 'sent') : '' };
+    if (k.kind === 'other') { m.dbg = shapeOf(wm.message).slice(0, 200); warn('WhatsApp unknown message', m.dbg); }
     ['thumb', 'mime', 'name', 'size', 'dur', 'lat', 'lon'].forEach(f => { if (k[f] !== undefined && k[f] !== '') m[f] = k[f]; });
     if (k.media) { m.media = 1; s.raw.set(jid + '|' + id, wm); if (s.raw.size > MAX_RAW) s.raw.delete(s.raw.keys().next().value); }
     if (wm.key) m.key = { id: wm.key.id, fromMe: !!wm.key.fromMe, remoteJid: wm.key.remoteJid, participant: wm.key.participant };
