@@ -404,6 +404,7 @@
   }
   window.waEdHist = function(id){ G.ed = G.ed || {}; G.ed[id] = !G.ed[id]; G.sigM = ''; paintMsgs(false); };
   function bubble(m){
+    if (m.kind === 'other' && m.dbg && m.dbg.indexOf('secretEncryptedMessage') === 0) return '';          // old edit notices saved before this fix
     if (m.kind === 'call') return '<div class="wa-sys' + (/Missed|declined/.test(m.label || '') ? ' miss' : '') + '">' + esc(m.label || 'Call') + ' · ' + esc(hm(m.at)) + '</div>';
     var u = m.url ? url(m.url) : '', h = '', th = m.thumb ? 'data:image/jpeg;base64,' + m.thumb : '';
     if (m.kind === 'photo') h += '<a href="' + esc(u) + '" target="_blank" rel="noopener"><img class="wa-pic" loading="lazy" src="' + esc(u) + '" alt="photo" onerror="' + (th ? 'this.onerror=null;this.src=\'' + th + '\'' : 'this.remove()') + '"></a>';
@@ -414,9 +415,11 @@
     else if (m.kind === 'geo') h += '<a href="https://www.google.com/maps?q=' + esc(m.lat + ',' + m.lon) + '" target="_blank" rel="noopener" style="color:#027eb5">📍 Open location in Maps</a><br>';
     var cap = m.kind === 'file' || m.kind === 'photo' || m.kind === 'video' || m.kind === 'gif' || m.kind === 'voice' || m.kind === 'audio' || m.kind === 'sticker' || m.kind === 'geo' ? (m.text && m.text !== m.label && m.kind !== 'geo' ? m.text : '') : (m.text || m.label || '');
     if (m.hist && m.hist.length) cap = editHtml(m);
-    if (m.dbg && !m.hist) cap += '<br><small style="opacity:.55;font-size:10px">[' + esc(m.dbg) + ']</small>';
+    var extra = '';
+    if (m.edN && !(m.hist && m.hist.length)) extra += '<span class="wa-ed">✏️ Edited · new text could not be read</span>';
+    if (m.dbg && !m.hist) extra += '<br><small style="opacity:.55;font-size:10px">[' + esc(m.dbg) + ']</small>';
     var dl = m.deleted && !m.out ? '<span class="wa-delt" onclick="waDelInfo(this)" data-n="' + esc(G.open && G.open.group ? (m.from || 'Someone') : title(G.open || {})) + '" data-k="' + esc(m.kind === 'photo' ? 'photo' : (m.kind === 'video' || m.kind === 'gif') ? 'video' : m.kind === 'text' ? 'message' : 'file') + '">🚫 Deleted by ' + esc(G.open && G.open.group ? (m.from || 'sender') : 'sender') + ' (saved here' + (m.delAt ? ' · ' + esc(hm(m.delAt)) : '') + ')</span>' : '';
-    return '<div class="wa-b ' + (m.out ? 'out' : 'in') + (dl ? ' del' : '') + '"><button class="wa-fw" title="Forward" onclick="waFwd(\'' + esc(m.id) + '\')">↪</button>' + dl + (m.from && !m.out && G.open && G.open.group ? '<span class="wa-who">' + esc(m.from) + '</span>' : '') + h + ((m.hist && m.hist.length) || m.dbg ? (m.hist && m.hist.length ? cap : link(m.text || m.label || '') + cap.slice(cap.indexOf('<br>'))) : link(cap)) + '<span class="wa-t">' + esc(hm(m.at)) + tick1(m) + '</span><div style="clear:both"></div></div>';
+    return '<div class="wa-b ' + (m.out ? 'out' : 'in') + (dl ? ' del' : '') + '"><button class="wa-fw" title="Forward" onclick="waFwd(\'' + esc(m.id) + '\')">↪</button>' + dl + (m.from && !m.out && G.open && G.open.group ? '<span class="wa-who">' + esc(m.from) + '</span>' : '') + h + (m.hist && m.hist.length ? cap : link(cap) + extra) + '<span class="wa-t">' + esc(hm(m.at)) + tick1(m) + '</span><div style="clear:both"></div></div>';
   }
   var DELK = { photo:'photo', video:'video', message:'message', file:'file' };
   function waDelPop(m){ var who = G.open && G.open.group ? (m.from || 'Someone') : title(G.open || {}); var k = m.kind === 'photo' ? 'photo' : (m.kind === 'video' || m.kind === 'gif') ? 'video' : m.kind === 'text' ? 'message' : 'file'; toast('🚫 ' + who + ' deleted this ' + k + ' - it is still saved here', true); }

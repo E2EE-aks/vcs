@@ -322,16 +322,53 @@ module.exports = function makeWhatsApp(o) {
     } catch (e) { warn('WhatsApp keep-edit', e && e.message); }
   }
 
+  /* ---------- encrypted edits: WhatsApp now sends "edit" as an encrypted message; it opens with the secret key of the ORIGINAL message ---------- */
+  const secOf = message => {                               // messageSecret of a message (saved so a later edit can be opened)
+    try { const x = unwrap(message), c = (message && message.messageContextInfo) || x.messageContextInfo; const b = c && c.messageSecret; return b && b.length ? Buffer.from(b).toString('base64') : ''; } catch (e) { return ''; }
+  };
+  const nj = j => String(j || '').replace(/:\d+@/, '@');
+  const uniq = a => [...new Set(a.filter(Boolean))];
+  function openEdit(s, jid, wm, sem) {                     // -> the new message content, or null
+    const tk = sem.targetMessageKey || {}, orig = (s.msgs.get(jid) || []).find(x => x.id === tk.id);
+    if (!orig || !orig.sec || !sem.encPayload || !sem.encIv) return null;
+    const secret = Buffer.from(orig.sec, 'base64'), iv = Buffer.from(sem.encIv), ct = Buffer.from(sem.encPayload), me = (s.sock && s.sock.user) || {}, mine = uniq([nj(me.id), nj(me.lid)]), k = wm.key || {}, ok = orig.key || {};
+    const authors = orig.out ? mine : uniq([nj(ok.participant), nj(ok.remoteJid), nj(tk.participant), nj(tk.remoteJid), nj(jid), nj(k.participantAlt), nj(k.remoteJidAlt)]);
+    const mods = k.fromMe ? mine : uniq([nj(k.participant), nj(k.remoteJid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(jid)]);
+    const k0 = crypto.createHmac('sha256', Buffer.alloc(32)).update(secret).digest();
+    for (const uc of ['Message Edit', 'Msg Edit', 'Edit', 'MessageEdit', 'Message edit', 'Event Edit']) for (const a of authors) for (const b of mods) {
+      try {
+        const key = crypto.createHmac('sha256', k0).update(Buffer.concat([Buffer.from(tk.id), Buffer.from(a), Buffer.from(b), Buffer.from(uc), Buffer.from([1])])).digest();
+        const d = crypto.createDecipheriv('aes-256-gcm', key, iv); d.setAAD(Buffer.from(tk.id + '\0' + b)); d.setAuthTag(ct.slice(-16));
+        const plain = Buffer.concat([d.update(ct.slice(0, -16)), d.final()]);
+        const msg = lib.proto.Message.decode(plain), e = findEdit(msg);
+        return e ? e.msg : msg;
+      } catch (e) { /* wrong guess - try the next one */ }
+    }
+    return null;
+  }
+  function editSecret(uid, s, jid, wm, sem) {
+    const tk = sem.targetMessageKey || {};
+    try {
+      const nm = openEdit(s, jid, wm, sem);
+      if (nm && kindText(nm)) { applyEdit(uid, s, { id: tk.id, remoteJid: jid }, jid, nm, tsOf(wm.messageTimestamp) * 1000); return; }
+      const orig = (s.msgs.get(jid) || []).find(x => x.id === tk.id);                // could not read the new text: at least mark it as edited
+      if (orig) { orig.edN = (orig.edN || 0) + 1; orig.editAt = Date.now(); saveSoon(uid, s); }
+      warn('WhatsApp edit not readable', orig ? (orig.sec ? 'key did not fit' : 'original has no secret') : 'original message not stored');
+    } catch (e) { warn('WhatsApp edit', e && e.message); }
+  }
+
   function addMsg(uid, s, jid, wm, live) {
     if (jid === 'status@broadcast') { addStatus(s, wm); return null; }
     if (!isChat(jid) || jid === 'status@broadcast' || !wm || !wm.message) return null;
     if (wm.key) { learn(s, jid, wm.key.remoteJidAlt); learn(s, jid, wm.key.senderPn); learn(s, wm.key.participant, wm.key.participantAlt); learn(s, wm.key.participant, wm.key.participantPn); }
     { const pm = unwrap(wm.message).protocolMessage; if (isRevoke(pm)) { if (!(wm.key && wm.key.fromMe)) markDeleted(uid, s, pm.key, jid); return null; } }   // someone deleted a message: keep it, just flag it
     { const ed = editInfo(wm.message); if (ed) { applyEdit(uid, s, ed.key, jid, ed.msg, ed.ts); return null; } }
+    { const sem = unwrap(wm.message).secretEncryptedMessage || wm.message.secretEncryptedMessage; if (sem) { if (sem.secretEncType !== 1 && sem.secretEncType !== 'EVENT_EDIT') editSecret(uid, s, jid, wm, sem); return null; } }
     const k = kindText(wm.message); if (!k) return null;
     const out = !!(wm.key && wm.key.fromMe), id = (wm.key && wm.key.id) || crypto.randomBytes(6).toString('hex');
     const list = s.msgs.get(jid) || []; if (list.some(m => m.id === id)) return null;
     const m = { id, out, at: tsOf(wm.messageTimestamp), kind: k.kind, text: k.text || '', label: k.label || '', from: out ? '' : (wm.pushName || ''), status: out ? (ST[wm.status] || 'sent') : '' };
+    { const sc = secOf(wm.message); if (sc) m.sec = sc; }
     if (k.kind === 'other') { m.dbg = shapeOf(wm.message).slice(0, 200); warn('WhatsApp unknown message', m.dbg); }
     ['thumb', 'mime', 'name', 'size', 'dur', 'lat', 'lon'].forEach(f => { if (k[f] !== undefined && k[f] !== '') m[f] = k[f]; });
     if (k.media) { m.media = 1; s.raw.set(jid + '|' + id, wm); if (s.raw.size > MAX_RAW) s.raw.delete(s.raw.keys().next().value); }
@@ -482,7 +519,7 @@ module.exports = function makeWhatsApp(o) {
     const s = st(uid), pn = pnOf(s, c.id), ct = (pn && s.contacts.get(pn)) || s.contacts.get(c.id), num = c.group ? '' : (pn ? '+' + pn.split('@')[0] : numOf(c.id));
     return ({ id: c.id, name: c.name || (ct && (ct.name || ct.pn)) || c.pn || (c.group ? 'Group' : num || 'WhatsApp contact'), number: num, group: !!c.group, unread: c.unread || 0, at: c.at, last: c.last, out: !!c.out, blue: blueShow(s, c.id), av: link(uid, c.id, 0, 'a') });
   };
-  const msgView = (uid, jid, m) => { const x = Object.assign({}, m); delete x.key; if (m.media) x.url = link(uid, jid, m.id, 'm'); return x; };
+  const msgView = (uid, jid, m) => { const x = Object.assign({}, m); delete x.key; delete x.sec; if (m.media) x.url = link(uid, jid, m.id, 'm'); return x; };
 
   /* ---------- JSON actions ---------- */
   async function route(req) {
