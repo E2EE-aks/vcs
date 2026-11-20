@@ -18,7 +18,7 @@ module.exports = function makeWhatsApp(o) {
   const { env, warn, sign, withWb, enc, dec } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -465,6 +465,21 @@ module.exports = function makeWhatsApp(o) {
       return { ok: true, status: s.status, qr: s.status === 'qr' ? s.qr : '', error: s.status === 'idle' && !s.wantOn ? s.err : '' };
     }
     if (a === 'waLogout') { await stop(uid, true); return { ok: true }; }
+    if (a === 'licWaGet') { if (uid !== 'ADMIN') fail('Only the main admin can use this.'); return { ok: true, cfg: await licCfg(), connected: !!(s.status === 'open' && s.sock) }; }
+    if (a === 'licWaSet') {
+      if (uid !== 'ADMIN') fail('Only the main admin can change this.');
+      const to = String(req.to || '').replace(/[^\d+]/g, ''); toJid(to);                                    // checks the number looks right
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(req.at || ''))) fail('Enter the time like 08:00.');
+      const bf = String(req.before === undefined ? '0' : req.before).split(',').map(x => parseInt(x, 10)).filter(x => x >= 0 && x <= 30);
+      const c = licNorm({ on: req.on !== false && req.on !== 'false', to, at: String(req.at), before: bf });
+      await withWb(() => { PROPS().setProperty('LIC_WA_CFG', JSON.stringify(c)); });
+      licC = c; return { ok: true, cfg: c };
+    }
+    if (a === 'licWaTest') {
+      if (uid !== 'ADMIN') fail('Only the main admin can use this.');
+      const c = await licCfg(); await sendText(uid, c.to, '✅ *LIC alert test*\n\nYeh test message hai. Premium due date par aise hi alert aayega (subah ' + c.at + ' baje).');
+      return { ok: true, to: c.to };
+    }
     const r = await connected(uid);
     if (a === 'waChats') {
       await resolveLids(r);
@@ -617,6 +632,18 @@ module.exports = function makeWhatsApp(o) {
     h['Content-Length'] = size; return { code: 200, headers: h, body: c.buf };
   }
 
+  /* ---------- LIC WhatsApp alert settings (number, time, days before) - edited in the LIC tab, saved in the sheet properties ---------- */
+  let licC = null;
+  const licNorm = j => {
+    j = j || {}; const d = { on: true, to: String(env.LIC_WA_TO || '9621755459'), at: /^\d\d:\d\d$/.test(String(env.LIC_WA_AT || '')) ? String(env.LIC_WA_AT) : '08:00', before: String(env.LIC_WA_BEFORE || '0').split(',').map(x => parseInt(x, 10)) };
+    const bf = (Array.isArray(j.before) ? j.before : d.before).map(x => parseInt(x, 10)).filter(x => x >= 0 && x <= 30);
+    return { on: j.on === undefined ? d.on : !!j.on, to: String(j.to || d.to).replace(/[^\d+]/g, ''), at: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(j.at || '')) ? String(j.at) : d.at, before: [...new Set(bf.length ? bf : [0])].sort((a, b) => b - a) };
+  };
+  async function licCfg() {
+    if (licC) return licC;
+    let j = {}; try { j = JSON.parse(await withWb(() => PROPS().getProperty('LIC_WA_CFG') || '') || '{}'); } catch (e) {}
+    return (licC = licNorm(j));
+  }
   /* server-side alert: send a text from this user's linked WhatsApp to any number (used by the LIC due-date watcher in server.js) */
   async function sendText(uid, to, text) {
     const r = await connected(uid), jid = toJid(to);
@@ -634,5 +661,5 @@ module.exports = function makeWhatsApp(o) {
     const ids = [...users.keys()].filter(u => hasSaved(u));
     Promise.race([Promise.all(ids.map(u => backup(u))), new Promise(r => setTimeout(r, 9000))]).catch(() => {}).then(() => process.exit(0));
   });
-  return { actions: ACTIONS, route, upload, media, max: MAX, sendText, isOpen };
+  return { actions: ACTIONS, route, upload, media, max: MAX, sendText, isOpen, licCfg };
 };

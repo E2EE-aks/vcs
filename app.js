@@ -4212,6 +4212,31 @@ function licFs(d){                                    // premium text size: each
   if (window.ksMy) ksMy.set('licfs', n); else document.documentElement.style.setProperty('--lic-fs', (n / 100).toFixed(2));
   const e = document.getElementById('licFsV'); if (e) e.textContent = n + '%';
 }
+/* ---------- LIC alert on WhatsApp: number / time / days-before can be edited here (main admin only) ---------- */
+const LICWA_OPTS = [['0', 'Only on the due date'], ['1,0', '1 day before + on the due date'], ['3,0', '3 days before + on the due date'], ['7,3,0', '7 and 3 days before + on the due date']];
+function licWaCard(){
+  if (!(isAdmin() && S.me && S.me.primary && !S.as)) return '';
+  const c = S.licWa || { on:true, to:'9621755459', at:'08:00', before:[0] }, bf = (c.before || [0]).join(',');
+  if (!S.licWa && !S.licWaLoading){ S.licWaLoading = true; api('licWaGet').then(r => { S.licWa = r.cfg; S.licWaConn = !!r.connected; const e = $('#licWaBox'); if (e) e.outerHTML = licWaCard(); }).catch(() => {}).finally(() => { S.licWaLoading = false; }); }
+  return `<div class="card" id="licWaBox" style="margin-bottom:16px"><h3>📲 WhatsApp alert <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· premium due / policy end</span></h3>
+    <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="lwOn" ${c.on ? 'checked' : ''}> Send alerts</label>
+    <div class="form-grid">
+      <div class="field"><label>Send to (WhatsApp number)</label><input class="input" id="lwTo" type="tel" inputmode="tel" value="${esc(c.to)}" placeholder="9876543210"></div>
+      <div class="field"><label>Send at (time)</label><input class="input" id="lwAt" type="time" value="${esc(c.at)}"></div>
+      <div class="field"><label>When</label><select class="select" id="lwBf">${LICWA_OPTS.map(o => `<option value="${o[0]}" ${o[0] === bf ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="licWaSave()">💾 Save</button><button class="btn ghost" onclick="licWaTest()">📨 Send test message</button></div>
+    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Sent from the WhatsApp you linked in the WhatsApp tab. It must stay connected.</p></div>`;
+}
+async function licWaSave(){
+  try{
+    const r = await api('licWaSet', { on:$('#licWaBox #lwOn').checked, to:$('#licWaBox #lwTo').value.trim(), at:$('#licWaBox #lwAt').value, before:$('#licWaBox #lwBf').value });
+    S.licWa = r.cfg; toast('✓ Saved · alerts go to ' + r.cfg.to + ' at ' + r.cfg.at);
+  }catch(e){ handleErr(e); }
+}
+async function licWaTest(){
+  try{ await licWaSave(); const r = await api('licWaTest'); toast('✓ Test message sent to ' + r.to); }catch(e){ handleErr(e); }
+}
 function vLic(){
   const all = S.d.lic || [], list = filteredLic(), total = all.length;
   const now = Date.now();
@@ -4231,7 +4256,7 @@ function vLic(){
       ${remind.map(({ x, rn }) => `<div class="lic-ri"><div class="lic-ri-main"><b>${esc(x.name || x.policyNo || 'Policy')}</b>${x.name && x.policyNo ? ` <span class="muted">· ${esc(x.policyNo)}</span>` : ''}
         <div class="muted" style="font-size:calc(12.5px*var(--fs))">${esc(LIC_FREQ[x.freq] || 'One-time')} premium${x.amount ? ' · ₹' + Number(x.amount).toLocaleString('en-IN') : ''} · ${licDateFmt(rn.due)}</div></div>
         <span class="lic-rn lic-pill ${rn.cls}" data-lic-id="${esc(x.id)}">${esc(rn.text)}</span></div>`).join('')}</div>` : '';
-  return `${remindCard}<div class="grid kpis" style="margin-bottom:16px">
+  return `${licWaCard()}${remindCard}<div class="grid kpis" style="margin-bottom:16px">
       <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
       <div class="card kpi p"><div class="lbl">Total Sum Assured</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(totalAmt))}</div></div>
       <div class="card kpi p"><div class="lbl">To pay in 1 year</div><div class="val lic-prem" style="font-size:calc(20px*var(--fs))">${esc(licAmt(yearAmt))}</div><div class="hint">${yearN} running polic${yearN === 1 ? 'y' : 'ies'} · monthly ×12, quarterly ×4, half-yearly ×2, yearly ×1</div></div>

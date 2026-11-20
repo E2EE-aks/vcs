@@ -1049,10 +1049,8 @@ function makeApp(store, env) {
   { const t = setInterval(() => failWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
 
   // ---------- LIC alert on WhatsApp: when a premium falls due (or a policy matures) a WhatsApp message goes to the agent's number ----------
-  // Env (optional): LIC_WA_TO = number (default 9621755459) · LIC_WA_AT = "08:00" (24 h, server TZ, default Asia/Kolkata) · LIC_WA_BEFORE = "0" or e.g. "3,0" = days before the due date to also remind.
+  // Number, time and "days before" are edited in the app (LIC tab > WhatsApp alert, main admin only); env LIC_WA_TO / LIC_WA_AT / LIC_WA_BEFORE only give the starting values.
   // The message is sent from the main admin's linked WhatsApp (WhatsApp tab > Connect). If WhatsApp is not linked/connected the server simply tries again every minute, so nothing is lost.
-  const LICW_TO = String(env.LIC_WA_TO || '9621755459'), LICW_AT = /^\d\d:\d\d$/.test(String(env.LIC_WA_AT || '')) ? String(env.LIC_WA_AT) : '08:00';
-  const LICW_BEFORE = String(env.LIC_WA_BEFORE || '0').split(',').map(x => parseInt(x, 10)).filter(x => x >= 0 && x <= 30);
   const LICW_STEP = { monthly: 1, quarterly: 3, halfyearly: 6, yearly: 12 };
   const licIso_ = d => d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
   function licAdd_(iso, n) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); if (!m) return ''; const mo = +m[2] - 1 + n, last = new Date(Date.UTC(+m[1], mo + 1, 0)).getUTCDate(); return licIso_(new Date(Date.UTC(+m[1], mo, Math.min(+m[3], last)))); }
@@ -1068,10 +1066,11 @@ function makeApp(store, env) {
   const licD_ = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? (+m[3]) + '-' + m[2] + '-' + m[1] : iso; };
   let licwBusy = false;
   async function licWatch() {
-    const n = attNow();
-    if (licwBusy || n.hm < LICW_AT || n.hm >= '22:00' || !WA.isOpen('ADMIN')) return;      // only once the daily time has come and WhatsApp is connected
+    if (licwBusy) return;
     licwBusy = true;
     try {
+      const n = attNow(), C = await WA.licCfg();
+      if (!C.on || n.hm < C.at || !WA.isOpen('ADMIN')) return;                        // only once the chosen time has come and WhatsApp is connected
       const todo = await withWb(() => {
         const P = globalThis.PropertiesService.getScriptProperties(), s = globalThis.readSettings_().values, a = globalThis.getAccount_('ADMIN', s);
         if (!a) return [];
@@ -1081,7 +1080,7 @@ function makeApp(store, env) {
         for (const x of globalThis.readLic_()) {
           const who = (x.name || 'Policy') + (x.policyNo ? ' (' + x.policyNo + ')' : '');
           const due = licNext_(x, n.date);
-          if (due) for (const b of LICW_BEFORE) {
+          if (due) for (const b of C.before) {
             if (licDiff_(n.date, due) !== b) continue;
             const key = 'p|' + x.id + '|' + due + '|' + b; if (sent[key]) continue;
             out.push({ key, text: (b === 0 ? '⚠️ *LIC Premium aaj due hai*' : '🔔 *LIC Premium ' + b + ' din me due*') + '\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n💰 Premium: ' + licRs_(x.amount) + (x.freq ? ' (' + x.freq + ')' : '') + '\n📅 Due date: ' + licD_(due) + (x.phone ? '\n📞 ' + x.phone : '') });
@@ -1093,7 +1092,7 @@ function makeApp(store, env) {
         return out;
       });
       for (const t of todo) {
-        try { await WA.sendText('ADMIN', LICW_TO, t.text); }
+        try { await WA.sendText('ADMIN', C.to, t.text); }
         catch (e) { warn('LIC WhatsApp alert', e && e.message); break; }              // not sent -> not marked -> tried again next minute
         await withWb(() => {                                                         // mark as sent only after it really went out (never twice)
           const P = globalThis.PropertiesService.getScriptProperties(); let sent = {}; try { sent = JSON.parse(P.getProperty('LIC_WA_SENT') || '{}') || {}; } catch (e) {}
