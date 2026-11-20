@@ -18,7 +18,7 @@ module.exports = function makeWhatsApp(o) {
   const { env, warn, sign, withWb, enc, dec } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -292,11 +292,35 @@ module.exports = function makeWhatsApp(o) {
   }
   const isRevoke = pm => !!(pm && pm.key && pm.key.id && (pm.type === 0 || pm.type === 'REVOKE'));
 
+  /* ---------- edited messages: keep every earlier version so the app can show what changed (old words red, new words green) ---------- */
+  function editInfo(message) {                              // an "edit" notice that arrives as a normal message
+    const pm = unwrap(message).protocolMessage;
+    if (pm && (pm.type === 14 || pm.type === 'MESSAGE_EDIT') && pm.editedMessage && pm.key && pm.key.id) return { key: pm.key, msg: pm.editedMessage, ts: Number(pm.timestampMs) || 0 };
+    return null;
+  }
+  function applyEdit(uid, s, key, jidHint, newMsg, ts) {
+    try {
+      if (!key || !key.id || !newMsg) return;
+      let list = null, m = null;
+      const tryList = j => { const l = j && s.msgs.get(j); const f = l && l.find(x => x.id === key.id); if (f) { list = j; m = f; } };
+      tryList(jidHint); tryList(key.remoteJid);
+      if (!m) for (const j of s.msgs.keys()) { tryList(j); if (m) break; }
+      if (!m) return;
+      const k = kindText(newMsg); if (!k) return;
+      const nt = String(k.text || ''); if (nt === (m.text || '')) return;      // same edit seen twice
+      (m.hist || (m.hist = [])).push(m.text || ''); if (m.hist.length > 12) m.hist.shift();
+      m.text = nt; m.editAt = ts || Date.now();
+      const l = s.msgs.get(list), c = s.chats.get(list); if (c && l && l[l.length - 1] === m && m.kind === 'text') c.last = nt.slice(0, 80);
+      saveSoon(uid, s);
+    } catch (e) { warn('WhatsApp keep-edit', e && e.message); }
+  }
+
   function addMsg(uid, s, jid, wm, live) {
     if (jid === 'status@broadcast') { addStatus(s, wm); return null; }
     if (!isChat(jid) || jid === 'status@broadcast' || !wm || !wm.message) return null;
     if (wm.key) { learn(s, jid, wm.key.remoteJidAlt); learn(s, jid, wm.key.senderPn); learn(s, wm.key.participant, wm.key.participantAlt); learn(s, wm.key.participant, wm.key.participantPn); }
     { const pm = unwrap(wm.message).protocolMessage; if (isRevoke(pm)) { if (!(wm.key && wm.key.fromMe)) markDeleted(uid, s, pm.key, jid); return null; } }   // someone deleted a message: keep it, just flag it
+    { const ed = editInfo(wm.message); if (ed) { applyEdit(uid, s, ed.key, jid, ed.msg, ed.ts); return null; } }
     const k = kindText(wm.message); if (!k) return null;
     const out = !!(wm.key && wm.key.fromMe), id = (wm.key && wm.key.id) || crypto.randomBytes(6).toString('hex');
     const list = s.msgs.get(jid) || []; if (list.some(m => m.id === id)) return null;
@@ -406,6 +430,11 @@ module.exports = function makeWhatsApp(o) {
     const RANK = { error: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
     const bump = (m, st2) => { if (m && m.out && st2 && (RANK[st2] || 0) >= (RANK[m.status] || 0)) m.status = st2; };
     sock.ev.on('messages.update', ups => ups.forEach(u => {
+      if (u.update && u.update.message && u.key) {                                   // the sender edited a message
+        const em = u.update.message.editedMessage && u.update.message.editedMessage.message, ed = editInfo(u.update.message);
+        if (ed) { applyEdit(uid, s, ed.key, u.key.remoteJid, ed.msg, ed.ts); return; }
+        if (em) { applyEdit(uid, s, u.key, u.key.remoteJid, em, (Number(u.update.messageTimestamp) || 0) * 1000); return; }
+      }
       if (u.update && (u.update.messageStubType === 1 || u.update.messageStubType === 'REVOKE') && u.key && !u.key.fromMe) { markDeleted(uid, s, u.key, u.key.remoteJid); return; }   // deleted for everyone by the other person
       if (!u.update || u.update.status === undefined || u.update.status === null) return;
       bump(findMsg(u.key), ST[u.update.status]);
@@ -545,6 +574,30 @@ module.exports = function makeWhatsApp(o) {
       let sent; try { sent = await r.sock.sendMessage(jid, { text }); } catch (e) { warn('WhatsApp send', e && e.message); fail('Could not send: ' + String((e && e.message) || e).slice(0, 120)); }
       const m = addMsg(uid, r, jid, Object.assign({}, sent, { key: Object.assign({}, sent && sent.key, { fromMe: true }), message: { conversation: text }, messageTimestamp: Math.floor(Date.now() / 1000), status: 2 }), false);
       return { ok: true, jid, chat: chatView(uid, chatOf(r, jid)), msg: m ? msgView(uid, jid, m) : { id: String(Date.now()), out: true, at: Date.now(), kind: 'text', text, status: 'sent' } };
+    }
+    if (a === 'waForward') {                              // send any message of any chat (group or person) on to other chats / numbers
+      const from = String(req.from || ''), ids = [].concat(req.ids || req.id || []).map(String).slice(0, 10), tos = [].concat(req.to || []).map(String).filter(Boolean).slice(0, 10);
+      if (!from || !ids.length || !tos.length) fail('Pick a message and at least one chat to send it to.');
+      const list = r.msgs.get(from) || []; let ok = 0, bad = 0, why = '', first = true;
+      for (const id of ids) {
+        const m = list.find(x => x.id === id); if (!m) { bad++; why = 'That message is no longer loaded - open the chat again.'; continue; }
+        for (const to of tos) {
+          try {
+            const jid = toJid(to);
+            if (!first) await new Promise(x => setTimeout(x, 1150)); first = false;
+            await sendGuard(r, jid);
+            const raw = r.raw.get(from + '|' + id);
+            let content;
+            if (m.media) { if (!raw) fail('This file is not available any more. Open the chat again, then forward.'); content = { forward: raw }; }
+            else { const t = String(m.text || m.label || '').trim(); if (!t) fail('Nothing to forward.'); content = { text: t }; }
+            const sent = await r.sock.sendMessage(jid, content);
+            addMsg(uid, r, jid, Object.assign({}, sent, { key: Object.assign({}, sent && sent.key, { fromMe: true }), message: (sent && sent.message) || { conversation: content.text || '' }, messageTimestamp: Math.floor(Date.now() / 1000), status: 2 }), false);
+            ok++;
+          } catch (e) { bad++; why = String((e && e.message) || e).slice(0, 140); warn('WhatsApp forward', why); }
+        }
+      }
+      if (!ok) fail(why || 'Could not forward.');
+      return { ok: true, sent: ok, failed: bad, error: bad ? why : '' };
     }
     fail('Unknown WhatsApp action.');
   }

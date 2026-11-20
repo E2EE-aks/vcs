@@ -66,6 +66,26 @@
     '#waRoot .wa-b img.wa-st{width:140px;height:140px;object-fit:contain;background:none}',
     '#waRoot .wa-b audio{display:block;width:240px;max-width:100%}',
     '#waRoot .wa-b a.wa-file{display:flex;align-items:center;gap:8px;padding:8px;margin-bottom:3px;border-radius:7px;background:rgba(127,127,127,.15);color:inherit;text-decoration:none}',
+    '#waRoot .wa-rm{color:#d32f2f;background:rgba(211,47,47,.14);text-decoration:line-through;border-radius:3px;padding:0 2px}',
+    '#waRoot .wa-ad{color:#1b8a3a;background:rgba(37,211,102,.2);font-weight:700;border-radius:3px;padding:0 2px}',
+    'html[data-mode=dark] #waRoot .wa-rm{color:#ff8a80}',
+    'html[data-mode=dark] #waRoot .wa-ad{color:#69f0ae}',
+    '#waRoot .wa-ed{display:block;font-size:11.5px;opacity:.8;cursor:pointer;margin-top:2px;color:#e65100}',
+    '#waRoot .wa-eh{margin:4px 0;padding:6px 8px;border-left:3px solid #e65100;background:rgba(127,127,127,.12);border-radius:5px;font-size:13px}',
+    '#waRoot .wa-b .wa-fw{position:absolute;top:2px;right:2px;width:24px;height:24px;border-radius:50%;border:0;background:rgba(127,127,127,.2);font-size:13px;line-height:24px;padding:0;cursor:pointer;color:inherit;opacity:0;transition:opacity .15s}',
+    '#waRoot .wa-b:hover .wa-fw,#waRoot .wa-b .wa-fw:focus{opacity:1}',
+    '@media(hover:none){#waRoot .wa-b .wa-fw{opacity:.55}}',
+    '#waRoot .wa-fwov{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center}',
+    '#waRoot .wa-fwbox{background:var(--card,#fff);color:inherit;width:min(480px,100%);max-height:88dvh;display:flex;flex-direction:column;border-radius:16px 16px 0 0;overflow:hidden}',
+    '#waRoot .wa-fwbox h3{margin:0;padding:12px 14px 6px}',
+    '#waRoot .wa-fwprev{margin:0 14px 8px;padding:7px 10px;border-radius:8px;background:rgba(127,127,127,.14);font-size:13px;max-height:70px;overflow:hidden;white-space:pre-wrap;word-break:break-word}',
+    '#waRoot .wa-fwlist{flex:1;overflow-y:auto;min-height:120px;border-top:1px solid var(--line)}',
+    '#waRoot .wa-fwrow{display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer}',
+    '#waRoot .wa-fwrow:hover{background:rgba(127,127,127,.12)}',
+    '#waRoot .wa-fwrow input{width:18px;height:18px;flex:none}',
+    '#waRoot .wa-fwrow b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '#waRoot .wa-fwrow small{opacity:.65}',
+    '#waRoot .wa-fwfoot{display:flex;gap:8px;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line)}',
     '#waRoot .wa-day{align-self:center;font-size:12px;opacity:.85;padding:3px 11px;border-radius:8px;background:var(--card,#fff);box-shadow:0 1px 1px rgba(0,0,0,.1);margin:8px 0}',
     '#waRoot .wa-comp{display:flex;align-items:flex-end;gap:6px;padding:8px 10px;background:var(--card,#fff);border-top:1px solid var(--line);position:relative}',
     '#waRoot .wa-comp textarea{flex:1;resize:none;max-height:120px;min-height:40px;border-radius:20px;padding:9px 14px}',
@@ -355,6 +375,32 @@
   window.waEmoji = function(){ G.emoji = !G.emoji; var c = $('.wa-comp'); if (!c) return; var e = $('.wa-emo', c); if (e) e.remove(); if (G.emoji) c.insertAdjacentHTML('afterbegin', emojiHtml()); };
   window.waAddEmoji = function(e){ var i = $('#waIn'); if (!i) return; i.value += e; i.focus(); };
   function tick1(m){ if (!m.out) return ''; var s = m.status || 'sent'; return '<i class="' + (s === 'read' ? 'rd' : '') + '">' + (s === 'sending' ? '🕓' : s === 'sent' ? '✓' : s === 'error' ? '❗' : '✓✓') + '</i>'; }
+  /* ---------- edited messages: old words red (struck through), new words green ---------- */
+  function wdiff(a, b){
+    var A = String(a || '').split(/\s+/).filter(Boolean), B = String(b || '').split(/\s+/).filter(Boolean), n = A.length, m = B.length;
+    if (n * m > 160000) return '<span class="wa-rm">' + esc(A.join(' ')) + '</span> <span class="wa-ad">' + esc(B.join(' ')) + '</span>';
+    var t = [], i, j; for (i = 0; i <= n; i++){ t.push(new Array(m + 1).fill(0)); }
+    for (i = n - 1; i >= 0; i--) for (j = m - 1; j >= 0; j--) t[i][j] = A[i] === B[j] ? t[i + 1][j + 1] + 1 : Math.max(t[i + 1][j], t[i][j + 1]);
+    var out = []; i = 0; j = 0;
+    while (i < n && j < m){
+      if (A[i] === B[j]){ out.push(esc(A[i])); i++; j++; }
+      else if (t[i + 1][j] >= t[i][j + 1]){ out.push('<span class="wa-rm">' + esc(A[i]) + '</span>'); i++; }
+      else { out.push('<span class="wa-ad">' + esc(B[j]) + '</span>'); j++; }
+    }
+    while (i < n){ out.push('<span class="wa-rm">' + esc(A[i++]) + '</span>'); }
+    while (j < m){ out.push('<span class="wa-ad">' + esc(B[j++]) + '</span>'); }
+    return out.join(' ');
+  }
+  function editHtml(m){
+    var H = m.hist, last = H[H.length - 1], h = wdiff(last, m.text || '');
+    h += '<span class="wa-ed" onclick="waEdHist(\'' + esc(m.id) + '\')">✏️ Edited' + (H.length > 1 ? ' ' + H.length + ' times' : '') + ' · ' + (G.ed && G.ed[m.id] ? 'hide' : 'tap to see old versions') + '</span>';
+    if (G.ed && G.ed[m.id]){
+      var v = H.concat([m.text || '']);
+      for (var i = 0; i < v.length - 1; i++) h += '<div class="wa-eh"><small style="opacity:.7">Version ' + (i + 1) + ' → ' + (i + 2) + '</small><br>' + wdiff(v[i], v[i + 1]) + '</div>';
+    }
+    return h;
+  }
+  window.waEdHist = function(id){ G.ed = G.ed || {}; G.ed[id] = !G.ed[id]; G.sigM = ''; paintMsgs(false); };
   function bubble(m){
     if (m.kind === 'call') return '<div class="wa-sys' + (/Missed|declined/.test(m.label || '') ? ' miss' : '') + '">' + esc(m.label || 'Call') + ' · ' + esc(hm(m.at)) + '</div>';
     var u = m.url ? url(m.url) : '', h = '', th = m.thumb ? 'data:image/jpeg;base64,' + m.thumb : '';
@@ -365,15 +411,46 @@
     else if (m.kind === 'file') h += '<a class="wa-file" href="' + esc(u + '&dl=1') + '" target="_blank" rel="noopener"><span style="font-size:24px">📄</span><span style="min-width:0"><b style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(m.name || 'File') + '</b><small>' + (m.size ? size(m.size) + ' · ' : '') + 'Tap to download</small></span></a>';
     else if (m.kind === 'geo') h += '<a href="https://www.google.com/maps?q=' + esc(m.lat + ',' + m.lon) + '" target="_blank" rel="noopener" style="color:#027eb5">📍 Open location in Maps</a><br>';
     var cap = m.kind === 'file' || m.kind === 'photo' || m.kind === 'video' || m.kind === 'gif' || m.kind === 'voice' || m.kind === 'audio' || m.kind === 'sticker' || m.kind === 'geo' ? (m.text && m.text !== m.label && m.kind !== 'geo' ? m.text : '') : (m.text || m.label || '');
+    if (m.hist && m.hist.length) cap = editHtml(m);
     var dl = m.deleted && !m.out ? '<span class="wa-delt" onclick="waDelInfo(this)" data-n="' + esc(G.open && G.open.group ? (m.from || 'Someone') : title(G.open || {})) + '" data-k="' + esc(m.kind === 'photo' ? 'photo' : (m.kind === 'video' || m.kind === 'gif') ? 'video' : m.kind === 'text' ? 'message' : 'file') + '">🚫 Deleted by ' + esc(G.open && G.open.group ? (m.from || 'sender') : 'sender') + ' (saved here' + (m.delAt ? ' · ' + esc(hm(m.delAt)) : '') + ')</span>' : '';
-    return '<div class="wa-b ' + (m.out ? 'out' : 'in') + (dl ? ' del' : '') + '">' + dl + (m.from && !m.out && G.open && G.open.group ? '<span class="wa-who">' + esc(m.from) + '</span>' : '') + h + link(cap) + '<span class="wa-t">' + esc(hm(m.at)) + tick1(m) + '</span><div style="clear:both"></div></div>';
+    return '<div class="wa-b ' + (m.out ? 'out' : 'in') + (dl ? ' del' : '') + '"><button class="wa-fw" title="Forward" onclick="waFwd(\'' + esc(m.id) + '\')">↪</button>' + dl + (m.from && !m.out && G.open && G.open.group ? '<span class="wa-who">' + esc(m.from) + '</span>' : '') + h + (m.hist && m.hist.length ? cap : link(cap)) + '<span class="wa-t">' + esc(hm(m.at)) + tick1(m) + '</span><div style="clear:both"></div></div>';
   }
   var DELK = { photo:'photo', video:'video', message:'message', file:'file' };
   function waDelPop(m){ var who = G.open && G.open.group ? (m.from || 'Someone') : title(G.open || {}); var k = m.kind === 'photo' ? 'photo' : (m.kind === 'video' || m.kind === 'gif') ? 'video' : m.kind === 'text' ? 'message' : 'file'; toast('🚫 ' + who + ' deleted this ' + k + ' - it is still saved here', true); }
   window.waDelInfo = function(el){ toast('🚫 ' + (el.getAttribute('data-n') || 'This person') + ' deleted this ' + (DELK[el.getAttribute('data-k')] || 'message') + ' for everyone. It is NOT deleted from your WhatsApp here.', true); };
+  /* ---------- forward a message to other chats / numbers (group -> person, person -> group, anything) ---------- */
+  window.waFwd = function(id){
+    var m = G.msgs.filter(function(x){ return x.id === id; })[0]; if (!m || !G.open) return;
+    G.fw = { id:id, from:G.open.id, sel:{}, q:'', num:'', m:m }; fwDraw();
+  };
+  function fwDraw(){
+    var root = $('#waRoot'); if (!root || !G.fw) return; var o = $('#waFw'); if (o) o.remove();
+    var F = G.fw, q = F.q.toLowerCase(), prev = F.m.text || F.m.label || '';
+    var rows = G.chats.filter(function(c){ return c.id !== F.from && (!q || (title(c) + ' ' + (c.number || '')).toLowerCase().indexOf(q) > -1); }).slice(0, 150).map(function(c){
+      return '<label class="wa-fwrow">' + '<input type="checkbox" data-id="' + esc(c.id) + '"' + (F.sel[c.id] ? ' checked' : '') + '>' + avatar(c, 'sm') + '<span style="min-width:0"><b>' + esc(title(c)) + '</b><small>' + (c.group ? '👥 Group' : esc(c.number || '')) + '</small></span></label>'; }).join('');
+    var n = Object.keys(F.sel).length + (F.num.trim() ? 1 : 0);
+    root.insertAdjacentHTML('beforeend', '<div class="wa-fwov" id="waFw"><div class="wa-fwbox"><h3>↪ Forward to…</h3><div class="wa-fwprev">' + esc(String(prev).slice(0, 220)) + '</div>' +
+      '<div style="padding:0 14px 8px"><input class="input" id="waFwQ" placeholder="Search chat or group" value="' + esc(F.q) + '" style="width:100%;margin-bottom:6px"><input class="input" id="waFwN" type="tel" placeholder="or type a number, e.g. 9876543210" value="' + esc(F.num) + '" style="width:100%"></div>' +
+      '<div class="wa-fwlist">' + (rows || '<div style="padding:16px;opacity:.7">No chats found.</div>') + '</div>' +
+      '<div class="wa-fwfoot"><button class="btn ghost" id="waFwX" style="flex:1">Cancel</button><button class="btn" id="waFwGo" style="flex:2"' + (n ? '' : ' disabled') + '>Forward' + (n ? ' to ' + n : '') + ' ➤</button></div></div></div>');
+    var ov = $('#waFw');
+    ov.addEventListener('click', function(e){ if (e.target === ov) fwClose(); });
+    $('#waFwX').onclick = fwClose;
+    $('#waFwGo').onclick = fwGo;
+    ov.querySelectorAll('.wa-fwrow input').forEach(function(cb){ cb.onchange = function(){ if (cb.checked) F.sel[cb.getAttribute('data-id')] = 1; else delete F.sel[cb.getAttribute('data-id')]; var k = Object.keys(F.sel).length + (F.num.trim() ? 1 : 0), b = $('#waFwGo'); b.disabled = !k; b.textContent = 'Forward' + (k ? ' to ' + k : '') + ' ➤'; }; });
+    $('#waFwQ').oninput = function(){ F.q = this.value; var p = this.selectionStart; fwDraw(); var i = $('#waFwQ'); if (i){ i.focus(); try { i.setSelectionRange(p, p); } catch(e){} } };
+    $('#waFwN').oninput = function(){ F.num = this.value; var k = Object.keys(F.sel).length + (F.num.trim() ? 1 : 0), b = $('#waFwGo'); b.disabled = !k; b.textContent = 'Forward' + (k ? ' to ' + k : '') + ' ➤'; };
+  }
+  function fwClose(){ var o = $('#waFw'); if (o) o.remove(); G.fw = null; }
+  async function fwGo(){
+    var F = G.fw; if (!F) return; var to = Object.keys(F.sel); if (F.num.trim()) to.push(F.num.trim()); if (!to.length) return;
+    var b = $('#waFwGo'); if (b){ b.disabled = true; b.textContent = 'Sending…'; }
+    try { var r = await api('waForward', { from:F.from, ids:[F.id], to:to }); fwClose(); toast('✓ Forwarded to ' + r.sent + (r.failed ? ' · ' + r.failed + ' failed: ' + r.error : '')); G.sigL = ''; chats(true); }
+    catch(e){ if (b){ b.disabled = false; b.textContent = 'Forward ➤'; } toast(e.message || 'Could not forward', true); }
+  }
   function paintMsgs(bottom){
     var el = $('#waMsgs'); if (!el) return;
-    var sig = G.msgs.map(function(m){ return m.id + (m.status || '') + (m.deleted ? 'D' : ''); }).join(','); if (sig === G.sigM && !bottom) return; G.sigM = sig;
+    var sig = G.msgs.map(function(m){ return m.id + (m.status || '') + (m.deleted ? 'D' : '') + (m.hist ? 'E' + m.hist.length + (G.ed && G.ed[m.id] ? 'o' : '') : ''); }).join(','); if (sig === G.sigM && !bottom) return; G.sigM = sig;
     var seen = G.delSeen || (G.delSeen = {}), fresh = null;
     G.msgs.forEach(function(m){ if (m.deleted && !m.out && !seen[m.id]){ seen[m.id] = 1; if (G.delInit && m.delAt && Date.now() - m.delAt < 120000) fresh = m; } });
     G.delInit = true;
