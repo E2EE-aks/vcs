@@ -1584,6 +1584,35 @@ async function sendMail(m, env) {
   catch (e) { live.step('mail', 'Send e-mail (Gmail SMTP)', 0, Date.now() - t0, e.message, true); throw e; }
 }
 
+/* ---------- the app's own files, served at /app/  (the Android app loads them from here, so a normal update needs NO new APK) ----------
+   Only front-end files are served. Server files (server.js, Code.gs, *-server.js, fcm.js, package.json, google-services.json …) never are. */
+const APP_TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.ogg': 'audio/ogg', '.json': 'application/json; charset=utf-8' };
+const APP_DENY = /^(server\.js|Code\.gs|gas-shim\.js|google-store\.js|live-monitor\.js|fcm\.js|package(-lock)?\.json|google-services\.json)$|-server\.js$/i;
+function serveApp(rq, rs, url, env) {
+  if (url.pathname === '/app') { rs.writeHead(301, { Location: '/app/' }); return rs.end(); }
+  let rel = ''; try { rel = decodeURIComponent(url.pathname.slice(5)); } catch (e) {}
+  if (!rel || rel.endsWith('/')) rel += 'index.html';
+  const miss = () => { rs.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }); rs.end('Not found'); };
+  if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(rel) || APP_DENY.test(rel)) return miss();                // one flat file name, no folders, no dot-files, no ..
+  const type = APP_TYPES[require('path').extname(rel).toLowerCase()]; if (!type) return miss();
+  const send = (body, tag) => {
+    const h = { 'Content-Type': type, 'Cache-Control': 'no-cache', 'Vary': 'Accept-Encoding', 'X-Content-Type-Options': 'nosniff' };
+    if (tag) h.ETag = tag;
+    if (tag && String(rq.headers['if-none-match'] || '') === tag) { rs.writeHead(304, h); return rs.end(); }
+    if (rq.method === 'HEAD') { rs.writeHead(200, h); return rs.end(); }
+    if (body.length > 1024 && /^(text|application)\//.test(type) && /\bgzip\b/.test(String(rq.headers['accept-encoding'] || ''))) {
+      try { const z = require('zlib').gzipSync(body, { level: 6 }); h['Content-Encoding'] = 'gzip'; h['Content-Length'] = z.length; rs.writeHead(200, h); return rs.end(z); } catch (e) {}
+    }
+    h['Content-Length'] = body.length; rs.writeHead(200, h); rs.end(body);
+  };
+  if (rel === 'ks-native.js') return send(Buffer.from('window.KS_FCM = ' + (String(env.FCM_SERVICE_ACCOUNT || '').trim() ? 'true' : 'false') + ';\n'), '');   // push on/off for the Android app
+  const file = require('path').join(__dirname, rel);
+  require('fs').stat(file, (e, st) => {
+    if (e || !st.isFile()) return miss();
+    require('fs').readFile(file, (e2, buf) => e2 ? miss() : send(buf, '"' + st.size.toString(36) + '-' + Math.floor(st.mtimeMs).toString(36) + '"'));
+  });
+}
+
 function start(app, env) {
   const origins = String(env.ALLOWED_ORIGIN || '*').split(',').map(x => x.trim().replace(/\/+$/, '')).filter(Boolean);
   const anyOrigin = !origins.length || origins.includes('*');
@@ -1607,6 +1636,7 @@ function start(app, env) {
       let st = ''; try { st = String(globalThis.PropertiesService.getScriptProperties().getProperty('DEPLOY_STAMP') || ''); } catch (e) {}
       const h = Object.assign({ 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, cors); rs.writeHead(200, h); return rs.end(JSON.stringify({ ok: true, stamp: st }));
     }
+    if ((rq.method === 'GET' || rq.method === 'HEAD') && (url.pathname === '/app' || url.pathname.startsWith('/app/'))) return serveApp(rq, rs, url, env);
     if (rq.method === 'GET' && url.pathname === '/live/stream') return live.stream(rq, rs, cors, String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''));
     if (rq.method === 'GET' && url.pathname === '/updates/download' && app.updOpen) {      // stream an update file to the user
       return app.updOpen(Object.fromEntries(url.searchParams)).then(o => {
