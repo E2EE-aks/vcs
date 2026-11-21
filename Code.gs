@@ -160,7 +160,7 @@ function fail_(msg, code) {
 }
 
 var WRITE_ACTIONS = {
-  historyRestore: 1, saveLoginCfg: 1,
+  historyRestore: 1, saveLoginCfg: 1, evSaveTasks: 1, evMark: 1,
   setup: 1, setAttendance: 1, saveSettings: 1, saveStatuses: 1, changeCredentials: 1,
   addExpense: 1, updateExpense: 1, deleteExpense: 1,
   saveLgAccount: 1, deleteLgAccount: 1, addLgEntry: 1, updateLgEntry: 1, deleteLgEntry: 1,
@@ -296,6 +296,9 @@ function route_(req) {
       case 'saveTheme':         out = saveTheme_(req); break;
       case 'saveMyMenu':        out = saveMyMenu_(req); break;
       case 'getMyMenu':         out = { ok: true, menu: String(PropertiesService.getScriptProperties().getProperty('MYMENU_' + CTX.uid) || '') }; break;
+      case 'evGet':             out = evGet_(req); break;
+      case 'evSaveTasks':       out = evSaveTasks_(req); break;
+      case 'evMark':            out = evMark_(req); break;
       case 'getTheme':          out = { ok: true, theme: String(PropertiesService.getScriptProperties().getProperty('GLOBAL_THEME') || '') }; break;
       case 'saveStatuses':      out = saveStatuses_(req); break;
       case 'addStatus':         out = addStatus_(req); break;
@@ -1682,6 +1685,39 @@ function saveTheme_(req) {
 }
 
 // Each user's own placement of menu options (Bar / More / Profile / Left / Right) - private to that user, same after every login.
+// ---- Everyday Task tab: each user's own tasks (EVT_<uid>) and day-by-day Yes/No record (EVH_<uid>_<YYYYMM>) ----
+function evGet_(req) {
+  var P = PropertiesService.getScriptProperties(), out = { ok: true, tasks: String(P.getProperty('EVT_' + CTX.uid) || ''), hist: {} };
+  var ms = (req.months || []).slice(0, 14);
+  for (var i = 0; i < ms.length; i++) {
+    var m = String(ms[i]);
+    if (/^\d{6}$/.test(m)) out.hist[m] = String(P.getProperty('EVH_' + CTX.uid + '_' + m) || '');
+  }
+  return out;
+}
+function evSaveTasks_(req) {
+  if (CTX.viewing) fail_('Not allowed.', 'PERM');
+  var j = String(req.tasks || '');
+  if (j.length > 40000) fail_('Too many tasks.');
+  try { var o = JSON.parse(j); if (!Array.isArray(o)) throw 0; } catch (e) { fail_('The task data is not valid.'); }
+  PropertiesService.getScriptProperties().setProperty('EVT_' + CTX.uid, j);
+  return { ok: true };
+}
+function evMark_(req) {
+  if (CTX.viewing) fail_('Not allowed.', 'PERM');
+  var date = String(req.date || ''), id = String(req.id || ''), v = String(req.v || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^[A-Za-z0-9_-]{1,24}$/.test(id) || (v !== 'Y' && v !== 'N' && v !== '')) fail_('Invalid entry.');
+  var P = PropertiesService.getScriptProperties(), key = 'EVH_' + CTX.uid + '_' + date.slice(0, 4) + date.slice(5, 7), o = {};
+  try { o = JSON.parse(P.getProperty(key) || '{}') || {}; } catch (e) { o = {}; }
+  if (!o[date]) o[date] = {};
+  if (v) o[date][id] = v; else delete o[date][id];
+  if (!Object.keys(o[date]).length) delete o[date];
+  var s = JSON.stringify(o);
+  if (s.length > 45000) fail_('This month has too many entries.');
+  P.setProperty(key, s);
+  return { ok: true };
+}
+
 function saveMyMenu_(req) {
   if (CTX.viewing) fail_('Not allowed.', 'PERM');
   var j = String(req.menu || '');

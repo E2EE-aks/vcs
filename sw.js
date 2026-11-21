@@ -1,7 +1,7 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v97';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-cache.js', 'login-custom.js', 'native-push.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'pic2pdf-view.js', 'pdf2pics-view.js', 'attendance-reminder.js', 'ftp-view.js', 'status-view.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
+const CACHE = 'ks-shell-v98';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'ks-cache.js', 'login-custom.js', 'native-push.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'pic2pdf-view.js', 'pdf2pics-view.js', 'attendance-reminder.js', 'ftp-view.js', 'status-view.js', 'everyday-task.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => {})))).then(() => self.skipWaiting()));
