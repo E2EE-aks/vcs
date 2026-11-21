@@ -43,6 +43,33 @@
     reloading = true; keepView(); location.reload();
   };
 
+  /* ---- build check: looks at the server's index.html (it lists every file + its ?v= number).
+     If it differs from the copy this device runs, a new version is live -> clear the saved copy and reload once.
+     Works even when the update was pushed straight to GitHub / Render (no Deploy-tab stamp needed). ---- */
+  var BKEY = 'ks_build_sig', bbusy = false, bsig = '';
+  function hash(t){ var h = 5381; for (var i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return String(h >>> 0); }
+  function sigOf(t){ var m = t.match(/(?:src|href)="[^"]+\?v=\d+"/g) || []; return hash(m.join('|') + '#' + t.length); }
+  async function checkBuild(){
+    if (bbusy || reloading) return;
+    bbusy = true;
+    try {
+      var r = await fetch(new URL('index.html', location.href).href + '?_ksv=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      var now = sigOf(await r.text()), saved = ''; try { saved = localStorage.getItem(BKEY) || ''; } catch (e) {}
+      if (!saved){ try { localStorage.setItem(BKEY, now); } catch (e) {} return; }   // first run: remember this build
+      if (saved === now) return;                                                   // same build -> nothing to do
+      if (typing()) return;                                                        // never while you type; tries again soon
+      try { localStorage.setItem(BKEY, now); } catch (e) {}
+      await clearCaches();
+      reloading = true; keepView(); location.reload();
+    } catch (e) {} finally { bbusy = false; }
+  }
+  function both(){ check(); checkBuild(); }
+  setTimeout(checkBuild, 2500);
+  setInterval(function(){ if (!document.hidden) checkBuild(); }, 180000);          // every 3 minutes while the app is open
+  document.addEventListener('visibilitychange', function(){ if (!document.hidden) checkBuild(); });
+  window.addEventListener('online', checkBuild);
+
   setTimeout(check, 1500);                                          // site opened / reloaded
   document.addEventListener('visibilitychange', function(){ if (!document.hidden) check(); });   // coming back to the site (a harmless look, clears only if a deploy finished)
   window.addEventListener('online', check);

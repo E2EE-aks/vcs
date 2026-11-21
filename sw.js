@@ -1,6 +1,6 @@
 'use strict';
 /* Service worker: (1) shows push notifications even when the app is closed, (2) lets the app open with no network. */
-const CACHE = 'ks-shell-v101';
+const CACHE = 'ks-shell-v102';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'ui-plus.js', 'ks-extras.js', 'ks-extras.css', 'bottom-bar.css', 'bottom-bar.js', 'groups.css', 'groups.js', 'search.js', 'ks-cache.js', 'login-custom.js', 'native-push.js', 'tg-view.js', 'wa-view.js', 'websites-view.js', 'pic2pdf-view.js', 'pdf2pics-view.js', 'attendance-reminder.js', 'ftp-view.js', 'status-view.js', 'theme-tab.js', 'manifest.json', 'icon-192.png', 'logo.png', 'logo-sm.png', 'lic-icon.png'];
 
 self.addEventListener('install', e => {
@@ -16,6 +16,8 @@ self.addEventListener('fetch', e => {
   if (r.method !== 'GET' || r.headers.has('range')) return;   // audio / video (ringtone loop) needs real range replies
   const u = new URL(r.url);
   if (u.origin !== self.location.origin) return;           // the API on Render is never touched here
+  if (u.searchParams.has('_ksv')) return;                  // ks-cache.js build probe: always straight from the network
+  if (r.mode === 'navigate' || /\/(index\.html)?$/.test(u.pathname)) { e.respondWith(pageFirst(r, u)); return; }   // the page itself: newest first
   // FAST: the saved copy opens instantly and is refreshed quietly in the background (stale-while-revalidate).
   // A new deploy still shows up: ks-cache.js clears the saved copy once when the deploy stamp changes, and a new ?v= is a new file.
   e.respondWith(swr(e, r, u));
@@ -35,6 +37,18 @@ async function swr(e, req, u) {
   });
   if (hit) { e.waitUntil(refresh.catch(() => {})); return hit; }
   return netFirst(req, u);                                  // first visit / not saved yet: normal network load
+}
+async function pageFirst(req, u) {                         // network first (2.5 s), saved copy when slow / offline
+  const cache = await caches.open(CACHE);
+  try {
+    const res = await Promise.race([fetch(req, { cache: 'no-cache' }), new Promise((_, no) => setTimeout(() => no(new Error('slow')), 2500))]);
+    if (res && res.ok && res.type === 'basic') { const copy = res.clone(); cache.put(req, copy).catch(() => {}); }
+    return res;
+  } catch (err) {
+    const hit = await cache.match(req) || await cache.match('index.html', { ignoreSearch: true }) || await cache.match('./');
+    if (hit) return hit;
+    throw err;
+  }
 }
 async function cacheFirst(req, u) {
   const cache = await caches.open(CACHE);
