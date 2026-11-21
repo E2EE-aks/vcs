@@ -199,6 +199,7 @@
     '#waRoot{position:fixed;left:0;right:0;top:0;bottom:calc(var(--bb-gap,0px) - 4px);z-index:100;background:var(--bg,#fff);padding-top:env(safe-area-inset-top,0px)}',
     'body.wa-conv #waRoot{bottom:0;top:var(--vvt,0px);height:var(--vvh,100dvh);padding-top:0}',
     'body.wa-conv #btmBar{display:none!important}',
+    'body.has-grptabs:not(.wa-conv) #waRoot{top:var(--wa-top,0px);padding-top:0}',
     '#waRoot .wa-app{height:100%!important;min-height:0;border:0;border-radius:0}',
     '#waRoot .wa-login{margin:12px;overflow-y:auto;max-height:calc(100% - 24px)}',
     '#waRoot .wa-comp{padding-bottom:calc(8px + env(safe-area-inset-bottom,0px))}',
@@ -356,6 +357,13 @@
   }
   function fx(){ var on = !!(G.open && S.view === 'whatsapp' && window.innerWidth <= 860 && root()); document.body.classList.toggle('wa-conv', on); }
   setInterval(function(){ if (document.body.classList.contains('wa-conv') && (!root() || S.view !== 'whatsapp' || !G.open)) document.body.classList.remove('wa-conv'); }, 400);
+  /* keep the top sub-tabs (Chat / Mail / WhatsApp / Stocks ...) visible above the WhatsApp screen (QR login, chat list); only an open chat goes full screen */
+  function fixTop(){
+    var t = document.getElementById('grpTop'), de = document.documentElement;
+    var on = !!(t && document.body.classList.contains('has-grptabs') && !document.body.classList.contains('wa-conv') && S.view === 'whatsapp' && window.innerWidth <= 860 && root());
+    if (on) de.style.setProperty('--wa-top', Math.max(0, Math.round(t.getBoundingClientRect().bottom)) + 'px'); else de.style.removeProperty('--wa-top');
+  }
+  setInterval(fixTop, 250); window.addEventListener('resize', fixTop);
   window.addEventListener('resize', fx);
   function paintMain(force){
     fx(); var m = $('#waMain'); if (!m) return;
