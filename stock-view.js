@@ -122,7 +122,7 @@
 
   (function addTab(){
     var nav = $('#nav'), src = nav && nav.querySelector('[data-v="updates"]'); if (!src || nav.querySelector('[data-v="stocks"]')) return;
-    var anchor = nav.querySelector('[data-v="websites"]') || nav.querySelector('[data-v="youtube"]') || src, b = src.cloneNode(true);
+    var anchor = nav.querySelector('[data-v="whatsapp"]') || nav.querySelector('[data-v="websites"]') || src, b = src.cloneNode(true);
     b.dataset.v = 'stocks'; b.classList.remove('active', 'hidden');
     var tw = document.createTreeWalker(b, NodeFilter.SHOW_TEXT), tn = [];
     while (tw.nextNode()) if (tw.currentNode.nodeValue.trim()) tn.push(tw.currentNode);
