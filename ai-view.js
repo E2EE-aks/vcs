@@ -12,11 +12,11 @@
   var PROV = {
     anthropic: { n:'Claude (Anthropic)', model:'claude-sonnet-5-5', hint:'Key starts with sk-ant-… (console.anthropic.com)' },
     openai:    { n:'ChatGPT (OpenAI)',   model:'gpt-4o-mini',       hint:'Key starts with sk-… (platform.openai.com)' },
-    gemini:    { n:'Gemini (Google)',    model:'gemini-2.0-flash',  hint:'Key starts with AIza… (aistudio.google.com)' }
+    gemini:    { n:'Gemini (Google)',    model:'gemini-3.8-flash',  hint:'Key starts with AIza… (aistudio.google.com)' }
   };
   var C = { provider:'anthropic', key:'', model:'', system:'' };   // settings (this device only)
   var M = [];                                                     // chat: [{role:'user'|'assistant', text}]
-  var st = { busy:false, edit:false, err:'', ctl:null };
+  var st = { busy:false, edit:false, err:'', ctl:null, timedOut:false, models:[], mBusy:false };
   try { var s0 = JSON.parse(localStorage.getItem(KEY) || '{}'); if (s0 && typeof s0 === 'object') for (var k in C) if (typeof s0[k] === 'string') C[k] = s0[k]; } catch(e){}
   try { M = JSON.parse(localStorage.getItem(HIST) || '[]') || []; } catch(e){ M = []; }
   if (!PROV[C.provider]) C.provider = 'anthropic';
@@ -26,7 +26,13 @@
   function saveHist(){ try { localStorage.setItem(HIST, JSON.stringify(M.slice(-40))); } catch(e){} }
   function esc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); }
   function mask(k){ return k.length > 10 ? k.slice(0, 6) + '••••••' + k.slice(-4) : '••••••'; }
-  function model(){ return (C.model || '').trim() || PROV[C.provider].model; }
+  var OLD = { gemini: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-lite'] };   // retired ids -> use the current default
+  function model(){
+    var m = (C.model || '').trim();
+    if (!m || (OLD[C.provider] && OLD[C.provider].indexOf(m) > -1)) return PROV[C.provider].model;
+    return m;
+  }
+  function guess(k){ k = String(k || '').trim(); return /^sk-ant-/.test(k) ? 'anthropic' : /^AIza/.test(k) ? 'gemini' : /^sk-/.test(k) ? 'openai' : ''; }
 
   var css = document.createElement('style');
   css.textContent = [
@@ -74,8 +80,9 @@
       if (sys) body.systemInstruction = { parts:[{ text:sys }] };
     }
     opt.body = JSON.stringify(body);
+    st.timedOut = false; var tmo = setTimeout(function(){ st.timedOut = true; try { st.ctl && st.ctl.abort(); } catch(e){} }, 60000);
 
-    return fetch(url, opt).then(function(r){
+    return fetch(url, opt).then(function(r){ clearTimeout(tmo); return r; }, function(e){ clearTimeout(tmo); throw e; }).then(function(r){
       return r.text().then(function(t){
         var j = null; try { j = JSON.parse(t); } catch(e){}
         if (!r.ok){
@@ -94,6 +101,25 @@
     });
   }
 
+  function listModels(){
+    var p = C.provider, key = C.key.trim(), url, h = {};
+    if (!key || st.mBusy) return;
+    if (p === 'anthropic'){ url = 'https://api.anthropic.com/v1/models?limit=100'; h = { 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' }; }
+    else if (p === 'openai'){ url = 'https://api.openai.com/v1/models'; h = { 'authorization':'Bearer ' + key }; }
+    else { url = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200'; h = { 'x-goog-api-key':key }; }
+    st.mBusy = true; st.err = ''; st.models = []; draw();
+    fetch(url, { headers:h }).then(function(r){ return r.json().then(function(j){
+      if (!r.ok) throw new Error((j && j.error && (j.error.message || j.error)) || ('HTTP ' + r.status));
+      var ids = [];
+      if (p === 'gemini') ids = (j.models || []).filter(function(m){ return (m.supportedGenerationMethods || []).indexOf('generateContent') > -1; }).map(function(m){ return String(m.name).replace(/^models\//, ''); });
+      else ids = (j.data || []).map(function(m){ return m.id; });
+      ids = ids.filter(function(x){ return !/embed|tts|image|audio|realtime|moderation|whisper|dall|transcribe|imagen|veo|aqa/i.test(x); });
+      if (!ids.length) throw new Error('No models found for this key.');
+      st.models = ids.slice(0, 40);
+    }); }).catch(function(e){ st.err = 'Model list: ' + ((e && e.message) || 'failed'); })
+      .then(function(){ st.mBusy = false; draw(); });
+  }
+
   function send(){
     if (st.busy) return;
     var ta = $('#aiIn'); if (!ta) return;
@@ -103,8 +129,9 @@
     ta.value = ''; st.busy = true; st.err = ''; log(true);
     ask().then(function(out){ M.push({ role:'assistant', text:out }); saveHist(); })
       .catch(function(e){
-        if (e && e.name === 'AbortError') return;
         var m = (e && e.message) || 'Request failed';
+        if (e && e.name === 'AbortError') m = st.timedOut ? 'No reply in 60 seconds. This model may be slow or unavailable. Tap 🔍 Models and pick another one.' : '';
+        if (!m) return;
         if (/failed to fetch|networkerror|load failed/i.test(m)) m = 'Could not reach the AI service. Check your internet connection (or the key/model name).';
         M.push({ role:'error', text:m });
       })
@@ -140,7 +167,7 @@
         (st.err ? '<div class="err" style="margin:8px 0">' + esc(st.err) + '</div>' : '') +
         '<div class="ai-field"><label for="aiProv">AI provider</label><select class="select" id="aiProv" style="width:100%">' +
           Object.keys(PROV).map(function(k){ return '<option value="' + k + '"' + (k === C.provider ? ' selected' : '') + '>' + PROV[k].n + '</option>'; }).join('') + '</select></div>' +
-        '<div class="ai-field"><label for="aiKey">API key</label><input class="input" id="aiKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your API key here" value="' + esc(C.key) + '"><div class="muted" style="font-size:12px;margin-top:4px">' + esc(p.hint) + '</div></div>' +
+        '<div class="ai-field"><label for="aiKey">API key</label><input class="input" id="aiKey" type="text" name="ks-ai-key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" style="-webkit-text-security:disc" autocapitalize="off" spellcheck="false" placeholder="Paste your API key here" value="' + esc(C.key) + '"><div class="muted" style="font-size:12px;margin-top:4px">' + esc(p.hint) + '</div></div>' +
         '<div class="ai-field"><label for="aiModel">Model <span class="muted">(empty = ' + esc(p.model) + ')</span></label><input class="input" id="aiModel" autocomplete="off" autocapitalize="off" placeholder="' + esc(p.model) + '" value="' + esc(C.model) + '"></div>' +
         '<div class="ai-field"><label for="aiSys">Instructions for the AI <span class="muted">(optional)</span></label><textarea class="input" id="aiSys" rows="2" placeholder="e.g. Reply in Hinglish, keep answers short.">' + esc(C.system) + '</textarea></div>' +
         '<div class="ai-row" style="margin-top:12px"><button type="button" class="btn" id="aiSave">Save key</button>' +
@@ -148,7 +175,12 @@
         '<div class="ai-note">🔒 The key is saved only on this device and goes straight to ' + esc(p.n) + ' — it is not stored on the KS server or in Google Sheet. API usage is charged to your own account.</div></div>';
     } else {
       cfg = '<div class="card ai-card"><div class="ai-row" style="justify-content:space-between"><div style="min-width:0"><b>' + esc(p.n) + '</b><div class="muted" style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis">' + esc(model()) + ' · key ' + esc(mask(C.key.trim())) + '</div></div>' +
-        '<div class="ai-row"><button type="button" class="btn ghost sm" id="aiEdit">⚙️ Key / model</button><button type="button" class="btn ghost sm" id="aiClear">🗑 Clear chat</button></div></div></div>';
+        '<div class="ai-row"><button type="button" class="btn ghost sm" id="aiModels">' + (st.mBusy ? '…' : '🔍 Models') + '</button><button type="button" class="btn ghost sm" id="aiEdit">⚙️ Key / model</button><button type="button" class="btn ghost sm" id="aiClear">🗑 Clear chat</button></div></div></div>';
+    }
+    if (!(st.edit || !C.key)){
+      if (st.err) cfg += '<div class="err" style="margin:0 0 10px">' + esc(st.err) + '</div>';
+      if (st.models.length) cfg += '<div class="card ai-card"><b>Pick a model</b><div class="muted" style="font-size:12.5px;margin:2px 0 8px">These models work with your key. Tap one to use it.</div><div class="ai-row">' +
+        st.models.map(function(id){ return '<button type="button" class="btn ghost sm" data-m="' + esc(id) + '"' + (id === model() ? ' style="border-color:var(--brand)"' : '') + '>' + esc(id) + '</button>'; }).join('') + '</div></div>';
     }
     root.innerHTML = cfg +
       '<div class="card ai-card"><div class="ai-log" id="aiLog"></div>' +
@@ -160,6 +192,8 @@
     var root = $('#aiRoot'); if (!root || root.dataset.b) return; root.dataset.b = '1';
     root.addEventListener('click', function(e){
       var t = e.target.closest('button'); if (!t) return;
+      if (t.dataset && t.dataset.m){ C.model = t.dataset.m; saveCfg(); st.models = []; st.err = ''; try { toast('Model: ' + C.model); } catch(x){} return draw(); }
+      if (t.id === 'aiModels') return listModels();
       if (t.id === 'aiSend') return send();
       if (t.id === 'aiEdit'){ st.edit = true; st.err = ''; return draw(); }
       if (t.id === 'aiCancel'){ st.edit = false; st.err = ''; return draw(); }
@@ -171,7 +205,7 @@
       if (t.id === 'aiSave'){
         var key = ($('#aiKey').value || '').trim();
         if (key.length < 12){ st.err = 'That does not look like a full API key.'; return draw2(); }
-        C.provider = $('#aiProv').value; C.key = key; C.model = ($('#aiModel').value || '').trim(); C.system = ($('#aiSys').value || '').trim();
+        C.provider = guess(key) || $('#aiProv').value; C.key = key; C.model = ($('#aiModel').value || '').trim(); C.system = ($('#aiSys').value || '').trim();
         saveCfg(); st.edit = false; st.err = '';
         try { toast('API key saved on this device'); } catch(x){}
         draw();
