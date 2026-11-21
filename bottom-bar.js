@@ -83,7 +83,8 @@
   var NODEL = ['dashboard', 'profile'];                // can't be deleted
   var HIDE = ['settings'];                             // removed from every menu (its options now live as separate items)
   var MAXBAR = 6, MAXSIDE = 10, MAXSBS = 6;
-  var DEFPLACE = { dashboard: 'bar', profile: 'bar', chat: 'bar', telegram: 'bar', whatsapp: 'bar', mail: 'bar', settings: 'profile', vcs: 'profile', version: 'profile', logins: 'profile', deploy: 'profile', updates: 'profile' };
+  var DEFPLACE = { dashboard: 'bar', profile: 'bar', chat: 'bar', telegram: 'bar', whatsapp: 'bar', mail: 'bar', settings: 'profile', vcs: 'profile', version: 'profile', logins: 'profile', deploy: 'profile', updates: 'profile',
+    'x:ludo': 'profile', 'x:live': 'profile', 'x:trash': 'profile', 'x:dchat': 'profile' };   // chat extras (Ludo, Live Chat, Trash, Daily Chats) are reached from Profile now that More is gone
   var ARROWS = { chev: ['›', '‹'], dbl: ['»', '«'], tri: ['▶', '◀'], menu: ['☰', '☰'] };
   function normSb(x){ return { id: x.id, name: String(x.name == null ? '' : x.name).slice(0, 14), side: x.side === 'right' ? 'right' : 'left', arrow: ARROWS[x.arrow] ? x.arrow : 'chev', top: isFinite(+x.top) ? Math.max(5, Math.min(80, +x.top)) : 34 }; }
   function sbList(){                                   // the side bars: Left + Right always, plus the ones the user added
@@ -629,6 +630,7 @@
     try { var pl = cfg.place; cfg = loadCfg(); cfg.place = pl; applyCfg(); lastHtml = ''; draw(); } catch (e) {}
   };
   window.bbManage = function(){ openSheet(true, 'manage'); };
+  window.bbSwitch = function(){ openSheet(true, 'switch'); };          // long-press the Profile picture (top bar) = switch user
   window.bbCard = function(){
     var c = cfg;
     var rng = function(k, l, min, max, unit){ return '<div class="bb-row"><label>' + l + ' <b id="bbv-' + k + '">' + c[k] + unit + '</b></label><input type="range" data-bb="' + k + '" min="' + min + '" max="' + max + '" value="' + c[k] + '"></div>'; };
@@ -637,13 +639,12 @@
     return '<div class="card" id="bbCard"><h3>🧭 Bottom bar</h3>' +
       '<p class="muted" style="margin-bottom:12px">Changes show on the bar at once and are saved on this phone. The bar is used on phones and tablets.</p>' +
       rng('scale', 'Bar size', 80, 140, '%') + rng('ic', 'Icon size', 18, 40, 'px') + rng('fs', 'Font size', 9, 17, 'px') + rng('r', 'Roundness', 0, 36, 'px') +
-      '<p class="muted" style="margin:0 0 10px">Position: long-press the bar and drag it anywhere. Every user can also fine-tune their own bar from More › 🎨.</p>' +
       '<div class="bb-row bb-colr"><label>Animation</label><select class="select bb-sel" data-bbs="anim">' + [['pop', 'Pop'], ['bounce', 'Bounce'], ['wiggle', 'Wiggle'], ['none', 'Off']].map(function(o){ return '<option value="' + o[0] + '"' + (c.anim === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div>' +
       '<label class="tog" style="margin:6px 0 10px"><input type="checkbox" data-bb="labels" ' + (c.labels ? 'checked' : '') + '> Show names under icons</label>' +
       col('bg', 'Bar colour', cssHex('--card', '#ffffff')) + col('tx', 'Text &amp; icon colour', cssHex('--ink', '#1e293b')) + col('on', 'Selected colour', cssHex('--brand', '#4f46e5')) +
       '<div class="bb-sub">Icons <span class="muted">— type one emoji, leave blank for the default</span></div>' +
       ico('dashboard', 'Dashboard') + ico('profile', 'Profile') + ico('chat', 'Chat') + ico('all', 'More') +
-      '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" onclick="bbManage()">🧩 Manage menu (move / delete)</button><button type="button" class="btn ghost" data-bbfull="1">↺ Reset bottom bar</button></div></div>';
+      '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn ghost" data-bbfull="1">↺ Reset bottom bar</button></div></div>';
   };
   function refreshView(){ if (typeof render === 'function') { try { render(); } catch (e) {} } }
   function onSel(e){

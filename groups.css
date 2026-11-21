@@ -1,0 +1,52 @@
+/* KS · Group menu (bottom bar of groups + sub-tabs on top) */
+
+/* the old floating bar, its picture circle and its side bars are replaced by the group bar */
+#btmBar,#btmDp,.sbx{display:none!important}
+
+/* ---------- bottom bar of groups ---------- */
+#grpBar{display:none}
+body.has-btm #grpBar{display:flex;position:fixed;left:10px;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:125;margin:0 auto;max-width:560px;
+  background:var(--bb-bg,color-mix(in srgb,var(--card) 88%,transparent));-webkit-backdrop-filter:blur(16px) saturate(1.4);backdrop-filter:blur(16px) saturate(1.4);
+  border:1px solid var(--line);border-radius:var(--bb-r,30px);box-shadow:0 10px 30px rgba(15,23,42,.22);padding:6px 4px;gap:2px;
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+#grpBar button{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border:0;background:none;color:var(--bb-tx,var(--ink));
+  padding:calc(7px*var(--bb-s,1)) 1px calc(6px*var(--bb-s,1));border-radius:calc(var(--bb-r,30px) - 6px);cursor:pointer;font:inherit;-webkit-tap-highlight-color:transparent;
+  transition:background .2s,color .2s,transform .12s}
+#grpBar button:active{transform:scale(.94)}
+#grpBar .bi{position:relative;display:grid;place-items:center;width:calc(var(--bb-ic,26px) + 2px);height:calc(var(--bb-ic,26px) + 2px)}
+#grpBar .bi svg{width:var(--bb-ic,26px);height:var(--bb-ic,26px)}
+#grpBar small{font-size:min(var(--bb-fs,12px),11.5px);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+#grpBar.nolab small{display:none}
+#grpBar button.on{color:var(--bb-on,var(--brand));background:color-mix(in srgb,var(--bb-on,var(--brand)) 16%,transparent)}
+#grpBar .bi em{position:absolute;top:-5px;right:-9px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#ef4444;color:#fff;
+  font:700 10px/17px system-ui,sans-serif;text-align:center;font-style:normal;border:2px solid var(--card);box-sizing:content-box}
+/* 7 groups (admin) on a narrow phone */
+@media (max-width:400px){ #grpBar[data-n="7"] small{font-size:10px} #grpBar[data-n="7"] .bi,#grpBar[data-n="7"] .bi svg{width:calc(var(--bb-ic,26px) - 3px);height:calc(var(--bb-ic,26px) - 3px)} }
+
+/* space for the bar (WhatsApp / Telegram use --bb-gap too) */
+body.has-btm{--bb-gap:calc(78px + env(safe-area-inset-bottom))!important}
+body.has-btm main{padding-bottom:calc(92px + env(safe-area-inset-bottom))!important}
+body.has-btm .fab,html.ks-compact body.has-btm .fab{bottom:calc(88px + env(safe-area-inset-bottom))!important}
+
+/* ---------- sub-tabs on top ---------- */
+#grpTabs{display:none}
+body.has-btm #grpTabs:not(.hidden){display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+  position:sticky;top:env(safe-area-inset-top,0px);z-index:90;max-width:var(--maxw);margin:0 auto 10px;padding:6px 0 8px;
+  background:var(--bg);scroll-snap-type:x proximity}
+#grpTabs::-webkit-scrollbar{display:none}
+#grpTabs button{flex:none;display:inline-flex;align-items:center;gap:6px;position:relative;padding:7px 13px;border-radius:999px;border:1px solid var(--line);
+  background:var(--card);color:var(--ink);font:inherit;font-size:calc(13px*var(--fs,1));font-weight:600;white-space:nowrap;cursor:pointer;scroll-snap-align:center;
+  -webkit-tap-highlight-color:transparent;transition:background .18s,color .18s,border-color .18s,transform .12s}
+#grpTabs button:active{transform:scale(.96)}
+#grpTabs .ti{display:inline-grid;place-items:center;font-size:1.05em;line-height:1}
+#grpTabs .ti img{width:1.15em;height:1.15em;object-fit:contain}
+#grpTabs button.on{background:var(--bb-on,var(--brand));border-color:var(--bb-on,var(--brand));color:#fff}
+#grpTabs em{min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:#ef4444;color:#fff;font:700 10px/17px system-ui,sans-serif;text-align:center;font-style:normal}
+
+/* Deploy keeps its own Deploy / Version / Updates strip — the sub-tabs on top replace it */
+body.has-grptabs #view > .actions:first-child:has(> button[onclick^="depTab("]){display:none}
+
+/* ---------- Profile button in the top bar ---------- */
+#grpMe{flex:none;width:34px;height:34px;padding:0;border:2px solid transparent;border-radius:50%;background:none;cursor:pointer;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+#grpMe span{display:grid;place-items:center;width:100%;height:100%;border-radius:50%;background:linear-gradient(135deg,#a78bfa,#6366f1) center/cover no-repeat;color:#fff;font:800 14px/1 system-ui,sans-serif}
+#grpMe.on{border-color:var(--brand)}
