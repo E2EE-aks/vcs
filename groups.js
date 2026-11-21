@@ -11,7 +11,7 @@
     { id: 'today', lb: 'Aaj',   ic: 'sun',    items: [['dashboard', 'Dashboard'], ['everyday', 'Everyday Task'], ['timetable', 'Time Table'], ['attendance', 'Attendance']] },
     { id: 'work',  lb: 'Kaam',  ic: 'case',   items: [['work', 'Work'], ['vcs', 'VCS Complaint'], ['rack', 'Rack Mapping']] },
     { id: 'money', lb: 'Paisa', ic: 'wallet', items: [['expenses', 'Expenses'], ['lic', 'LIC'], ['pay', 'Plans & Payments']] },
-    { id: 'talk',  lb: 'Baat',  ic: 'chat',   items: [['chat', 'Chat'], ['mail', 'Mail'], ['whatsapp', 'WhatsApp'], ['telegram', 'Telegram']] },
+    { id: 'talk',  lb: 'Baat',  ic: 'chat',   items: [['chat', 'Chat'], ['mail', 'Mail'], ['whatsapp', 'WhatsApp'], ['aitab', 'AI'], ['telegram', 'Telegram']] },
     { id: 'vault', lb: 'Vault', ic: 'lock',   items: [['passwords', 'Passwords'], ['links', 'Links'], ['websites', 'Websites']] },
     { id: 'tools', lb: 'Tools', ic: 'grid',   items: [['pic2pdf', 'Pic2PDF'], ['pdf2pics', 'PDF2Pics'], ['ftp', 'FTP'], ['statuses', 'Status Saver'], ['music', 'Music'], ['youtube', 'YouTube']] },
     { id: 'admin', lb: 'Admin', ic: 'shield', admin: true, items: [['logins', 'Logins'], ['deploy', 'Deploy'], ['updates', 'Updates'], ['version', 'Version'], ['config', 'Config'], ['settings', 'Settings']] }
