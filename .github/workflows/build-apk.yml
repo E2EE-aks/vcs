@@ -30,6 +30,10 @@ on:
         description: Optional - path of an uploaded .zip in the repo to use as the app instead of the file list (used by Cloner)
         required: false
         default: ''
+      live:
+        description: "true = the app loads the latest files from your server every time (no new APK needed for normal updates). false = files are packed inside the APK."
+        required: false
+        default: 'true'
 
 permissions:
   contents: write
@@ -45,6 +49,7 @@ jobs:
       APP_ID: ${{ inputs.app_id }}
       APP_VER: ${{ inputs.version }}
       ZIP: ${{ inputs.zip }}
+      LIVE: ${{ inputs.live }}
       RUN_NO: ${{ github.run_number }}
       GSJ: ${{ secrets.GOOGLE_SERVICES_JSON }}
     steps:
@@ -88,14 +93,30 @@ jobs:
           for f in native-push.js ringtone.ogg; do [ -f "$f" ] && cp "$f" "www/$f" || true; done
           [ -f www/index.html ] || { echo "index.html must be part of the app"; exit 1; }
           if [ -n "$GSJ" ]; then echo "window.KS_FCM = true;" > www/ks-native.js; else echo "window.KS_FCM = false;" > www/ks-native.js; fi
-          sed -i '0,/<head>/s//<head>\n<script src="ks-native.js"><\/script>/' www/index.html
+          grep -q 'ks-native.js' www/index.html || sed -i '0,/<head>/s//<head>\n<script src="ks-native.js"><\/script>/' www/index.html
           ls -la www | head -60
 
       - name: Create the Android project
         run: |
           npm init -y >/dev/null
           npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/push-notifications@6 @capacitor/local-notifications@6
-          node -e "require('fs').writeFileSync('capacitor.config.json', JSON.stringify({ appId: process.env.APP_ID, appName: process.env.APP_NAME, webDir: 'www', server: { androidScheme: 'https' }, android: { allowMixedContent: false }, plugins: { PushNotifications: { presentationOptions: ['badge','sound','alert'] } } }, null, 2))"
+          LIVE_URL=""
+          if [ "$LIVE" != "false" ] && [ -z "$ZIP" ] && [ -f www/app.js ]; then
+            API="$(grep -m1 -oP "const API_URL = '\K[^']+" www/app.js || true)"
+            if [ -n "$API" ]; then LIVE_URL="${API%/}/app/"; fi
+          fi
+          export LIVE_URL
+          echo "Live update URL: ${LIVE_URL:-none (files are packed inside the APK)}"
+          if [ -n "$LIVE_URL" ]; then
+            cat > www/offline.html <<OFF
+          <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Offline</title></head>
+          <body style="font-family:system-ui;margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#0b1220;color:#e5e7eb;text-align:center;padding:24px">
+          <div style="font-size:46px">📡</div><b style="font-size:19px">Internet nahi mil raha</b>
+          <span style="color:#94a3b8">Connection check karke dobara try karo.</span>
+          <button onclick="location.replace('$LIVE_URL')" style="padding:12px 26px;border:0;border-radius:12px;background:#4f46e5;color:#fff;font-size:16px">Retry</button></body></html>
+          OFF
+          fi
+          node -e "const c = { appId: process.env.APP_ID, appName: process.env.APP_NAME, webDir: 'www', server: { androidScheme: 'https' }, android: { allowMixedContent: false }, plugins: { PushNotifications: { presentationOptions: ['badge','sound','alert'] } } }; if (process.env.LIVE_URL) { c.server.url = process.env.LIVE_URL; c.server.errorPath = 'offline.html'; } require('fs').writeFileSync('capacitor.config.json', JSON.stringify(c, null, 2))"
           npx cap add android
           npx cap sync android
 
