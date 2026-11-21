@@ -2046,7 +2046,7 @@ const TH_ENUM = {
 };
 const TH_NUM = { fs:[80,140], radius:[0,30], gap:[6,30], pad:[8,34], sbw:[180,340] };
 const TH_DEF = {
-  mode:'light', brand:'#4f46e5', brand2:'#7c3aed', side:'', cust:{ light:{}, dark:{} },
+  mode:'dark', brand:'#4f46e5', brand2:'#7c3aed', side:'', cust:{ light:{}, dark:{} },
   fs:100, radius:16, gap:16, pad:20, sbw:240, maxw:'0', cols:'auto', card:'shadow', bg:'solid', ctl:'m', density:'normal', font:'sans', kpi:'170', motion:'off', sbPos:'left', nav:'full',
   dash:{ hello:1, today:1, kpi:1, chart:1, table:1 }, menu:{ order:[], hide:[], label:{}, icon:{} }
 };

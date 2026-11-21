@@ -81,3 +81,48 @@ body.gs-open{overflow:hidden}
 @keyframes gsf{0%,60%{box-shadow:0 0 0 3px var(--brand);background:var(--brand-soft)}100%{box-shadow:0 0 0 0 transparent}}
 .gs-flash{animation:gsf 2.2s ease-out;border-radius:12px}
 #gsQ::-webkit-search-cancel-button,#gsQ::-webkit-search-decoration{-webkit-appearance:none;display:none}
+
+/* =====================================================================
+   FULL DARK MODE  — fixes for parts that stayed light
+   (all rules only apply when html[data-mode="dark"])
+   ===================================================================== */
+html[data-mode="dark"] body,html[data-mode="dark"] #login{background-color:var(--bg)}
+html[data-mode="dark"] .login-card{box-shadow:0 20px 60px rgba(0,0,0,.55);border:1px solid var(--line)}
+html[data-mode="dark"] .lg-chips li{color:var(--ink)}
+/* chat */
+html[data-mode="dark"] .ch-comp,html[data-mode="dark"] .ch-ctx{background:var(--soft)}
+html[data-mode="dark"] .ch-b .rq span{color:var(--muted)}
+html[data-mode="dark"] .ch-b.failed .mt{color:#fca5a5}
+html[data-mode="dark"] .tick{color:var(--muted)}
+html[data-mode="dark"] .tick.read{color:#60a5fa}
+/* attendance mark buttons / tags / misc */
+html[data-mode="dark"] .tag[style*="f59e0b22"]{color:#fbbf24!important}
+html[data-mode="dark"] .tag.ok{background:#14361f;color:#86efac}
+html[data-mode="dark"] .log-item.bad{border-color:#7f1d1d}
+html[data-mode="dark"] .viewas.ro{background:#1e2447;color:#c7d2fe}
+html[data-mode="dark"] .th-code,html[data-mode="dark"] textarea,html[data-mode="dark"] input,html[data-mode="dark"] select{color-scheme:dark}
+html[data-mode="dark"] ::-webkit-scrollbar-thumb{background:#33405f;border-radius:8px}
+html[data-mode="dark"] ::-webkit-scrollbar-track{background:transparent}
+/* colour swatches (settings) keep a visible edge */
+html[data-mode="dark"] [style*="width:48px"][style*="height:38px"]{border-color:var(--inputline)!important}
+
+/* ---------- FTP view ---------- */
+html[data-mode="dark"] #ftpRoot .fx-box{box-shadow:0 8px 24px rgba(0,0,0,.35)}
+html[data-mode="dark"] #ftpRoot .fx-btn.gr{background:var(--brand-soft);color:var(--brand-ink)}
+html[data-mode="dark"] #ftpRoot .fx-btn.rd{background:#3b1717;color:#fca5a5}
+html[data-mode="dark"] #ftpRoot .fx-link{background:var(--brand-soft);color:var(--brand-ink)}
+html[data-mode="dark"] #ftpRoot .fx-msg{color:#4ade80}
+html[data-mode="dark"] #ftpRoot .fx-msg.e{color:#f87171}
+html[data-mode="dark"] #ftpRoot .fx-ib{background:var(--soft2);color:var(--ink)}
+html[data-mode="dark"] #ftpRoot [style*="e8e8f0"]{background:var(--line2)!important}
+
+/* ---------- Websites view ---------- */
+html[data-mode="dark"] #wsRoot{color:var(--ink)}
+html[data-mode="dark"] #wsRoot .ws-top input,html[data-mode="dark"] #wsRoot .ws-box input{background:var(--card);color:var(--ink);border-color:var(--inputline)}
+html[data-mode="dark"] #wsRoot .ws-box,html[data-mode="dark"] #wsRoot .ws-it{background:var(--card);border-color:var(--line);box-shadow:0 8px 24px rgba(0,0,0,.3)}
+html[data-mode="dark"] #wsRoot .ws-box label{color:var(--label)}
+html[data-mode="dark"] #wsRoot .ws-btn.gr,html[data-mode="dark"] #wsRoot .ws-ic{background:var(--brand-soft);color:var(--brand-ink)}
+html[data-mode="dark"] #wsRoot .ws-btn.rd{background:#3b1717;color:#fca5a5}
+html[data-mode="dark"] #wsRoot .ws-ib{background:var(--soft2);color:var(--ink)}
+html[data-mode="dark"] #wsRoot .ws-nm small,html[data-mode="dark"] #wsRoot .ws-empty{color:var(--muted)}
+html[data-mode="dark"] #wsRoot .ws-err{color:#f87171}
