@@ -1,13 +1,15 @@
 'use strict';
 // Stocks tab: each user's NSE/BSE watchlist, kept in the Google Sheet properties (like the Websites tab).
-// While the market is open (Mon-Fri 09:15-15:30 IST) this server checks prices every 30 s and, when a stock has moved
-// by the chosen % since the last alert, sends a WhatsApp message from the user's linked WhatsApp (see wa-server.js)
-// and a phone notification. Prices come from Yahoo Finance (unofficial, free).  Env (optional): STOCK_ALWAYS=1 (poll outside market hours, for testing).
+// FULL TIME: this server watches prices all day and night, market open or closed (every 30 s while the market is open,
+// every 2 min while it is closed, so 24h symbols like BTC-USD / GC=F / USDINR=X still alert at night). When a stock has moved
+// by the chosen % since the last alert it sends a WhatsApp message from the user's linked WhatsApp (see wa-server.js)
+// and a phone notification. Every alert is also logged (time, price, %) and shown as a marker on the candle chart.
+// Prices come from Yahoo Finance (unofficial, free).
 module.exports = function ({ warn, withWb, WA, PUSH }) {
   const P = () => globalThis.PropertiesService.getScriptProperties();
-  const ACTIONS = new Set(['stocksGet', 'stocksSave', 'stocksTest']);
+  const ACTIONS = new Set(['stocksGet', 'stocksSave', 'stocksTest', 'stocksChart']);
   const keyOf = uid => 'STOCKS_' + uid, IDX = 'STOCKS_USERS';
-  const cfgs = new Map(), refs = new Map(), px = {}, sentDay = new Map();
+  const cfgs = new Map(), refs = new Map(), px = {}, sentDay = new Map(), hist = new Map(), ccache = new Map();
   let loaded = false;
 
   const toY = s => /[.^]/.test(s) ? s : s + '.NS';
@@ -44,10 +46,36 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
     return { p: m.regularMarketPrice, prev: m.chartPreviousClose != null ? m.chartPreviousClose : m.previousClose, at: Date.now() };
   }
 
+
+  // ---- candle chart data (Yahoo) ----
+  const TF = { '1m': ['1m', '1d'], '5m': ['5m', '5d'], '15m': ['15m', '5d'], '1h': ['60m', '1mo'], '1d': ['1d', '6mo'] };
+  async function candles(sym, tf) {
+    const k = sym + '|' + tf, hit = ccache.get(k);
+    if (hit && Date.now() - hit.t < 25000) return hit.d;
+    const [iv, rg] = TF[tf] || TF['5m'];
+    const r = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(toY(sym)) + '?interval=' + iv + '&range=' + rg, { headers: { 'user-agent': 'Mozilla/5.0' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const res = (await r.json()).chart.result[0], q = (res.indicators.quote || [{}])[0] || {}, ts = res.timestamp || [], out = [];
+    for (let i = 0; i < ts.length; i++) {
+      const o = q.open && q.open[i], h = q.high && q.high[i], l = q.low && q.low[i], c = q.close && q.close[i];
+      if (o == null || h == null || l == null || c == null) continue;
+      out.push([ts[i], +o.toFixed(4), +h.toFixed(4), +l.toFixed(4), +c.toFixed(4), (q.volume && q.volume[i]) || 0]);
+    }
+    const d = { c: out, p: res.meta.regularMarketPrice, prev: res.meta.chartPreviousClose != null ? res.meta.chartPreviousClose : res.meta.previousClose };
+    ccache.set(k, { t: Date.now(), d });
+    if (ccache.size > 400) for (const key of [...ccache.keys()].slice(0, 100)) ccache.delete(key);
+    return d;
+  }
+  function logAlert(uid, sym, ref, q, pct) {
+    let a = hist.get(uid); if (!a) { a = []; hist.set(uid, a); }
+    a.push({ s: sym, t: Date.now(), ref, p: q.p, pct: +pct.toFixed(3) });
+    if (a.length > 300) a.splice(0, a.length - 300);
+  }
+
   function message(sym, ref, q, pct) {
     const up = pct > 0, day = q.prev ? (q.p - q.prev) / q.prev * 100 : null;
     return (up ? '🟢 ▲ *' : '🔴 ▼ *') + sym + '* ' + (up ? 'up' : 'down') + ' ' + Math.abs(pct).toFixed(2) + '%\n💰 ₹' + inr(ref) + ' → ₹' + inr(q.p) +
-      (day == null ? '' : '\n📊 Aaj: ' + (day >= 0 ? '+' : '') + day.toFixed(2) + '%') + '\n🕒 ' + now().hms + ' IST';
+      (day == null ? '' : '\n📊 Aaj: ' + (day >= 0 ? '+' : '') + day.toFixed(2) + '%') + '\n🕒 ' + now().hms + ' IST, ' + now().date + (marketOpen() ? '' : ' (market band)');
   }
 
   // true = delivered (or nothing to deliver to), false = a channel failed -> try again on the next check
@@ -68,12 +96,13 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
     return ok;
   }
 
-  let busy = false;
+  let busy = false, tick = 0;
   async function watch() {
     if (busy) return; busy = true;
     try {
       await load();
-      if (!marketOpen()) return;
+      tick++;
+      if (!marketOpen() && tick % 4) return;                                 // market closed: check every 2 min instead of 30 s (alerts stay ON full time)
       const users = [...cfgs.entries()].filter(([u, c]) => c.on && c.symbols.length);
       if (!users.length) return;
       const syms = [...new Set(users.flatMap(([u, c]) => c.symbols))].slice(0, 80);
@@ -85,7 +114,7 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
           if (ref == null) { refs.set(k, q.p); continue; }                       // first price seen = starting point
           const pct = (q.p - ref) / ref * 100;
           if (Math.abs(pct) < c.thr) continue;
-          if (await alertUser(uid, c, s, ref, q, pct)) refs.set(k, q.p);
+          if (await alertUser(uid, c, s, ref, q, pct)) { refs.set(k, q.p); logAlert(uid, s, ref, q, pct); }
         }
       }
     } catch (e) { warn('Stocks watcher', e && e.message); } finally { busy = false; }
@@ -116,12 +145,21 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
       catch (e) { globalThis.fail_('Message nahi gaya: ' + String((e && e.message) || e).slice(0, 120), 'STOCKS'); }
       return { ok: true };
     }
+    if (req.action === 'stocksChart') {
+      const c = await readOne(uid), tf = TF[req.tf] ? req.tf : '5m';
+      const want = (Array.isArray(req.syms) && req.syms.length ? req.syms : c.symbols).map(x => String(x).toUpperCase()).filter(x => c.symbols.includes(x)).slice(0, 40);
+      const data = {}; let i = 0;
+      await Promise.all(Array.from({ length: Math.min(6, want.length) }, async () => {      // 6 at a time, so Yahoo is not hammered
+        while (i < want.length) { const s = want[i++]; try { data[s] = await candles(s, tf); } catch (e) { data[s] = { c: [], err: String((e && e.message) || e).slice(0, 60) }; } }
+      }));
+      return { ok: true, tf, data, alerts: hist.get(uid) || [], market: marketOpen() };
+    }
     const c = await readOne(uid), prices = {};
     await Promise.all(c.symbols.slice(0, 40).map(async s => {
       if (!px[s] || Date.now() - px[s].at > 60000) { try { px[s] = await quote(s); } catch (e) {} }
       if (px[s]) prices[s] = { p: px[s].p, prev: px[s].prev };
     }));
-    return { ok: true, cfg: c, px: prices, waOk: WA.isOpen(uid), market: marketOpen() };
+    return { ok: true, cfg: c, px: prices, waOk: WA.isOpen(uid), market: marketOpen(), alerts: (hist.get(uid) || []).slice(-50) };
   }
   return { actions: ACTIONS, route };
 };
