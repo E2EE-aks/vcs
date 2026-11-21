@@ -75,8 +75,10 @@
   /* ---------- the bars ---------- */
   var bar = document.createElement('nav'); bar.id = 'grpBar'; bar.setAttribute('aria-label', 'Main');
   var tabs = document.createElement('div'); tabs.id = 'grpTabs'; tabs.className = 'hidden'; tabs.setAttribute('role', 'tablist');
+  var top = document.createElement('div'); top.id = 'grpTop';          // sticky header: global search + sub-tabs
+  top.appendChild(tabs);
   document.body.appendChild(bar);
-  main.insertBefore(tabs, main.firstChild);
+  main.insertBefore(top, main.firstChild);
 
   function chatBadge(){
     var cb = $('#chatBadge'); if (!cb || cb.classList.contains('hidden')) return '';
@@ -155,5 +157,7 @@
   var old = $('#btmBar'); if (old) new MutationObserver(run).observe(old, { attributes: true, attributeFilter: ['style', 'class'] });
   new MutationObserver(run).observe(app, { attributes: true, attributeFilter: ['class'] });
   window.grpRedraw = run;
+  window.grpOpen = openItem;                                              // used by the global search
+  window.grpPages = function(){ var o = []; visibleGroups().forEach(function(g){ itemsOf(g).forEach(function(it){ o.push({ id: it[0], lb: it[1], g: g.lb }); }); }); return o; };
   draw();
 })();
