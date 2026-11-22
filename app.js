@@ -1320,7 +1320,7 @@ function depProgHtml(){
 }
 function vDeploy(){
   const t = DEP.tab || 'deploy';
-  return depTabs() + (t === 'version' || t === 'updates' ? '' : vcsWaCard()) + (t === 'version' ? vVersion() : t === 'updates' ? vUpdates() : vDeployMain());
+  return depTabs() + (t === 'version' || t === 'updates' ? '' : vcsWaCard() + waBotCard()) + (t === 'version' ? vVersion() : t === 'updates' ? vUpdates() : vDeployMain());
 }
 /* ---------- WhatsApp alerts for website updates + all VCS alerts (main admin only) ---------- */
 function vcsWaCard(){
@@ -1343,6 +1343,42 @@ async function vcsWaSave(){
 }
 async function vcsWaTest(){
   try{ await vcsWaSave(); const r = await api('vcsWaTest'); toast('✓ Test message sent to ' + r.to); }catch(e){ handleErr(e); }
+}
+/* ---------- WhatsApp helper bot: which numbers may chat with it (Expense / Attendance by WhatsApp) - main admin only ---------- */
+function waBotCard(){
+  if (!(isAdmin() && S.me && S.me.primary && !S.as)) return '';
+  const c = S.waBot || { on:true, nums:[] };
+  if (!S.waBot && !S.waBotLoading){ S.waBotLoading = true; api('waBotGet').then(r => { S.waBot = r.cfg; const e = $('#waBotBox'); if (e) e.outerHTML = waBotCard(); }).catch(() => {}).finally(() => { S.waBotLoading = false; }); }
+  const rows = c.nums.length ? c.nums.map((n, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin-bottom:6px"><b>+${esc(n)}</b><button class="btn ghost" style="padding:4px 10px" onclick="waBotDel(${i})">🗑️ Remove</button></div>`).join('') : '<p class="muted" style="margin:6px 0">Koi number nahi hai. Neeche se add karo.</p>';
+  return `<div class="card" id="waBotBox" style="margin-bottom:16px"><h3>🤖 WhatsApp helper <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· Expense / Attendance WhatsApp se</span></h3>
+    <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="wbOn" ${c.on ? 'checked' : ''} onchange="waBotSave()"> Helper ON (in numbers ke message par auto reply)</label>
+    ${rows}
+    <div class="form-grid" style="margin-top:10px"><div class="field"><label>Naya number add karo</label><input class="input" id="wbNew" type="tel" inputmode="tel" placeholder="9876543210" onkeydown="if(event.key==='Enter'){event.preventDefault();waBotAdd();}"></div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="waBotAdd()">➕ Add number</button></div>
+    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">In numbers se message aane par aapke linked WhatsApp se menu jayega: <b>1 Expense · 2 Attendance</b> (phir Present / Absent). Number 10 digit (ya country code ke saath) likho. Dusre numbers ko reply nahi jayega. WhatsApp tab me WhatsApp connected rehna chahiye.</p></div>`;
+}
+async function waBotPut(nums){
+  const r = await api('waBotSet', { on:($('#waBotBox #wbOn') ? $('#waBotBox #wbOn').checked : true), nums });
+  S.waBot = r.cfg; const e = $('#waBotBox'); if (e) e.outerHTML = waBotCard();
+}
+async function waBotAdd(){
+  try{
+    const v = ($('#waBotBox #wbNew').value || '').trim(); if (!v){ toast('Number likho'); return; }
+    const d = v.replace(/\D/g, ''); if (d.length < 8 || d.length > 15){ toast('Number sahi nahi lag raha'); return; }
+    const cur = (S.waBot && S.waBot.nums) || [];
+    if (cur.some(x => x === d)){ toast('Ye number pehle se hai'); return; }
+    await waBotPut(cur.concat(d)); toast('✓ Number add ho gaya');
+  }catch(e){ handleErr(e); }
+}
+async function waBotDel(i){
+  try{
+    const cur = ((S.waBot && S.waBot.nums) || []).slice(); if (!cur[i]) return;
+    if (!confirm('+' + cur[i] + ' hata du?')) return;
+    cur.splice(i, 1); await waBotPut(cur); toast('✓ Number hata diya');
+  }catch(e){ handleErr(e); }
+}
+async function waBotSave(){
+  try{ await waBotPut((S.waBot && S.waBot.nums) || []); toast('✓ Saved'); }catch(e){ handleErr(e); }
 }
 function vDeployMain(){
   if (!DEP.st) return '<div class="card"><div class="empty-state">Loading…</div></div>';

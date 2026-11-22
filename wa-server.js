@@ -18,7 +18,7 @@ module.exports = function makeWhatsApp(o) {
   const { env, warn, sign, withWb, enc, dec } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward', 'waBotGet', 'waBotSet']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -382,6 +382,98 @@ module.exports = function makeWhatsApp(o) {
     return m;
   }
 
+
+  /* ---------- WhatsApp helper bot: expense / attendance by chat ----------
+     When a message arrives from one of the numbers in WA_BOT_FROM (comma separated, default below) the linked WhatsApp replies with a menu:
+       1 = Expense  (amount + note, then pick a category)      2 = Attendance  (1 = Present, 2 = Absent -> marked for today)
+     Works only for the main admin's linked WhatsApp.  "0" / "menu" / "cancel" starts again.  A half-finished chat is forgotten after 10 minutes. */
+  const BOT_DEFAULT = String(env.WA_BOT_FROM || '96706492422').split(',').map(x => x.replace(/\D/g, '')).filter(Boolean);   // used until you save your own list in the app
+  let botCfg = null;                                                   // { on, nums:[digits] } - edited in the app (Deploy tab > WhatsApp helper)
+  const botNorm = j => { j = j || {}; const nums = [...new Set((Array.isArray(j.nums) ? j.nums : BOT_DEFAULT).map(x => String(x).replace(/\D/g, '')).filter(x => x.length >= 8 && x.length <= 15))].slice(0, 20); return { on: j.on === undefined ? true : (j.on !== false && j.on !== 'false'), nums }; };
+  async function botGet() {
+    if (botCfg) return botCfg;
+    let j = null; try { const raw = await withWb(() => PROPS().getProperty('WA_BOT_CFG') || ''); if (raw) j = JSON.parse(raw); } catch (e) {}
+    return (botCfg = botNorm(j));
+  }
+  const BOT_TTL = 10 * 60 * 1000;
+  const botState = new Map(), botQ = new Map();
+  const botMatch = (pn, list) => { const d = digits(pn); return !!d && list.some(c => d === c || d === CC + c || d.endsWith(c)); };
+  const botToday = () => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value])); return { date: p.year + '-' + p.month + '-' + p.day, y: Number(p.year), m: Number(p.month), d: Number(p.day) }; };
+  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n\n_Number bhejo: 1 ya 2_';
+  const botRun = fn => withWb(() => {                                  // run fn as the main admin, with fresh sheet data (changes are saved)
+    const set = globalThis.readSettings_().values, a = globalThis.getAccount_('ADMIN', set);
+    if (!a) throw new Error('Admin account not found.');
+    globalThis.buildCtx_(a.id);
+    return fn();
+  });
+  async function botStep(s, jid, text) {
+    const say = t => s.sock.sendMessage(jid, { text: t });
+    const t = String(text || '').trim(), low = t.toLowerCase();
+    let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) cur = null;
+    if (!cur || ['0', 'menu', 'cancel', 'stop'].includes(low)) { botState.set(jid, { step: 'menu', at: Date.now() }); return say(BOT_MENU); }
+    cur.at = Date.now();
+    if (cur.step === 'menu') {
+      if (low === '1') { cur.step = 'expAmt'; return say('💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = wapas menu)_'); }
+      if (low === '2') {
+        const emps = await botRun(() => globalThis.readEmployees_().map(e => ({ id: e.id, name: e.name })));
+        if (!emps.length) { botState.delete(jid); return say('❌ Attendance me koi employee nahi mila.'); }
+        cur.emps = emps;
+        if (emps.length > 1) { cur.step = 'attEmp'; return say('🗓️ *Attendance* — kiski?\n\n' + emps.map((e, i) => (i + 1) + '. ' + e.name).join('\n') + '\n\n_(0 = wapas menu)_'); }
+        cur.emp = emps[0].id; cur.empName = emps[0].name; cur.step = 'attSt';
+        return say('🗓️ *Attendance* — ' + (emps[0].name || 'Aaj') + '\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = wapas menu)_');
+      }
+      return say('Please *1* ya *2* bhejo.\n\n' + BOT_MENU);
+    }
+    if (cur.step === 'attEmp') {
+      const e = cur.emps[parseInt(low, 10) - 1]; if (!e) return say('Valid number bhejo (1 se ' + cur.emps.length + ').');
+      cur.emp = e.id; cur.empName = e.name; cur.step = 'attSt';
+      return say('🗓️ *' + e.name + '*\n\n1️⃣  Present\n2️⃣  Absent');
+    }
+    if (cur.step === 'attSt') {
+      if (low !== '1' && low !== '2') return say('Please *1* (Present) ya *2* (Absent) bhejo.');
+      const code = low === '1' ? 'P' : 'A', n = botToday();
+      try {
+        await botRun(() => {
+          const yr = globalThis.publicSettings_(globalThis.readSettings_()).year;
+          if (yr && Number(yr) !== n.y) throw new Error('Attendance register ' + yr + ' ka hai, aaj ' + n.y + ' hai.');
+          return globalThis.setAttendance_({ emp: cur.emp, entries: [{ month: n.m, day: n.d, code }] });
+        });
+      } catch (e) { botState.delete(jid); return say('❌ Attendance mark nahi hui: ' + String((e && e.message) || e).slice(0, 150)); }
+      botState.delete(jid);
+      return say((code === 'P' ? '✅ *Present*' : '❌ *Absent*') + ' mark ho gaya\n👤 ' + (cur.empName || '') + '\n📅 ' + n.d + '-' + String(n.m).padStart(2, '0') + '-' + n.y);
+    }
+    if (cur.step === 'expAmt') {
+      const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return say('Amount samajh nahi aaya. Aise bhejo: *150 chai*');
+      const amount = Number(m[1].replace(',', '.')); if (!(amount > 0)) return say('Amount 0 se zyada hona chahiye.');
+      const cats = await botRun(() => globalThis.readCategories_().filter(c => c.type === 'Expense').map(c => c.name));
+      if (!cats.length) { botState.delete(jid); return say('❌ Koi expense category nahi mili. Pehle app me category banao.'); }
+      cur.amount = amount; cur.note = t.replace(m[0], '').replace(/\s+/g, ' ').trim(); cur.cats = cats; cur.step = 'expCat';
+      return say('💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + '\n\n*Category chuno:*\n' + cats.map((c, i) => (i + 1) + '. ' + c).join('\n') + '\n\n_(0 = wapas menu)_');
+    }
+    if (cur.step === 'expCat') {
+      const c = cur.cats[parseInt(low, 10) - 1]; if (!c) return say('Valid number bhejo (1 se ' + cur.cats.length + ').');
+      const n = botToday();
+      try { await botRun(() => globalThis.addExpense_({ date: n.date, category: c, amount: cur.amount, note: cur.note })); }
+      catch (e) { botState.delete(jid); return say('❌ Expense save nahi hua: ' + String((e && e.message) || e).slice(0, 150)); }
+      botState.delete(jid);
+      return say('✅ *Expense save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date);
+    }
+    botState.delete(jid); return say(BOT_MENU);
+  }
+  function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
+    try {
+      if (uid !== 'ADMIN' || !wm || !wm.key || wm.key.fromMe || !wm.message || !s.sock || s.status !== 'open') return;
+      const jid = wm.key.remoteJid; if (!/@(s\.whatsapp\.net|lid)$/.test(jid || '')) return;
+      if (Date.now() - tsOf(wm.messageTimestamp) > 120000) return;          // old message (history sync) - never answer those
+      botGet().then(c => {
+        if (!c.on || !c.nums.length || !botMatch(pnOf(s, jid), c.nums)) return;
+        const k = kindText(wm.message), text = k && k.kind === 'text' ? (k.text || '') : '';
+        const prev = botQ.get(jid) || Promise.resolve();                // one message at a time per chat
+        botQ.set(jid, prev.then(() => botStep(s, jid, text)).catch(e => warn('WhatsApp bot', e && e.message)));
+      }).catch(e => warn('WhatsApp bot', e && e.message));
+    } catch (e) { warn('WhatsApp bot', e && e.message); }
+  }
+
   /* ---------- the WhatsApp connection ---------- */
   async function open(uid) {
     const s = st(uid); if (s.sock || s.status === 'starting') return s;
@@ -449,7 +541,7 @@ module.exports = function makeWhatsApp(o) {
     sock.ev.on('contacts.upsert', cs => { cs.forEach(c => { addContact(s, c); if (isChat(c.id) && (c.name || c.notify)) { const x = chatOf(s, c.id); if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } }); saveSoon(uid, s); });
     sock.ev.on('contacts.update', cs => cs.forEach(c => { addContact(s, c); const x = c.id && s.chats.get(c.id); if (x && (c.name || c.notify)) { if (c.name) x.name = c.name; else if (!x.name) x.pn = c.notify; } }));
     sock.ev.on('groups.update', gs => gs.forEach(g => { const x = g.id && s.chats.get(g.id); if (x && g.subject) x.name = g.subject; }));
-    sock.ev.on('messages.upsert', ev => (ev.messages || []).forEach(wm => addMsg(uid, s, wm.key && wm.key.remoteJid, wm, ev.type === 'notify')));
+    sock.ev.on('messages.upsert', ev => (ev.messages || []).forEach(wm => { addMsg(uid, s, wm.key && wm.key.remoteJid, wm, ev.type === 'notify'); if (ev.type === 'notify') botIn(uid, s, wm); }));
     sock.ev.on('call', calls => (calls || []).forEach(cl => {        // incoming / missed WhatsApp calls show up in the chat like on WhatsApp Web
       try {
         const jid = cl.chatId && isChat(cl.chatId) ? cl.chatId : cl.from; if (!isChat(jid)) return;
@@ -546,6 +638,15 @@ module.exports = function makeWhatsApp(o) {
       const c = licNorm({ on: req.on !== false && req.on !== 'false', to });
       await withWb(() => { PROPS().setProperty('LIC_WA_CFG', JSON.stringify(c)); });
       licC = c; return { ok: true, cfg: c };
+    }
+    if (a === 'waBotGet') { if (uid !== 'ADMIN') fail('Only the main admin can use this.'); return { ok: true, cfg: await botGet(), connected: !!(s.status === 'open' && s.sock) }; }
+    if (a === 'waBotSet') {
+      if (uid !== 'ADMIN') fail('Only the main admin can change this.');
+      const raw = (Array.isArray(req.nums) ? req.nums : String(req.nums || '').split(/[\s,;]+/)).map(x => String(x).replace(/\D/g, '')).filter(Boolean);
+      raw.forEach(x => { if (x.length < 8 || x.length > 15) fail('"' + x + '" does not look like a phone number. Use the digits only, e.g. 9876543210 or 919876543210.'); });
+      const c = botNorm({ on: req.on, nums: raw });
+      await withWb(() => { PROPS().setProperty('WA_BOT_CFG', JSON.stringify(c)); });
+      botCfg = c; return { ok: true, cfg: c };
     }
     if (a === 'licWaTest') {
       if (uid !== 'ADMIN') fail('Only the main admin can use this.');
