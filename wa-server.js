@@ -465,34 +465,6 @@ module.exports = function makeWhatsApp(o) {
     return Buffer.from(out, 'latin1');
   }
 
-  /* ledger summary for the help reply = the same cards as the app's Expenses > Ledgers screen (Main account, Income / Expense categories, FD · Persons · Banks).
-     Runs as the number's own account, so every user sees ONLY his own categories, accounts and balances.  Dr = plus, Cr = minus (same rule as the app). */
-  const botMoney = n => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const botBal = n => Math.abs(n) < 0.005 ? '₹0.00' : '₹' + botMoney(Math.abs(n)) + (n > 0 ? ' Dr' : ' Cr');
-  function botLedgerData() {
-    const cats = globalThis.readCategories_(), exps = globalThis.readExpenses_(), accs = globalThis.readLgAccounts_(), ents = globalThis.readLgEntries_();
-    const catType = {}; cats.forEach(c => { catType[c.name] = c.type; });
-    const isCat = id => String(id).startsWith('C:'), isMe = id => id === 'ME' || isCat(id);
-    const bal = {}; const add = (id, v) => { bal[id] = (bal[id] || 0) + v; };
-    accs.forEach(a => { bal[a.id] = Number(a.opening) || 0; });
-    cats.forEach(c => { bal['C:' + c.name] = 0; }); bal.ME = 0;
-    exps.forEach(x => { const inc = catType[x.category] === 'Income', v = inc ? x.amount : -x.amount; add('ME', v); if (isCat('C:' + x.category) && ('C:' + x.category) in bal) add('C:' + x.category, v); });
-    ents.forEach(e => {
-      if (e.from in bal && e.from !== 'ME') add(e.from, -e.amount);
-      if (e.to in bal && e.to !== 'ME') add(e.to, e.amount);
-      const f = isMe(e.from), t = isMe(e.to); if (f !== t) add('ME', t ? e.amount : -e.amount);
-    });
-    const inc = cats.filter(c => c.type === 'Income'), exp = cats.filter(c => c.type !== 'Income');
-    return { me: bal.ME, cats: inc.concat(exp).map(c => ({ name: c.name, kind: c.type === 'Income' ? 'Income' : 'Expense', b: bal['C:' + c.name] })), accs: accs.map(a => ({ name: a.name, kind: a.type, b: bal[a.id] })) };
-  }
-  const botLedgerText = d => {
-    const ln = r => '• ' + r.name + ' (' + r.kind + ') — *' + botBal(r.b) + '*';
-    let t = '📒 *Aapka Ledger*\n\n*My Account:* ' + botBal(d.me);
-    if (d.cats.length) t += '\n\n*Category*\n' + d.cats.map(ln).join('\n');
-    if (d.accs.length) t += '\n\n*FD · Persons · Banks*\n' + d.accs.map(ln).join('\n');
-    return t + '\n\n_Dr = plus, Cr = minus_';
-  };
-
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -500,11 +472,7 @@ module.exports = function makeWhatsApp(o) {
     const t = String(text || '').trim(), low = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
     const ask = (c, m) => { c.prompt = m; return say(m); };            // remember the question, so a wrong answer just repeats it
-    const menu = async () => {
-      const c = { step: 'menu', at: Date.now() }; botState.set(jid, c);
-      let led = ''; try { const cfg0 = await botGet(), b0 = (cfg0.bind || {})[num] || {}; led = await botRun(() => botLedgerText(botLedgerData()), b0.acc || 'ADMIN', 'exp', false); } catch (e) { led = ''; }   // no expense right -> menu only
-      return ask(c, (led ? led + '\n\n━━━━━━━━━━\n' : '') + BOT_MENU);
-    };
+    const menu = () => { const c = { step: 'menu', at: Date.now() }; botState.set(jid, c); return ask(c, BOT_MENU); };
     if (BOT_HI.test(low)) return menu();
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
     if (['0', 'cancel', 'stop'].includes(low)) { botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
@@ -546,10 +514,12 @@ module.exports = function makeWhatsApp(o) {
     if (cur.step === 'expAmt') {
       const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return say('Amount samajh nahi aaya. Aise bhejo: *150 chai*');
       const amount = Number(m[1].replace(',', '.')); if (!(amount > 0)) return say('Amount 0 se zyada hona chahiye.');
-      let cats; try { cats = await botRun(() => globalThis.readCategories_().filter(c => c.type === 'Expense').map(c => c.name), acc, 'exp', true); } catch (e) { return stop(e, ''); }
-      if (!cats.length) { botState.delete(jid); return say('❌ Koi expense category nahi mili. Pehle app me category banao.'); }
-      cur.amount = amount; cur.note = t.replace(m[0], '').replace(/\s+/g, ' ').trim(); cur.cats = cats; cur.step = 'expCat';
-      return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + '\n\n*Category chuno (number bhejo):*\n' + cats.map((c, i) => (i + 1) + '. ' + c).join('\n') + '\n\n_(0 = cancel)_');
+      let ct; try { ct = await botRun(() => { const l = globalThis.readCategories_(); return { exp: l.filter(c => c.type !== 'Income').map(c => c.name), inc: l.filter(c => c.type === 'Income').map(c => c.name) }; }, acc, 'exp', true); } catch (e) { return stop(e, ''); }   // this user's own categories only
+      const cats = ct.exp.concat(ct.inc);
+      if (!cats.length) { botState.delete(jid); return say('❌ Koi category nahi mili. Pehle app me category banao.'); }
+      cur.amount = amount; cur.note = t.replace(m[0], '').replace(/\s+/g, ' ').trim(); cur.cats = cats; cur.inc = new Set(ct.inc); cur.step = 'expCat';
+      const lines = (arr, off) => arr.map((c, i) => (off + i + 1) + '. ' + c).join('\n');
+      return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + '\n\n*Category chuno (number bhejo):*' + (ct.exp.length ? '\n\n*Expense*\n' + lines(ct.exp, 0) : '') + (ct.inc.length ? '\n\n*Income*\n' + lines(ct.inc, ct.exp.length) : '') + '\n\n_(0 = cancel)_');
     }
     if (cur.step === 'expCat') {
       const c = cur.cats[parseInt(low, 10) - 1] || cur.cats.find(x => low && String(x).toLowerCase() === low) || cur.cats.find(x => low.length > 1 && String(x).toLowerCase().includes(low)); if (!c) return again();
@@ -557,7 +527,7 @@ module.exports = function makeWhatsApp(o) {
       try { await botRun(() => globalThis.addExpense_({ date: n.date, category: c, amount: cur.amount, note: cur.note }), acc, 'exp', true); }
       catch (e) { return stop(e, 'Expense save nahi hua: '); }
       botState.delete(jid);
-      return say('✅ *Expense save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
+      return say('✅ *' + (cur.inc && cur.inc.has(c) ? 'Income' : 'Expense') + ' save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
     }
     if (cur.step === 'billPer') {
       if (!['1', '2', '3'].includes(low)) return again();
