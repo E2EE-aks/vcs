@@ -274,7 +274,7 @@ module.exports = function makeWhatsApp(o) {
   /* ---------- ALERT: somebody deleted (for everyone) or edited a message they had sent -> a WhatsApp alert goes to the alert number (the same number whose chat shows the menu) ----------
      Set WA_MSG_ALERT=0 on the server to switch it off. Our own (outgoing) messages never alert, so there is no loop. */
   let alertQ = Promise.resolve();
-  function waAlert(uid, s, jid, m, type, newText, oldText) {
+  function waAlert(uid, s, jid, m, type, newText, oldText, why) {
     try {
       if (uid !== 'ADMIN' || !m || m.out || String(env.WA_MSG_ALERT || '1') === '0') return;
       alertQ = alertQ.then(async () => {
@@ -282,10 +282,10 @@ module.exports = function makeWhatsApp(o) {
         const c = s.chats.get(jid) || {}, pn = pnOf(s, jid), num = c.group ? '' : (pn ? '+' + pn.split('@')[0] : numOf(jid));
         const who = c.name || c.pn || m.from || (c.group ? 'Group' : num || 'Unknown');
         const what = x => x.kind === 'text' ? (x.text || '') : ((x.label || x.kind || 'Message') + (x.text ? ' ' + x.text : ''));
-        const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date()), sent = m.at ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(m.at * 1000)) : '';
+        const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date()), sent = m.at ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(m.at > 1e12 ? m.at : m.at * 1000)) : '';
         const head = (type === 'del' ? '🗑️ *Message DELETE hua* (Delete for everyone)' : '✏️ *Message EDIT hua*') + '\n\n👤 *' + who + '*' + (c.group ? ' (group)' : '') + (num ? '\n📞 ' + num : '') + (sent ? '\n📨 Bheja tha: ' + sent + ' IST' : '') + '\n🕒 ' + (type === 'del' ? 'Delete' : 'Edit') + ' kiya: ' + hm + ' IST';
         const body = type === 'del' ? '\n\n💬 *Message:*\n' + (what(m) || '—')
-          : '\n\n❌ *Purana:*\n' + (oldText || '—') + '\n\n✅ *Naya:*\n' + (newText == null ? '_(naya text padha nahi ja saka)_' : (newText || '—'));
+          : '\n\n❌ *Purana:*\n' + (oldText || '—') + '\n\n✅ *Naya:*\n' + (newText == null ? '_(naya text padha nahi ja saka' + (why ? ': ' + why : '') + ')_' : (newText || '—'));
         for (let i = 0; i < 4; i++) {                                       // sendGuard refuses 2 sends within 1 s (e.g. right after a bot reply): wait and try again
           try { await new Promise(r => setTimeout(r, i ? 1500 : 800)); await sendText(uid, to, head + body); return; }
           catch (e) { if (i === 3) throw e; }
@@ -356,23 +356,35 @@ module.exports = function makeWhatsApp(o) {
   };
   const nj = j => String(j || '').replace(/:\d+@/, '@');
   const uniq = a => [...new Set(a.filter(Boolean))];
+  let edWhy = '';                                           // why the last edit could not be read (shown in the alert)
+  const pickEdited = (o, d) => {                            // the new content of an edit, whatever way the decrypted payload is wrapped
+    d = d || 0; if (!o || typeof o !== 'object' || d > 7 || o instanceof Uint8Array || Buffer.isBuffer(o)) return null;
+    if (o.editedMessage && typeof o.editedMessage === 'object') { const em = o.editedMessage; return em.message && !em.conversation ? em.message : em; }
+    for (const k of Object.keys(o)) { const r = pickEdited(o[k], d + 1); if (r) return r; }
+    return null;
+  };
   function openEdit(s, jid, wm, sem) {                     // -> the new message content, or null
+    edWhy = '';
     const tk = sem.targetMessageKey || {}, orig = (s.msgs.get(jid) || []).find(x => x.id === tk.id);
-    if (!orig || !orig.sec || !sem.encPayload || !sem.encIv) return null;
+    if (!orig) { edWhy = 'purana message server me nahi mila'; return null; }
+    if (!orig.sec) { edWhy = 'is purane message ki key nahi mili'; return null; }
+    if (!sem.encPayload || !sem.encIv) { edWhy = 'edit ka data khali'; return null; }
     const secret = Buffer.from(orig.sec, 'base64'), iv = Buffer.from(sem.encIv), ct = Buffer.from(sem.encPayload), me = (s.sock && s.sock.user) || {}, mine = uniq([nj(me.id), nj(me.lid)]), k = wm.key || {}, ok = orig.key || {};
-    const authors = orig.out ? mine : uniq([nj(ok.participant), nj(ok.remoteJid), nj(tk.participant), nj(tk.remoteJid), nj(jid), nj(k.participantAlt), nj(k.remoteJidAlt)]);
-    const mods = k.fromMe ? mine : uniq([nj(k.participant), nj(k.remoteJid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(jid)]);
+    const pnj = nj(pnOf(s, jid)), authors = orig.out ? mine : uniq([nj(ok.participant), nj(ok.remoteJid), nj(tk.participant), nj(tk.remoteJid), nj(jid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(ok.participantAlt), nj(ok.remoteJidAlt), pnj]);
+    const mods = k.fromMe ? mine : uniq([nj(k.participant), nj(k.remoteJid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(jid), pnj]);
     const k0 = crypto.createHmac('sha256', Buffer.alloc(32)).update(secret).digest();
     for (const uc of ['Message Edit', 'Msg Edit', 'Edit', 'MessageEdit', 'Message edit', 'Event Edit']) for (const a of authors) for (const b of mods) {
       try {
         const key = crypto.createHmac('sha256', k0).update(Buffer.concat([Buffer.from(tk.id), Buffer.from(a), Buffer.from(b), Buffer.from(uc), Buffer.from([1])])).digest();
-        const d = crypto.createDecipheriv('aes-256-gcm', key, iv); d.setAAD(Buffer.from(tk.id + '\0' + b)); d.setAuthTag(ct.slice(-16));
-        const plain = Buffer.concat([d.update(ct.slice(0, -16)), d.final()]);
-        const msg = lib.proto.Message.decode(plain), e = findEdit(msg);
-        return e ? e.msg : msg;
+        for (const aad of [tk.id + '\0' + b, tk.id + '\0' + a, tk.id]) {
+          let plain; try { const d = crypto.createDecipheriv('aes-256-gcm', key, iv); d.setAAD(Buffer.from(aad)); d.setAuthTag(ct.slice(-16)); plain = Buffer.concat([d.update(ct.slice(0, -16)), d.final()]); } catch (e) { continue; }   // wrong guess - try the next one
+          const msg = lib.proto.Message.decode(plain), e = findEdit(msg), nm = e ? e.msg : (pickEdited(msg) || msg);
+          if (!kindText(nm)) edWhy = 'khul gaya par text nahi mila (' + shapeOf(msg).slice(0, 90) + ')';
+          return nm;
+        }
       } catch (e) { /* wrong guess - try the next one */ }
     }
-    return null;
+    edWhy = 'key match nahi hui'; return null;
   }
   function editSecret(uid, s, jid, wm, sem) {
     const tk = sem.targetMessageKey || {};
@@ -380,8 +392,8 @@ module.exports = function makeWhatsApp(o) {
       const nm = openEdit(s, jid, wm, sem);
       if (nm && kindText(nm)) { applyEdit(uid, s, { id: tk.id, remoteJid: jid }, jid, nm, tsOf(wm.messageTimestamp) * 1000); return; }
       const orig = (s.msgs.get(jid) || []).find(x => x.id === tk.id);                // could not read the new text: at least mark it as edited
-      if (orig) { orig.edN = (orig.edN || 0) + 1; orig.editAt = Date.now(); saveSoon(uid, s); waAlert(uid, s, jid, orig, 'edit', null, orig.text || ''); }
-      warn('WhatsApp edit not readable', orig ? (orig.sec ? 'key did not fit' : 'original has no secret') : 'original message not stored');
+      if (orig) { orig.edN = (orig.edN || 0) + 1; orig.editAt = Date.now(); saveSoon(uid, s); waAlert(uid, s, jid, orig, 'edit', null, orig.text || '', edWhy); }
+      warn('WhatsApp edit not readable', edWhy);
     } catch (e) { warn('WhatsApp edit', e && e.message); }
   }
 
@@ -700,7 +712,7 @@ module.exports = function makeWhatsApp(o) {
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
     const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
-    const again = () => cur.step === 'menu' ? say('🙏 Menu me diya hua number (1-' + (cur.opts || []).length + ') bhejo. Cancel: *0*') : undefined;   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
+    const again = () => undefined;                                     // wrong number in the menu: stay quiet   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (cur.step === 'menu') {
