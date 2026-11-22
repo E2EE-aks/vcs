@@ -1279,7 +1279,8 @@ module.exports = function makeWhatsApp(o) {
     if (a === 'licWaSet') {
       if (uid !== 'ADMIN') fail('Only the main admin can change this.');
       const to = String(req.to || '').replace(/[^\d+]/g, ''); toJid(to);                                    // checks the number looks right
-      const c = licNorm({ on: req.on !== false && req.on !== 'false', to });
+      const okIds = await withWb(() => globalThis.readUsers_().filter(u => u.active).map(u => String(u.id)));          // only real, active users can be linked
+      const c = licNorm({ on: req.on !== false && req.on !== 'false', to, link: (Array.isArray(req.link) ? req.link : []).filter(x => okIds.includes(String(x))) });
       await withWb(() => { PROPS().setProperty('LIC_WA_CFG', JSON.stringify(c)); });
       licC = c; return { ok: true, cfg: c };
     }
@@ -1489,7 +1490,8 @@ module.exports = function makeWhatsApp(o) {
   const licNorm = j => {
     j = j || {}; const d = { on: true, to: String(env.LIC_WA_TO || '9621755459'), at: /^\d\d:\d\d$/.test(String(env.LIC_WA_AT || '')) ? String(env.LIC_WA_AT) : '08:00', before: String(env.LIC_WA_BEFORE || '0').split(',').map(x => parseInt(x, 10)) };
     const bf = (Array.isArray(j.before) ? j.before : d.before).map(x => parseInt(x, 10)).filter(x => x >= 0 && x <= 30);
-    return { on: j.on === undefined ? d.on : !!j.on, to: String(j.to || d.to).replace(/[^\d+]/g, ''), at: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(j.at || '')) ? String(j.at) : d.at, before: [...new Set(bf.length ? bf : [0])].sort((a, b) => b - a) };
+    return { on: j.on === undefined ? d.on : !!j.on, to: String(j.to || d.to).replace(/[^\d+]/g, ''), at: /^([01]\d|2[0-3]):[0-5]\d$/.test(String(j.at || '')) ? String(j.at) : d.at, before: [...new Set(bf.length ? bf : [0])].sort((a, b) => b - a),
+      link: [...new Set((Array.isArray(j.link) ? j.link : []).map(x => String(x).trim()).filter(x => x && x !== 'ADMIN'))].slice(0, 50) };      // users whose LIC data is linked to the main admin's alerts
   };
   async function licCfg() {
     if (licC) return licC;

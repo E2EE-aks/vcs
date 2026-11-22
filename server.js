@@ -1177,26 +1177,37 @@ function makeApp(store, env) {
       const todo = await withWb(() => {
         const P = globalThis.PropertiesService.getScriptProperties(), s = globalThis.readSettings_().values, a = globalThis.getAccount_('ADMIN', s);
         if (!a) return [];
+        // LINKED USERS: the admin's own LIC list plus the LIC list of every user linked in the LIC tab (e.g. Ashu). Nothing is copied: the data is read live from that user's own rows.
+        const lics = [];
+        const owners = [{ id: 'ADMIN', by: '' }].concat((C.link || []).map(id => ({ id: String(id), by: '' })));
+        for (const o of owners) {
+          try {
+            globalThis.buildCtx_(o.id);
+            if (o.id !== 'ADMIN') { const u = globalThis.getAccount_(o.id, s); o.by = u ? String(u.name || u.username || o.id) : o.id; }
+            for (const x of globalThis.readLic_()) lics.push(o.id === 'ADMIN' ? x : Object.assign({}, x, { id: o.id + ':' + x.id, _by: o.by }));
+          } catch (e) { warn('LIC linked user ' + o.id, e && e.message); }
+        }
         globalThis.buildCtx_(a.id);
+        const byTag = x => x._by ? '\n👥 User: ' + x._by : '';
         let sent = {}; try { sent = JSON.parse(P.getProperty('LIC_WA_SENT') || '{}') || {}; } catch (e) {}
         const out = [];
-        for (const x of globalThis.readLic_()) {
+        for (const x of lics) {
           const who = (x.name || 'Policy') + (x.policyNo ? ' (' + x.policyNo + ')' : '');
           const due = licNext_(x, n.date);
           if (due) for (const b of LICW_LEADS) {
             if (licDiff_(n.date, due) !== b) continue;
             const key = 'p|' + x.id + '|' + due + '|' + b; if (sent[key]) continue;
-            out.push({ key, text: (b === 0 ? '⚠️ *LIC Premium aaj due hai*' : '🔔 *LIC Premium ' + b + ' din me due*') + '\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n💰 Premium: ' + licRs_(x.amount) + (x.freq ? ' (' + x.freq + ')' : '') + '\n📅 Due date: ' + licD_(due) + (x.phone ? '\n📞 ' + x.phone : '') });
+            out.push({ key, text: (b === 0 ? '⚠️ *LIC Premium aaj due hai*' : '🔔 *LIC Premium ' + b + ' din me due*') + '\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n💰 Premium: ' + licRs_(x.amount) + (x.freq ? ' (' + x.freq + ')' : '') + '\n📅 Due date: ' + licD_(due) + (x.phone ? '\n📞 ' + x.phone : '') + byTag(x) });
           }
           if (x.endDate && x.endDate === n.date) {                         // policy end / maturity date reached
-            const key = 'm|' + x.id + '|' + x.endDate; if (!sent[key]) out.push({ key, text: '✅ *LIC Policy aaj mature / expire ho rahi hai*\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n📅 End date: ' + licD_(x.endDate) + (x.totalAmount ? '\n💰 Amount: ' + licRs_(x.totalAmount) : '') + (x.phone ? '\n📞 ' + x.phone : '') });
+            const key = 'm|' + x.id + '|' + x.endDate; if (!sent[key]) out.push({ key, text: '✅ *LIC Policy aaj mature / expire ho rahi hai*\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n📅 End date: ' + licD_(x.endDate) + (x.totalAmount ? '\n💰 Amount: ' + licRs_(x.totalAmount) : '') + (x.phone ? '\n📞 ' + x.phone : '') + byTag(x) });
           }
         }
         // policy STATUS alerts, same rule as the LIC tab: no (valid) end date = Deactivated, end date over = Completed (expired), else Active.
         // Every change of status is alerted once; policies that are already expired / deactivated are alerted once the first time.
         let st = {}; try { st = JSON.parse(P.getProperty('LIC_WA_STATE') || '{}') || {}; } catch (e) {}
         const grp = { Completed: [], Deactivated: [], Active: [] }; let silent = false;
-        for (const x of globalThis.readLic_()) {
+        for (const x of lics) {
           const status = !x.endDate ? 'Deactivated' : x.endDate < n.date ? 'Completed' : 'Active', prev = st[x.id];
           if (prev === status) continue;
           if (prev === undefined && status === 'Active') { st[x.id] = status; silent = true; continue; }   // first sight of a normal active policy: just remember it
@@ -1205,7 +1216,7 @@ function makeApp(store, env) {
         const HEAD = { Completed: '✅ *LIC Policy expire / complete ho chuki hai*', Deactivated: '🔴 *LIC Policy deactivate hai*', Active: '🟢 *LIC Policy phir se active ho gayi*' };
         for (const k of ['Completed', 'Deactivated', 'Active']) {
           const g = grp[k]; if (!g.length) continue;
-          const lines = g.slice(0, 15).map(o => '• ' + (o.x.name || 'Policy') + (o.x.policyNo ? ' (' + o.x.policyNo + ')' : '') + (o.x.policyName ? ' – ' + o.x.policyName : '') + (o.x.endDate ? ' · end ' + licD_(o.x.endDate) : ' · end date nahi hai') + (o.x.amount ? ' · ' + licRs_(o.x.amount) : ''));
+          const lines = g.slice(0, 15).map(o => '• ' + (o.x.name || 'Policy') + (o.x.policyNo ? ' (' + o.x.policyNo + ')' : '') + (o.x.policyName ? ' – ' + o.x.policyName : '') + (o.x.endDate ? ' · end ' + licD_(o.x.endDate) : ' · end date nahi hai') + (o.x.amount ? ' · ' + licRs_(o.x.amount) : '') + (o.x._by ? ' · 👥 ' + o.x._by : ''));
           out.push({ states: g.map(o => [o.x.id, o.status]), text: HEAD[k] + (g.length > 1 ? ' (' + g.length + ')' : '') + '\n\n' + lines.join('\n') + (g.length > 15 ? '\n… aur ' + (g.length - 15) + ' policies' : '') });
         }
         if (silent) P.setProperty('LIC_WA_STATE', JSON.stringify(st));

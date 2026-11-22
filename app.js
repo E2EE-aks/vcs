@@ -4342,18 +4342,21 @@ function licFs(d){                                    // premium text size: each
 function licWaCard(){
   if (!(isAdmin() && S.me && S.me.primary && !S.as)) return '';
   const c = S.licWa || { on:true, to:'9621755459' };
-  if (!S.licWa && !S.licWaLoading){ S.licWaLoading = true; api('licWaGet').then(r => { S.licWa = r.cfg; S.licWaConn = !!r.connected; const e = $('#licWaBox'); if (e) e.outerHTML = licWaCard(); }).catch(() => {}).finally(() => { S.licWaLoading = false; }); }
+  if (!S.licWa && !S.licWaLoading){ S.licWaLoading = true; api('licWaGet').then(r => { S.licWa = r.cfg; S.licWaUsers = r.users || []; S.licWaConn = !!r.connected; const e = $('#licWaBox'); if (e) e.outerHTML = licWaCard(); }).catch(() => {}).finally(() => { S.licWaLoading = false; }); }
   return `<div class="card" id="licWaBox" style="margin-bottom:16px"><h3>📲 LIC alerts <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· premium due / expire / plan complete / deactivate</span></h3>
     <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="lwOn" ${c.on ? 'checked' : ''}> Send alerts</label>
     <div class="form-grid">
       <div class="field"><label>LIC alerts ka number (sirf LIC ke alert yahan jayenge)</label><input class="input" id="lwTo" type="tel" inputmode="tel" value="${esc(c.to)}" placeholder="9876543210"></div>
     </div>
+    <div class="field" style="margin-top:12px"><label>🔗 Link user ka LIC data (copy nahi hota, seedha us user ka data padha jata hai)</label>
+      ${(S.licWaUsers || []).length ? (S.licWaUsers || []).map(u => `<label class="tog" style="margin:4px 0"><input type="checkbox" class="lwLink" value="${esc(u.id)}" ${(c.link || []).includes(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('') : '<span class="muted">Loading users…</span>'}
+      <p class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">Jis user ko tick karoge (jaise Ashu), uski policies ke premium due / expire / complete / deactivate alerts admin ke number par bhi aayenge.</p></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="licWaSave()">💾 Save</button><button class="btn ghost" onclick="licWaTest()">📨 Send test message</button></div>
     <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Alert hamesha automatic jata hai (koi time ya option set nahi karna): premium <b>7, 3, 1 din pehle aur due date par</b>, aur policy <b>mature / expire (completed) ya deactivate</b> hote hi turant. Sent from the WhatsApp you linked in the WhatsApp tab. It must stay connected.</p></div>`;
 }
 async function licWaSave(){
   try{
-    const r = await api('licWaSet', { on:$('#licWaBox #lwOn').checked, to:$('#licWaBox #lwTo').value.trim() });
+    const r = await api('licWaSet', { on:$('#licWaBox #lwOn').checked, to:$('#licWaBox #lwTo').value.trim(), link:[...document.querySelectorAll('#licWaBox .lwLink:checked')].map(x => x.value) });
     S.licWa = r.cfg; toast('✓ Saved · alerts go to ' + r.cfg.to);
   }catch(e){ handleErr(e); }
 }
