@@ -742,15 +742,24 @@ module.exports = function makeWhatsApp(o) {
     for (let i = 0; i < v.length; i++) if (String(v[i][sp[1] - 1]) === String(r.i)) return { found: true, owner: globalThis.ownerOf_(v[i][sp[2] - 1]) };
     return { found: false };
   }
-  async function aprHandle(jid, low, num, wm, say) {                    // true = this message was an approval answer (handled), false = not ours
+  async function aprHandle(jid, low, num, wm, say, cur) {                    // true = this message was an approval answer (handled), false = not ours
     const m = /^([a-z0-9]+)(?:\s+([a-f0-9]{4,10}))?$/.exec(low); if (!m) return false;
     const word = m[1], code = m[2] || '', approve = APR_YES.has(word);
     if (!approve && !APR_NO.has(word)) return false;
     const ci = wm && wm.message && (wm.message.extendedTextMessage || {}).contextInfo, qid = ci && ci.stanzaId ? String(ci.stanzaId) : '';
     let ref = null; if (qid) { const a = await aprLoad(), v = String(a.map[qid] || '').split(':'); if (v.length === 2) ref = { k: v[0], id: v[1] }; }
-    if (!ref && !code) return false;                                    // a bare 1 / 2 / ok counts only when it quotes one of the approval messages
+    if (!ref && !code) {                                                // no Reply and no code: works only when no menu chat is open and exactly ONE request is waiting
+      if (cur) return false;
+      const wait = await withWb(() => aprPending());
+      if (!wait.length) return false;
+      if (wait.length > 1) { await say('ℹ️ *' + wait.length + ' requests* pending hain, isliye pata nahi kaun si.\n\nJis message ka jawab dena hai use *Reply* karke 1 / 2 bhejo, ya likho:\n' + wait.map(x => '• *ok ' + x.id.slice(0, 6) + '* / *no ' + x.id.slice(0, 6) + '*  — ' + (x.k === 'del' ? 'delete: ' + (x.r.d || '') : 'payment: ' + (x.r.name || x.r.username || '') + ' ₹' + (x.r.price || 0))).join('\n')); return true; }
+      ref = { k: wait[0].k, id: wait[0].id };
+    }
     const bd = ((await botGet()).bind || {})[num] || {};
     if ((bd.acc || 'ADMIN') !== 'ADMIN') { await say('❌ Approve / Deny sirf main admin ke number se ho sakta hai.'); return true; }
+    return aprDecide(ref, code, approve, say);
+  }
+  async function aprDecide(ref, code, approve, say) {              // run Approve / Deny for one request and tell what really happened
     let out;
     try {
       out = await botRun(() => {
@@ -771,6 +780,7 @@ module.exports = function makeWhatsApp(o) {
     await say((approve ? '✅ *Approve ho gaya*' : '❌ *Deny kar diya*') + '\n' + who + '\n\n' + note);
     return true;
   }
+  const aprLine = x => x.k === 'del' ? '🗑 *' + (x.r.n || 'User') + '* — ' + (x.r.d || 'delete request') : '💳 *' + (x.r.name || x.r.username || 'User') + '* — ' + (x.r.planName || 'payment') + ' ₹' + (x.r.price || 0) + ' · UTR ' + (x.r.utr || '—');
 
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
@@ -788,14 +798,15 @@ module.exports = function makeWhatsApp(o) {
       if (ok('exp')) opts.push(['bill', 'Bill PDF']);
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
       if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
+      if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
-      const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
+      const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
       return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
     if (BOT_HI.test(low)) return menu();
-    if (await aprHandle(jid, low, num, wm, say)) return;                // Approve / Deny answer to a VCS Management request
+    if (await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
@@ -820,6 +831,13 @@ module.exports = function makeWhatsApp(o) {
           const lk = typeof srcLink === 'function' ? srcLink() : '';
           if (lk) return say('🔗 *Download link* (6 ghante tak chalega)\n' + lk + '\n\n_Link par tap karo — browser ZIP ko seedha *Downloads* folder me download kar dega._');
         } catch (e) { return say('❌ Source code nahi mila: ' + botErr(e)); }
+      }
+      if (key === 'req') {                                              // admin only: every pending delete / payment request, pick one, then Approve or Deny
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        let list; try { list = await withWb(() => aprPending()); } catch (e) { return stop(e, ''); }
+        if (!list.length) { botState.delete(jid); return say('✅ Abhi koi pending request nahi hai.\n\n_Dobara kuch karna ho to *help* bhejo._'); }
+        const shown = list.slice(0, 20); cur.list = shown.map(x => ({ k: x.k, id: x.id })); cur.step = 'reqPick';
+        return ask(cur, '📋 *Pending requests* (' + list.length + ')\n\n' + shown.map((x, i) => (i + 1) + '. ' + aprLine(x)).join('\n\n') + (list.length > shown.length ? '\n\n… aur ' + (list.length - shown.length) + ' (pehle ye nipta lo)' : '') + '\n\n_Jisko decide karna hai uska number bhejo_\n_(0 = cancel)_');
       }
       if (key === 'exp') {
         try { await botRun(() => true, acc, 'exp', true); } catch (e) { return stop(e, ''); }
@@ -846,6 +864,18 @@ module.exports = function makeWhatsApp(o) {
         return ask(cur, '🧾 *Bill PDF* — kaun sa mahina?\n\n' + ms.map((k, i) => (i + 1) + '. ' + MN0[Number(k.slice(5, 7)) - 1] + ' ' + k.slice(0, 4)).concat((ms.length + 1) + '. 💰 Balance till today (all entries)').join('\n') + '\n\n_(0 = cancel)_');
       }
       return again();
+    }
+    if (cur.step === 'reqPick') {
+      const it = /^\d+$/.test(low) ? (cur.list || [])[Number(low) - 1] : null; if (!it) return again();
+      let full; try { full = (await withWb(() => aprPending())).find(x => x.k === it.k && x.id === it.id); } catch (e) { return stop(e, ''); }
+      if (!full) { botState.delete(jid); return say('ℹ️ Ye request pehle hi decide ho chuki hai.\n\n_Dobara dekhne ke liye *help* bhejo._'); }
+      cur.pick = { k: it.k, id: it.id }; cur.step = 'reqAct';
+      return ask(cur, aprText(full).split('\n\n✅ *Approve:*')[0] + '\n\n1️⃣  ✅ Approve\n2️⃣  ❌ Deny\n\n_(0 = cancel)_');
+    }
+    if (cur.step === 'reqAct') {
+      const yes = APR_YES.has(low), no = APR_NO.has(low); if (!yes && !no) return again();
+      botState.delete(jid);
+      return aprDecide(cur.pick, '', yes, say);
     }
     if (cur.step === 'rackQ') {
       const norm = x => String(x == null ? '' : x).trim().toLowerCase().replace(/^ins[\s.\-:#_]*/, '').replace(/[^a-z0-9]/g, ''), qc = norm(t), ql = t.toLowerCase().replace(/\s+/g, ' ').trim(); if (!qc) return;
