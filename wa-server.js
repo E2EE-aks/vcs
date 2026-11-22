@@ -407,19 +407,20 @@ module.exports = function makeWhatsApp(o) {
   const botMatch = (pn, list) => { const d = digits(pn); if (!d) return ''; return list.find(c => d === c || d === CC + c || d.endsWith(c)) || ''; };   // -> the saved number that matches, or ''
   const botDup = (wm, text) => {                                       // WhatsApp can hand us the same message twice: answer it only once
     const now = Date.now(), k1 = 'i' + String((wm.key && wm.key.id) || ''), k2 = 't' + wm.key.remoteJid + '|' + String(wm.messageTimestamp || '') + '|' + text;
-    const dup = (wm.key && wm.key.id && botSeen.has(k1)) || (wm.messageTimestamp && botSeen.has(k2));
-    botSeen.set(k1, now); botSeen.set(k2, now);
+    const k3 = 'x' + wm.key.remoteJid + '|' + text, quick = text && botSeen.has(k3) && now - botSeen.get(k3) < 3000;   // same words in the same chat within 3 s = the same message arriving twice
+    const dup = (wm.key && wm.key.id && botSeen.has(k1)) || (wm.messageTimestamp && botSeen.has(k2)) || quick;
+    botSeen.set(k1, now); botSeen.set(k2, now); if (text) botSeen.set(k3, now);
     if (botSeen.size > 600) { botSeen.forEach((v, k) => { if (now - v > 120000) botSeen.delete(k); }); if (botSeen.size > 600) botSeen.clear(); }
     return !!dup;
   };
   const botToday = () => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value])); return { date: p.year + '-' + p.month + '-' + p.day, y: Number(p.year), m: Number(p.month), d: Number(p.day) }; };
-  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n4️⃣  VCS (website update)\n\n_Number bhejo: 1, 2, 3 ya 4_';
+  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n4️⃣  VCS (website update)\n5️⃣  Rack Mapping (item kis rack/row me hai)\n\n_Number bhejo: 1, 2, 3, 4 ya 5_';
   /* run fn as the account this number belongs to, with fresh sheet data (changes are saved).
      sec = 'att' | 'exp': that account must have that right (edit = true -> needs EDIT access, otherwise view is enough) */
   const botRun = (fn, acc, sec, edit) => withWb(() => {
     const set = globalThis.readSettings_().values, a = globalThis.getAccount_(acc || 'ADMIN', set);
     if (!a || a.active === false) throw new Error('Is number ka account nahi mila ya band hai.');
-    if (sec) { const lv = (a.perms || {})[sec]; if (!(lv === 'edit' || (!edit && lv === 'view'))) throw new Error('Is account ko ' + (sec === 'att' ? 'attendance' : 'expense') + (edit ? ' edit karne' : ' dekhne') + ' ki permission nahi hai.'); }
+    if (sec) { const lv = (a.perms || {})[sec]; if (!(lv === 'edit' || (!edit && lv === 'view'))) throw new Error('Is account ko ' + (sec === 'att' ? 'attendance' : sec === 'rack' ? 'rack mapping' : 'expense') + (edit ? ' edit karne' : ' dekhne') + ' ki permission nahi hai.'); }
     globalThis.buildCtx_(a.id);
     return fn(a);
   });
@@ -518,7 +519,7 @@ module.exports = function makeWhatsApp(o) {
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
     const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
-    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance), *3* (Bill PDF) ya *4* (VCS) bhejo. Cancel: *0*') : say('🙏 Samajh nahi aaya.\n\n' + cur.prompt);
+    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance), *3* (Bill PDF), *4* (VCS) ya *5* (Rack) bhejo. Cancel: *0*') : undefined;   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (cur.step === 'menu') {
@@ -538,6 +539,11 @@ module.exports = function makeWhatsApp(o) {
         cur.emp = e.id; cur.empName = e.name; cur.step = 'attSt';
         return ask(cur, '🗓️ *' + (e.name || 'Attendance') + '*\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
       }
+      if (low === '5') {
+        try { await botRun(() => true, acc, 'rack', false); } catch (e) { return stop(e, ''); }
+        cur.step = 'rackQ';
+        return ask(cur, '📦 *Rack Mapping*\n\nItem ka *INS number* (ya naam) bhejo — main bataunga wo kis *rack* aur *row* me laga hai.\nJaise: *1234* ya *dettol*\n\n_(0 = cancel)_');
+      }
       if (low === '3') {
         const n0 = botToday(), MN0 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const since = (n0.y - 1) + '-' + String(n0.m).padStart(2, '0');            // last 12 months only (this month + the 11 before it)
@@ -547,6 +553,18 @@ module.exports = function makeWhatsApp(o) {
         return ask(cur, '🧾 *Bill PDF* — kaun sa mahina?\n\n' + ms.map((k, i) => (i + 1) + '. ' + MN0[Number(k.slice(5, 7)) - 1] + ' ' + k.slice(0, 4)).join('\n') + '\n\n_(0 = cancel)_');
       }
       return again();
+    }
+    if (cur.step === 'rackQ') {
+      const q = t.toLowerCase().replace(/\s+/g, ' ').trim(), qc = q.replace(/[\s\-_.\/]/g, ''); if (!qc) return;
+      let items; try { items = await botRun(() => globalThis.readRack_(globalThis.readRackCfg_().cats), acc, 'rack', false); } catch (e) { return stop(e, 'Rack dekh nahi paya: '); }
+      const cd = x => String(x.code || '').toLowerCase().replace(/[\s\-_.\/]/g, ''), words = q.split(' ');
+      let hit = items.filter(x => cd(x) && cd(x) === qc);                                                   // exact INS number first
+      if (!hit.length) hit = items.filter(x => qc.length >= 2 && cd(x) && cd(x).includes(qc));              // part of an INS number
+      if (!hit.length) hit = items.filter(x => words.every(w => String(x.name || '').toLowerCase().includes(w)));   // item name
+      hit.sort((a, b) => (parseInt(a.rack, 10) - parseInt(b.rack, 10)) || String(a.row).localeCompare(String(b.row)));
+      if (!hit.length) return say('🔎 *' + t.slice(0, 40) + '* — rack me nahi mila.\n\nDusra number/naam bhejo, ya *0* = cancel.');
+      const lines = hit.slice(0, 8).map(x => '📦 *Rack ' + x.rack + ' · Row ' + x.row + '*  (' + x.rack + x.row + ')\n🏷️ ' + x.name + (x.code ? '\n🔢 INS ' + x.code : '') + (x.cat && x.nums && x.nums[x.cat] !== '' && x.nums[x.cat] != null ? '\n📊 ' + x.cat + ': ' + x.nums[x.cat] : '') + (x.note ? '\n📝 ' + x.note : ''));
+      return say(lines.join('\n\n') + (hit.length > 8 ? '\n\n_…aur ' + (hit.length - 8) + ' item. Number poora likho._' : '') + '\n\n_Aur dekhna ho to dusra number/naam bhejo. *0* = band._');
     }
     if (cur.step === 'attSt') {
       const code = low === '1' || low === 'present' || low === 'p' ? 'P' : low === '2' || low === 'absent' || low === 'a' ? 'A' : '';
@@ -563,7 +581,7 @@ module.exports = function makeWhatsApp(o) {
       return say((code === 'P' ? '✅ *Present*' : '❌ *Absent*') + ' mark ho gaya\n👤 ' + (cur.empName || '') + '\n📅 ' + n.d + '-' + String(n.m).padStart(2, '0') + '-' + n.y + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
     }
     if (cur.step === 'expAmt') {
-      const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return say('Amount samajh nahi aaya. Aise bhejo: *150 chai*');
+      const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return;
       const amount = Number(m[1].replace(',', '.')); if (!(amount > 0)) return say('Amount 0 se zyada hona chahiye.');
       let ct; try { ct = await botRun(a => { const l = globalThis.readCategories_(); return { who: String(a.name || a.username || ''), exp: l.filter(c => c.type !== 'Income').map(c => c.name), inc: l.filter(c => c.type === 'Income').map(c => c.name) }; }, acc, 'exp', true); } catch (e) { return stop(e, ''); }   // this user's own categories only
       const cats = ct.exp.concat(ct.inc);
