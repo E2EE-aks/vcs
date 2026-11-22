@@ -831,10 +831,17 @@ module.exports = function makeWhatsApp(o) {
     }
     if (cur.step === 'unCP') {
       if (t.length < 6) return bad('Password kam se kam 6 characters ka ho. Dobara bhejo:');
+      cur.pw = t; cur.step = 'unCE';
+      return say('📧 Apna *Gmail ID* bhejo (payment ka invoice isi par aayega):\n\n_jaise name@gmail.com_\n_0 = cancel_');
+    }
+    if (cur.step === 'unCE') {
+      const em = t.toLowerCase();
+      if (!/^[a-z0-9._%+\-]+@gmail\.com$/.test(em)) return bad('Sahi Gmail ID bhejo (jaise name@gmail.com). Dobara bhejo:');
+      cur.email = em;
       let me = null;
       try {
         me = await withWb(() => {
-          globalThis.requestAccess_({ name: cur.name, username: cur.user, password: t, access: {} });   // same as "Create account" on the sign-in screen (24 h trial, admin gets a message)
+          globalThis.requestAccess_({ name: cur.name, username: cur.user, password: cur.pw, email: cur.email, access: {} });   // same as "Create account" on the sign-in screen (24 h trial, admin gets a message)
           const a = globalThis.findByUsername_(cur.user, globalThis.readSettings_().values);
           return a ? { id: a.id, name: a.name || a.username || cur.user } : null;
         });
@@ -846,7 +853,7 @@ module.exports = function makeWhatsApp(o) {
       botState.delete(jid);
       if (!me) return bad('Account ban gaya par link nahi hua. *help* bhej kar Login karo.');
       await unlBind(num, me.id, me.name);
-      await say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n\nAdmin ko bata diya gaya hai.\n\n💳 *Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' payment karo:* website par Sign in karo, QR dikhega — pay karke UTR daalo, payment verify hote hi login khul jayega. Uske baad admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
+      await say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n📧 ' + cur.email + '\n\nAdmin ko bata diya gaya hai.\n\n💳 *Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' payment karo:* website par Sign in karo, QR dikhega — pay karke UTR daalo, payment verify hote hi login khul jayega. Uske baad admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
       return unlSendQr(s, jid);
     }
   }

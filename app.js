@@ -435,7 +435,7 @@ function rgErr(m){ const e = $('#rgErr'); e.textContent = m || ''; e.classList.t
 function showReg(){
   $('#loginForm').classList.add('hidden'); $('#resetForm').classList.add('hidden'); $('#regForm').classList.remove('hidden');
   $('#rgForm').classList.remove('hidden'); $('#rgDone').classList.add('hidden'); rgErr('');
-  ['#rgName','#rgUser','#rgPw'].forEach(i => $(i).value = ''); $('#rgPw').type = 'password'; $('#rgToggle').textContent = 'Show';
+  ['#rgName','#rgEmail','#rgUser','#rgPw'].forEach(i => $(i).value = ''); $('#rgPw').type = 'password'; $('#rgToggle').textContent = 'Show';
   $('#rgAcc').innerHTML = RG_SECS.map(([k, l]) => `<div class="rg-row"><span>${l}</span><select class="select" data-k="${k}"><option value="none">No access</option><option value="view">View only</option><option value="edit">Full (edit)</option></select></div>`).join('');
   $('#rgUser').focus();
 }
@@ -448,13 +448,15 @@ $('#regForm').addEventListener('submit', async ev => {
   const u = $('#rgUser').value.trim(), p = $('#rgPw').value, btn = $('#rgGo');
   if (!/^\S{3,40}$/.test(u)) return rgErr('User ID must be 3 to 40 characters, without spaces.');
   if (p.length < 6) return rgErr('Password must be at least 6 characters.');
+  const em = $('#rgEmail').value.trim().toLowerCase();
+  if (!/^[a-z0-9._%+\-]+@gmail\.com$/.test(em)) return rgErr('Sahi Gmail ID likho (jaise name@gmail.com).');
   const access = {}; document.querySelectorAll('#rgAcc select').forEach(s => { access[s.dataset.k] = s.value; });
   btn.disabled = true; btn.textContent = 'Creating…';
   try{
-    const r = await api('requestAccess', { username:u, password:p, name:$('#rgName').value.trim(), access });
+    const r = await api('requestAccess', { username:u, password:p, name:$('#rgName').value.trim(), email:em, access });
     $('#rgForm').classList.add('hidden');
     const d = $('#rgDone'); d.classList.remove('hidden');
-    d.innerHTML = `<div class="rg-ok"><b>✅ User created</b><p>User ID: <b>${esc(r.username)}</b></p><p>Valid for ${r.hours} hours (till ${esc(r.until)}). Your admin has been informed in Chat.</p>${r.needsPay ? `<p>💳 Sign in karte waqt <b>₹${esc(r.price || 1)}</b> ka payment QR se karna hoga.</p>` : ''}<button type="button" class="btn block" id="rgUse">Sign in now</button></div>`;
+    d.innerHTML = `<div class="rg-ok"><b>✅ User created</b><p>User ID: <b>${esc(r.username)}</b></p><p>Valid for ${r.hours} hours (till ${esc(r.until)}). Your admin has been informed in Chat.</p><p>📧 Payment ke baad invoice <b>${esc(em)}</b> par aayega.</p>${r.needsPay ? `<p>💳 Sign in karte waqt <b>₹${esc(r.price || 1)}</b> ka payment QR se karna hoga.</p>` : ''}<button type="button" class="btn block" id="rgUse">Sign in now</button></div>`;
     $('#rgUse').onclick = () => { showLogin(false); $('#lu').value = u; $('#lp').value = p; $('#lp').focus(); };
   }catch(e){ rgErr(e.message); }
   finally{ btn.disabled = false; btn.textContent = 'Create'; }

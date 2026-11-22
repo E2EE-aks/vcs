@@ -597,6 +597,8 @@ function requestAccessRun_(req) {
   var pw = String(req.password || '');
   if (pw.length < 6) fail_('Password must be at least 6 characters.');
   if (findByUsername_(username, s)) fail_('That User ID is already taken. Choose another one.');
+  var email = String(req.email || '').trim().toLowerCase();
+  if (!req.skipEmail && !/^[a-z0-9._%+\-]+@gmail\.com$/.test(email)) fail_('Sahi Gmail ID likho (jaise name@gmail.com).');   // WhatsApp sign-ups skip it
   var src = (req && req.access) || {}, perms = chatOnlyPerms_(), names = [];
   var SECS = [['att', 'Attendance'], ['exp', 'Expenses'], ['work', 'Work'], ['tt', 'Time Table'], ['vcs', 'VCS Complaint'], ['rack', 'Rack Mapping'], ['pw', 'Passwords'], ['link', 'Links'], ['lic', 'LIC']];
   SECS.forEach(function (x) {
@@ -611,13 +613,13 @@ function requestAccessRun_(req) {
   var nid = 'U' + Utilities.getUuid().replace(/-/g, '').slice(0, 6);
   var r2 = sh.getRange(sh.getLastRow() + 1, 1, 1, 15);
   r2.setNumberFormat('@');
-  r2.setValues([[nid, username, pw, 'user', name, '', 'Yes', JSON.stringify(normPerms_(perms, 'user')), 'No', nowStr_(), '', '', '', '', '']]);
+  r2.setValues([[nid, username, pw, 'user', name, email, 'Yes', JSON.stringify(normPerms_(perms, 'user')), 'No', nowStr_(), '', '', '', '', '']]);
   var until = Date.now() + TEMP_HOURS * 3600 * 1000;
   PropertiesService.getScriptProperties().setProperty('PAYG_' + nid, String(Date.now()));        // ₹1 joining payment still to be verified
   PropertiesService.getScriptProperties().setProperty('ACCX_' + nid, String(until));   // 24 h, then only actions are blocked (login + messaging admin still work)
   cache.put('reqacc_n', String(n + 1), 3600);
   var untilTxt = Utilities.formatDate(new Date(until), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
-  sysChatSend_('ADMIN', '🆕 New user added\n\nName: ' + name + '\nUser ID: ' + username + '\nPassword: ' + pw +
+  sysChatSend_('ADMIN', '🆕 New user added\n\nName: ' + name + '\nUser ID: ' + username + (email ? '\nGmail: ' + email : '') + '\nPassword: ' + pw +
     '\nAccess: Chat' + (names.length ? ', ' + names.join(', ') : '') +
     '\nValid for: ' + TEMP_HOURS + ' hours (till ' + untilTxt + '). After that actions are blocked until a plan is chosen; the user can still message you here.\n\n💳 Sign-in will open after the ₹' + PAYG_PRICE_ + ' joining payment is verified in your Gmail.\n\nCreated from the sign-in screen (Ask your admin).');
   return { ok: true, username: username, hours: TEMP_HOURS, until: untilTxt, needsPay: true, price: PAYG_PRICE_ };

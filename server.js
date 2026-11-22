@@ -308,7 +308,16 @@ function makeApp(store, env) {
     used.push(utr); P.setProperty('PAYG_UTRS', JSON.stringify(used.slice(-500)));
     P.deleteProperty('PAYG_' + acc.id); pgTry.delete(uname);
     try { G.sysChatSend_('ADMIN', '✅ ₹' + price + ' joining payment mil gaya\n\nUser: ' + who + '\nUTR: ' + utr + '\n\nAb ye user login kar sakta hai.'); } catch (e) {}
-    return { ok: true, pending: false, price, msg: '✅ Payment successfully mil gaya! Ab aap login kar sakte ho.' };
+    let invoiced = false;                                           // invoice goes out from the admin's Gmail (SMTP_USER) under the name "aks-vcs"
+    if (acc.email) {
+      try {
+        const ist = new Date(now + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST', until = new Date(now + 24 * 3600000 + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
+        await sendMail({ name: 'aks-vcs', to: acc.email, subject: 'aks-vcs | Payment Invoice - \u20B9' + price + ' received',
+          body: 'Hello ' + (acc.name || acc.username) + ',\n\nAapka payment successfully ho gaya hai. \u2705\n\nAapka account \u20B9' + price + ' me 24 ghante ke liye activate ho gaya hai.\n\n----- INVOICE -----\nUser ID   : ' + acc.username + '\nAmount    : \u20B9' + price + '\nUTR / Ref : ' + utr + '\nDate      : ' + ist + '\nValid till: ' + until + '\n-------------------\n\nAb aap login kar sakte ho.\n\nThank you,\naks-vcs' }, env);
+        invoiced = true;
+      } catch (e) { warn('invoice mail failed: ' + e.message); }     // a mail problem must never undo a verified payment
+    }
+    return { ok: true, pending: false, price, invoiced, msg: '✅ Payment successfully mil gaya! Ab aap login kar sakte ho.' + (invoiced ? ' Invoice ' + acc.email + ' par bhej diya gaya hai.' : '') };
   }
   // ---------- Gmail: a notification when a new unread mail arrives (the server looks every minute, only for users who have notifications on) ----------
   const mailSeen = new Map();                                  // uid -> Set of mail ids already known
