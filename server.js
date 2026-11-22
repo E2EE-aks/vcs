@@ -228,7 +228,26 @@ function makeApp(store, env) {
   const TG = require('./tg-server')({ env, enc, dec, sign, warn, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m) });   // notify = phone notification for a new Telegram message
 
   // ---------- WhatsApp (per-user account linked by QR code; see wa-server.js) ----------
-  const WA = require('./wa-server')({ env, warn, sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m), zip: async () => { if (!(GH.repo && GH.token)) throw new Error('GitHub (repo / token) set nahi hai.'); const r = await fetch('https://api.github.com/repos/' + GH.repo + '/zipball/' + encodeURIComponent(GH.branch), { redirect: 'follow', headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } }); if (!r.ok) throw new Error('GitHub ZIP nahi bana (error ' + r.status + ').'); return { name: (GH.repo.split('/').pop() || 'website') + '-' + GH.branch + '.zip', buf: Buffer.from(await r.arrayBuffer()) }; }, renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
+  /* whole website (GitHub branch) as a ZIP: sent on WhatsApp (menu: VCS Source Code) and also served on a signed, expiring download link */
+  async function srcZipGet() {
+    if (!(GH.repo && GH.token)) throw new Error('GitHub (repo / token) set nahi hai.');
+    const r = await fetch('https://api.github.com/repos/' + GH.repo + '/zipball/' + encodeURIComponent(GH.branch), { redirect: 'follow', headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } });
+    if (!r.ok) throw new Error('GitHub ZIP nahi bana (error ' + r.status + ').');
+    return { name: (GH.repo.split('/').pop() || 'website') + '-' + GH.branch + '.zip', buf: Buffer.from(await r.arrayBuffer()) };
+  }
+  const SRC_HOURS = 6;
+  function srcLink() {                                                         // signed link, valid SRC_HOURS hours; '' when the public address of the site is not known
+    const base = String(env.RENDER_EXTERNAL_URL || env.PUBLIC_URL || '').replace(/\/+$/, ''); if (!base) return '';
+    const e = Date.now() + SRC_HOURS * 3600e3; return base + '/vcs-src?e=' + e + '&g=' + sign('vcssrc|' + e);
+  }
+  async function srcOpen(q) {
+    const e = Number(q.e), g = String(q.g || ''), want = sign('vcssrc|' + e);
+    const ok = e > Date.now() && g.length === want.length && crypto.timingSafeEqual(Buffer.from(g), Buffer.from(want));
+    if (!ok) return { code: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: 'Link expire ho gaya ya galat hai. WhatsApp me *help* bhejo aur naya link lo.' };
+    const z = await srcZipGet();
+    return { code: 200, headers: { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="' + z.name + '"', 'Content-Length': z.buf.length, 'Cache-Control': 'no-store' }, body: z.buf };
+  }
+  const WA = require('./wa-server')({ env, warn, sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m), zip: () => srcZipGet(), zipLink: () => srcLink(), renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
 
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });
@@ -1713,7 +1732,7 @@ function makeApp(store, env) {
   };
   return { handle, warm: () => withWb(async () => { try { const P = globalThis.PropertiesService.getScriptProperties(); if (String(P.getProperty('DEPLOY_PENDING') || '')) { P.setProperty('DEPLOY_STAMP', String(Date.now())); P.setProperty('DEPLOY_PENDING', ''); } } catch (e) {} }),   // a WhatsApp upload was waiting for this restart: the new version is live now -> new browser-cache stamp
       // load the sheet right at start-up so the first visitor does not wait for it
-           waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r),
+           waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r), srcOpen: q => srcOpen(q),
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            rtMax: RT_MAX, rtRe: RT_MIME, rtUp: (t, q, b) => rtUpload(t, q, b).catch(errOut),
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
@@ -1836,6 +1855,9 @@ function start(app, env) {
       rq.on('data', c => { n += c.length; if (n > app.rtMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
       rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.rtMax / 1048576) + ' MB).', code: 'RT' } : await app.rtUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
       return;
+    }
+    if (rq.method === 'GET' && url.pathname === '/vcs-src' && app.srcOpen) {                   // source-code ZIP download link (signed, expires)
+      return app.srcOpen(Object.fromEntries(url.searchParams)).then(o => { rs.writeHead(o.code, o.headers); rs.end(o.body); }).catch(() => { rs.writeHead(500); rs.end('Error'); });
     }
     if (rq.method === 'GET' && url.pathname === '/wa/media' && app.waOpen) {                // WhatsApp profile photo / photo / video / voice / file (signed link, Range for seeking)
       return app.waOpen(Object.fromEntries(url.searchParams), rq.headers.range).then(o => {

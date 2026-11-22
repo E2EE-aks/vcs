@@ -16,6 +16,7 @@ const crypto = require('crypto');
 
 module.exports = function makeWhatsApp(o) {
   const { env, warn, sign, withWb, enc, dec } = o;
+  const srcLink = o.zipLink;                                  // () -> signed download link of that ZIP ('' if unknown)
   const srcZip = o.zip;                                       // () -> { name, buf }: the whole website (GitHub branch) as a ZIP (set by server.js)
   const deployFiles = o.deploy;                              // (files, message) -> commit on GitHub (set by server.js); Render then deploys the website
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
@@ -691,7 +692,9 @@ module.exports = function makeWhatsApp(o) {
         botState.delete(jid); await say('⏳ *Source code ZIP* bana raha hoon…');
         try {
           const z = await srcZip(), mb = (z.buf.length / 1048576).toFixed(1);
-          return s.sock.sendMessage(to, { document: z.buf, fileName: z.name, mimetype: 'application/zip', caption: '📦 *VCS Source Code* (' + mb + ' MB)\n\n_Upar wali ZIP file (card) par tap karo — download ho jayegi. Dobara kuch karna ho to *help* bhejo._' });
+          await s.sock.sendMessage(to, { document: z.buf, fileName: z.name, mimetype: 'application/zip', caption: '📦 *VCS Source Code* (' + mb + ' MB)\n\n_Upar wali ZIP file (card) par tap karo — download ho jayegi. Dobara kuch karna ho to *help* bhejo._' });
+          const lk = typeof srcLink === 'function' ? srcLink() : '';
+          if (lk) return say('🔗 *Download link* (6 ghante tak chalega)\n' + lk + '\n\n_Link par tap karo — browser ZIP ko seedha *Downloads* folder me download kar dega._');
         } catch (e) { return say('❌ Source code nahi mila: ' + botErr(e)); }
       }
       if (key === 'exp') {
