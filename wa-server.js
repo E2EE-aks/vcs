@@ -442,7 +442,7 @@ module.exports = function makeWhatsApp(o) {
   const botNorm = j => {
     j = j || {};
     const nums = [...new Set((Array.isArray(j.nums) ? j.nums : BOT_DEFAULT).map(x => String(x).replace(/\D/g, '')).filter(x => x.length >= 8 && x.length <= 15))].slice(0, 20);
-    const bind = {}; nums.forEach(n => { const b = j.bind && j.bind[n]; if (b && b.acc) bind[n] = { acc: String(b.acc).slice(0, 60), emp: String(b.emp || '').slice(0, 60), label: String(b.label || '').slice(0, 90), led: String(b.led || '').trim().slice(0, 80) }; });
+    const bind = {}; nums.forEach(n => { const b = j.bind && j.bind[n]; if (b && b.unl && !b.acc) bind[n] = { unl: true, acc: '', emp: '', label: 'Not linked', led: '' }; else if (b && b.acc) bind[n] = { acc: String(b.acc).slice(0, 60), emp: String(b.emp || '').slice(0, 60), label: String(b.label || '').slice(0, 90), led: String(b.led || '').trim().slice(0, 80) }; });
     return { on: j.on === undefined ? true : (j.on !== false && j.on !== 'false'), nums, bind };
   };
   async function botGet() {
@@ -756,7 +756,7 @@ module.exports = function makeWhatsApp(o) {
       ref = { k: wait[0].k, id: wait[0].id };
     }
     const bd = ((await botGet()).bind || {})[num] || {};
-    if ((bd.acc || 'ADMIN') !== 'ADMIN') { await say('❌ Approve / Deny sirf main admin ke number se ho sakta hai.'); return true; }
+    if (bd.unl || (bd.acc || 'ADMIN') !== 'ADMIN') { await say('❌ Approve / Deny sirf main admin ke number se ho sakta hai.'); return true; }
     return aprDecide(ref, code, approve, say);
   }
   async function aprDecide(ref, code, approve, say) {              // run Approve / Deny for one request and tell what really happened
@@ -782,6 +782,66 @@ module.exports = function makeWhatsApp(o) {
   }
   const aprLine = x => x.k === 'del' ? '🗑 *' + (x.r.n || 'User') + '* — ' + (x.r.d || 'delete request') : '💳 *' + (x.r.name || x.r.username || 'User') + '* — ' + (x.r.planName || 'payment') + ' ₹' + (x.r.price || 0) + ' · UTR ' + (x.r.utr || '—');
 
+  /* ---------- "Not linked" numbers: help -> 1 Login  2 Create account.  After a good login / new account the number is tied to that account and works like any linked number ---------- */
+  async function unlBind(num, id, label) {
+    const c = await botGet(), b = Object.assign({}, c.bind); b[num] = { acc: id, emp: '', label: label || '', led: '' };
+    const n = botNorm({ on: c.on, nums: c.nums, bind: b });
+    await withWb(() => { PROPS().setProperty('WA_BOT_CFG', JSON.stringify(n)); }); botCfg = n;
+  }
+  async function unlStep(s, jid, low, t, num, cur, say) {
+    if (BOT_HI.test(low)) { botState.set(jid, { step: 'unMenu', at: Date.now() }); return say('👋 *Welcome!*\n\nAapka number abhi kisi account se linked nahi hai.\n\n1️⃣  Login\n2️⃣  Create account\n\n_Number bhejo: 1 ya 2_'); }
+    if (!cur || !/^un/.test(cur.step)) return;                          // not in a chat and not "help" -> stay silent
+    if (['0', 'cancel', 'stop'].includes(low)) { botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
+    cur.at = Date.now();
+    const bad = (m) => say('❌ ' + m);
+    if (cur.step === 'unMenu') {
+      if (low === '1') { cur.step = 'unLU'; return say('🔐 *Login*\n\nApna *User ID* bhejo:\n\n_0 = cancel_'); }
+      if (low === '2') { cur.step = 'unCN'; return say('🆕 *Create account*\n\nApna *naam* bhejo:\n\n_0 = cancel_'); }
+      return;
+    }
+    if (cur.step === 'unLU') { if (!t) return; cur.user = t.slice(0, 60); cur.step = 'unLP'; return say('Ab apna *password* bhejo:\n\n_0 = cancel_'); }
+    if (cur.step === 'unLP') {
+      if (!t) return;
+      let me = null;
+      try {
+        me = await withWb(() => {
+          globalThis.login_({ username: cur.user, password: t });        // same check as the website (wrong-password lock + login log included)
+          const a = globalThis.findByUsername_(cur.user, globalThis.readSettings_().values);
+          return a ? { id: a.id, name: a.name || a.username || cur.user } : null;
+        });
+      } catch (e) { botState.delete(jid); return bad(botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); }
+      botState.delete(jid);
+      if (!me) return bad('Account nahi mila.\n\n_Dobara koshish ke liye *help* bhejo._');
+      if (me.id === 'ADMIN') return bad('Main admin account WhatsApp se link nahi ho sakta. Admin ka number app ke Deploy tab se add karo.');
+      await unlBind(num, me.id, me.name);
+      return say('✅ *Login ho gaya*\n👤 ' + me.name + '\n\nAb ye number is account se linked hai. Menu ke liye *help* bhejo.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
+    }
+    if (cur.step === 'unCN') { if (!t) return; cur.name = t.slice(0, 60); cur.step = 'unCU'; return say('*User ID* chuno (3–40 characters, bina space):\n\n_0 = cancel_'); }
+    if (cur.step === 'unCU') {
+      if (!/^\S{3,40}$/.test(t)) return bad('User ID 3 se 40 characters ka ho, bina space. Dobara bhejo:');
+      cur.user = t; cur.step = 'unCP'; return say('*Password* chuno (kam se kam 6 characters):\n\n_0 = cancel_');
+    }
+    if (cur.step === 'unCP') {
+      if (t.length < 6) return bad('Password kam se kam 6 characters ka ho. Dobara bhejo:');
+      let me = null;
+      try {
+        me = await withWb(() => {
+          globalThis.requestAccess_({ name: cur.name, username: cur.user, password: t, access: {} });   // same as "Create account" on the sign-in screen (24 h trial, admin gets a message)
+          const a = globalThis.findByUsername_(cur.user, globalThis.readSettings_().values);
+          return a ? { id: a.id, name: a.name || a.username || cur.user } : null;
+        });
+      } catch (e) {
+        const m = botErr(e);
+        if (/already taken/i.test(m)) { cur.step = 'unCU'; return bad(m + '\n\nDusra *User ID* bhejo:'); }
+        botState.delete(jid); return bad(m + '\n\n_Dobara koshish ke liye *help* bhejo._');
+      }
+      botState.delete(jid);
+      if (!me) return bad('Account ban gaya par link nahi hua. *help* bhej kar Login karo.');
+      await unlBind(num, me.id, me.name);
+      return say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n\nAdmin ko bata diya gaya hai. Admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
+    }
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -805,6 +865,7 @@ module.exports = function makeWhatsApp(o) {
       const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
       return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
+    { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "Not linked": only Login / Create account
     if (BOT_HI.test(low)) return menu();
     if (await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
