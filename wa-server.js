@@ -407,34 +407,40 @@ module.exports = function makeWhatsApp(o) {
     globalThis.buildCtx_(a.id);
     return fn();
   });
+  const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text) {
     const to = jid;                                                     // answer in the very same chat the message came from
     const say = async t => { await new Promise(r => setTimeout(r, 700)); return s.sock.sendMessage(to, { text: t }); };
-    const t = String(text || '').trim(), low = t.toLowerCase();
-    let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) cur = null;
-    if (!cur || ['0', 'menu', 'cancel', 'stop'].includes(low)) { botState.set(jid, { step: 'menu', at: Date.now() }); return say(BOT_MENU); }
+    const t = String(text || '').trim(), low = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
+    const ask = (c, m) => { c.prompt = m; return say(m); };            // remember the question, so a wrong answer just repeats it
+    const menu = () => { const c = { step: 'menu', at: Date.now() }; botState.set(jid, c); return ask(c, BOT_MENU); };
+    if (BOT_HI.test(low)) return menu();
+    if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
+    if (['0', 'cancel', 'stop'].includes(low)) { botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
-    if (cur.step !== 'expAmt' && !/^\d+$/.test(low)) { cur.step = 'menu'; return say(BOT_MENU); }      // hello / hi / any words = start again with the menu
+    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense) ya *2* (Attendance) bhejo. Cancel: *0*') : say('🙏 Samajh nahi aaya.\n\n' + cur.prompt);
     if (cur.step === 'menu') {
-      if (low === '1') { cur.step = 'expAmt'; return say('💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = wapas menu)_'); }
+      if (low === '1') { cur.step = 'expAmt'; return ask(cur, '💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = cancel)_'); }
       if (low === '2') {
         const emps = await botRun(() => globalThis.readEmployees_().map(e => ({ id: e.id, name: e.name })));
         if (!emps.length) { botState.delete(jid); return say('❌ Attendance me koi employee nahi mila.'); }
         cur.emps = emps;
-        if (emps.length > 1) { cur.step = 'attEmp'; return say('🗓️ *Attendance* — kiski?\n\n' + emps.map((e, i) => (i + 1) + '. ' + e.name).join('\n') + '\n\n_(0 = wapas menu)_'); }
+        if (emps.length > 1) { cur.step = 'attEmp'; return ask(cur, '🗓️ *Attendance* — kiski?\n\n' + emps.map((e, i) => (i + 1) + '. ' + e.name).join('\n') + '\n\n_(0 = cancel)_'); }
         cur.emp = emps[0].id; cur.empName = emps[0].name; cur.step = 'attSt';
-        return say('🗓️ *Attendance* — ' + (emps[0].name || 'Aaj') + '\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = wapas menu)_');
+        return ask(cur, '🗓️ *Attendance* — ' + (emps[0].name || 'Aaj') + '\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
       }
-      return say('Please *1* ya *2* bhejo.\n\n' + BOT_MENU);
+      return again();
     }
     if (cur.step === 'attEmp') {
-      const e = cur.emps[parseInt(low, 10) - 1]; if (!e) return say('Valid number bhejo (1 se ' + cur.emps.length + ').');
+      const e = cur.emps[parseInt(low, 10) - 1] || cur.emps.find(x => low && String(x.name || '').toLowerCase().includes(low)); if (!e) return again();
       cur.emp = e.id; cur.empName = e.name; cur.step = 'attSt';
-      return say('🗓️ *' + e.name + '*\n\n1️⃣  Present\n2️⃣  Absent');
+      return ask(cur, '🗓️ *' + e.name + '*\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
     }
     if (cur.step === 'attSt') {
-      if (low !== '1' && low !== '2') return say('Please *1* (Present) ya *2* (Absent) bhejo.');
-      const code = low === '1' ? 'P' : 'A', n = botToday();
+      const code = low === '1' || low === 'present' || low === 'p' ? 'P' : low === '2' || low === 'absent' || low === 'a' ? 'A' : '';
+      if (!code) return again();
+      const n = botToday();
       try {
         await botRun(() => {
           const yr = globalThis.publicSettings_(globalThis.readSettings_()).year;
@@ -443,7 +449,7 @@ module.exports = function makeWhatsApp(o) {
         });
       } catch (e) { botState.delete(jid); return say('❌ Attendance mark nahi hui: ' + String((e && e.message) || e).slice(0, 150)); }
       botState.delete(jid);
-      return say((code === 'P' ? '✅ *Present*' : '❌ *Absent*') + ' mark ho gaya\n👤 ' + (cur.empName || '') + '\n📅 ' + n.d + '-' + String(n.m).padStart(2, '0') + '-' + n.y);
+      return say((code === 'P' ? '✅ *Present*' : '❌ *Absent*') + ' mark ho gaya\n👤 ' + (cur.empName || '') + '\n📅 ' + n.d + '-' + String(n.m).padStart(2, '0') + '-' + n.y + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
     }
     if (cur.step === 'expAmt') {
       const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return say('Amount samajh nahi aaya. Aise bhejo: *150 chai*');
@@ -451,17 +457,17 @@ module.exports = function makeWhatsApp(o) {
       const cats = await botRun(() => globalThis.readCategories_().filter(c => c.type === 'Expense').map(c => c.name));
       if (!cats.length) { botState.delete(jid); return say('❌ Koi expense category nahi mili. Pehle app me category banao.'); }
       cur.amount = amount; cur.note = t.replace(m[0], '').replace(/\s+/g, ' ').trim(); cur.cats = cats; cur.step = 'expCat';
-      return say('💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + '\n\n*Category chuno:*\n' + cats.map((c, i) => (i + 1) + '. ' + c).join('\n') + '\n\n_(0 = wapas menu)_');
+      return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + '\n\n*Category chuno (number bhejo):*\n' + cats.map((c, i) => (i + 1) + '. ' + c).join('\n') + '\n\n_(0 = cancel)_');
     }
     if (cur.step === 'expCat') {
-      const c = cur.cats[parseInt(low, 10) - 1]; if (!c) return say('Valid number bhejo (1 se ' + cur.cats.length + ').');
+      const c = cur.cats[parseInt(low, 10) - 1] || cur.cats.find(x => low && String(x).toLowerCase() === low) || cur.cats.find(x => low.length > 1 && String(x).toLowerCase().includes(low)); if (!c) return again();
       const n = botToday();
       try { await botRun(() => globalThis.addExpense_({ date: n.date, category: c, amount: cur.amount, note: cur.note })); }
       catch (e) { botState.delete(jid); return say('❌ Expense save nahi hua: ' + String((e && e.message) || e).slice(0, 150)); }
       botState.delete(jid);
-      return say('✅ *Expense save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date);
+      return say('✅ *Expense save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
     }
-    botState.delete(jid); return say(BOT_MENU);
+    botState.delete(jid);
   }
   function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
     try {
