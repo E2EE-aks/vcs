@@ -24,10 +24,13 @@ module.exports = function (o) {
   async function ensureBin() {
     if (env.YTDLP_BIN) return BIN;
     fs.mkdirSync(DIR, { recursive: true });
-    try { if (Date.now() - fs.statSync(BIN).mtimeMs < 3 * 86400000) return BIN; } catch (e) {}
+    try { if (Date.now() - fs.statSync(BIN).mtimeMs < 86400000) return BIN; } catch (e) {}
     if (!binP) binP = (async () => {
-      const r = await fetch('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux', { redirect: 'follow', signal: AbortSignal.timeout(120000) });
-      if (!r.ok) throw new Error('yt-dlp download nahi hua (HTTP ' + r.status + ')');
+      let r = null, err = '';                                          // nightly build first (YouTube fixes land there days before the stable one), stable as a fallback
+      for (const u of ['https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp_linux', 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux']) {
+        try { r = await fetch(u, { redirect: 'follow', signal: AbortSignal.timeout(120000) }); if (r.ok) break; err = 'HTTP ' + r.status; } catch (e) { err = e && e.message; r = null; }
+      }
+      if (!r || !r.ok) throw new Error('yt-dlp download nahi hua (' + err + ')');
       const tmp = BIN + '.part'; fs.writeFileSync(tmp, Buffer.from(await r.arrayBuffer())); fs.chmodSync(tmp, 0o755); fs.renameSync(tmp, BIN);
     })().finally(() => { binP = null; });
     try { await binP; } catch (e) { if (!fs.existsSync(BIN)) throw e; warn('yt-dlp update', e && e.message); }   // an older copy is still fine
@@ -56,9 +59,11 @@ module.exports = function (o) {
     return a;
   }
 
-  const nice = msg => {
+  const nice = (msg, hasCk) => {
     msg = String(msg || '');
-    if (/confirm you.?re not a bot|Sign in to confirm/i.test(msg)) return 'YouTube ne server ko bot samajh kar roka (bot check). Menu → YouTube download → *3* se cookies.txt bhejo.';
+    if (/confirm you.?re not a bot|Sign in to confirm/i.test(msg)) return hasCk
+      ? 'YouTube ne cookies bhi reject kar di (purani / expire ho gayi). *Incognito window* me YouTube login karo → cookies.txt export karo → turant window band karo → Menu → YouTube download → *3* se nayi cookies.txt bhejo.'
+      : 'YouTube ne server ko bot samajh kar roka (bot check). Menu → YouTube download → *3* se cookies.txt bhejo.';
     if (/Private video|members-only|Sign in/i.test(msg)) return 'Ye video private / members-only hai.';
     if (/not available|unavailable|removed|copyright/i.test(msg)) return 'Ye video available nahi hai (hata diya gaya ya is desh me band hai).';
     if (/larger than max-filesize|File is larger/i.test(msg)) return 'File ' + MAX_MB + ' MB se badi hai. Kam quality chuno.';
@@ -94,7 +99,7 @@ module.exports = function (o) {
       p.on('error', e => { clearTimeout(kill); rej(e); });
       p.on('close', code => {
         clearTimeout(kill); if (code === 0) return res(so);
-        const raw = se.split('\n').filter(x => /ERROR/i.test(x)).pop() || se, e = new Error(nice(raw)); e.raw = raw; rej(e);
+        const raw = se.split('\n').filter(x => /ERROR/i.test(x)).pop() || se, e = new Error(nice(raw, hasCk)); e.raw = raw; rej(e);
       });
     });
   }
@@ -108,13 +113,15 @@ module.exports = function (o) {
       const bin = await ensureBin(), ck = await cookies();
       fs.mkdirSync(DIR, { recursive: true }); work = fs.mkdtempSync(path.join(DIR, 'j-'));
       if (ck) fs.writeFileSync(COOK, ck);
-      const clients = ['', 'android_vr', 'tv', 'mweb', 'ios'];           // default first, then other YouTube "devices" that are not always asked for a bot check
+      // default first, then other YouTube "devices". With cookies only the web-type clients can use them (android_vr / ios / tv ignore cookies and just fail).
+      const clients = ck ? ['', 'web_safari', 'mweb', 'web_embedded', 'tv'] : ['', 'android_vr', 'tv', 'web_safari', 'mweb', 'web_embedded', 'ios'];
+      const retry = raw => /not a bot|Sign in to confirm|does not support cookies|Requested format is not available|player response|Unsupported client|Failed to extract|HTTP Error 403|nsig/i.test(raw || '');
       let out = '', last = null;
       for (let i = 0; i < clients.length && !out; i++) {
         try {
           try { out = await once(bin, kind, q, url, work, clients[i], !!ck); }
           catch (e) { if (jsOk && /no such option.*js-runtimes|unrecognized arguments.*js-runtimes/i.test(e.raw || '')) { jsOk = false; out = await once(bin, kind, q, url, work, clients[i], !!ck); } else throw e; }
-        } catch (e) { last = e; if (!/not a bot|Sign in to confirm/i.test(e.raw || '')) throw e; }   // only a bot check is worth another client
+        } catch (e) { if (!retry(e.raw)) throw e; if (!last || /not a bot|Sign in to confirm/i.test(e.raw || '')) last = e; }   // a bot check / client problem is worth another client; keep the bot-check text as the reason
       }
       if (!out) throw last || new Error('Download fail ho gaya.');
       const file = out.split('\n').map(x => x.trim()).filter(Boolean).pop();
