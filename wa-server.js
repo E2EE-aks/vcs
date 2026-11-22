@@ -16,6 +16,7 @@ const crypto = require('crypto');
 
 module.exports = function makeWhatsApp(o) {
   const { env, warn, sign, withWb, enc, dec } = o;
+  const srcZip = o.zip;                                       // () -> { name, buf }: the whole website (GitHub branch) as a ZIP (set by server.js)
   const deployFiles = o.deploy;                              // (files, message) -> commit on GitHub (set by server.js); Render then deploys the website
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
@@ -662,10 +663,11 @@ module.exports = function makeWhatsApp(o) {
       if (pm.att === 'edit') opts.push(['att', 'Attendance']);
       if (ok('exp')) opts.push(['bill', 'Bill PDF']);
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
+      if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
-      const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
+      const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
       return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
     if (BOT_HI.test(low)) return menu();
@@ -683,6 +685,14 @@ module.exports = function makeWhatsApp(o) {
         if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
         cur.step = 'vcsFile'; cur.files = [];
         return ask(cur, '🌐 *VCS — website update*\n\nFile ko *Document* ke roop me bhejo (📎 → Document). Ek ya kai file bhej sakte ho — sab ek hi baar me GitHub pe jayengi aur website live hogi.\n\n_Folder me daalni ho to file ke caption me path likho, jaise_ *public/app.js*\n\n_(0 = cancel)_');
+      }
+      if (key === 'src') {                                              // admin only: send the whole website source as a ZIP document (tap it in WhatsApp = it downloads to the phone)
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        botState.delete(jid); await say('⏳ *Source code ZIP* bana raha hoon…');
+        try {
+          const z = await srcZip(), mb = (z.buf.length / 1048576).toFixed(1);
+          return s.sock.sendMessage(to, { document: z.buf, fileName: z.name, mimetype: 'application/zip', caption: '📦 *VCS Source Code*\n🗂️ ' + z.name + ' (' + mb + ' MB)\n\n_File par tap karo — download ho jayegi. Dobara kuch karna ho to *help* bhejo._' });
+        } catch (e) { return say('❌ Source code nahi mila: ' + botErr(e)); }
       }
       if (key === 'exp') {
         try { await botRun(() => true, acc, 'exp', true); } catch (e) { return stop(e, ''); }
