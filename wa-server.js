@@ -375,8 +375,14 @@ module.exports = function makeWhatsApp(o) {
     const every = uniq([nj(ok.participant), nj(ok.remoteJid), nj(tk.participant), nj(tk.remoteJid), nj(jid), nj(k.participant), nj(k.remoteJid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(ok.participantAlt), nj(ok.remoteJidAlt), pnj, ...lidj]).filter(x => /@(s\.whatsapp\.net|lid)$/.test(x));
     const authors = orig.out ? uniq([...mine, ...every]) : uniq([...every, ...mine]);
     const mods = k.fromMe ? uniq([...mine, ...every]) : uniq([...every, ...mine]);
-    const k0 = crypto.createHmac('sha256', Buffer.alloc(32)).update(secret).digest();
-    for (const uc of ['Message Edit', 'Msg Edit', 'Edit', 'MessageEdit', 'Message edit', 'Event Edit']) for (const a of authors) for (const b of mods) {
+    const raw = x => String(x || '');                                    // also the forms WITH the device number (id:12@...), exactly as WhatsApp wrote them
+    const rawAll = uniq([raw(ok.participant), raw(ok.remoteJid), raw(k.participant), raw(k.remoteJid), raw(me.id), raw(me.lid)]).filter(x => /@(s\.whatsapp\.net|lid)$/.test(x));
+    const A = uniq([...authors, ...rawAll]), B = uniq([...mods, ...rawAll]);
+    const wrapSec = (() => { try { const c = wm.message && (wm.message.messageContextInfo || unwrap(wm.message).messageContextInfo); return c && c.messageSecret && c.messageSecret.length ? Buffer.from(c.messageSecret) : null; } catch (e) { return null; } })();
+    const secrets = [secret].concat(wrapSec ? [wrapSec] : []);           // the original message's secret (normal) - and, as a second guess, the secret that came with the edit itself
+    const UC = ['Message Edit', 'Msg Edit', 'Edit', 'MessageEdit', 'Message edit', 'Event Edit', 'Secret Encrypted Message', 'Edit Message', 'Enc Edit', 'Msg Secret Edit'];
+    for (const sx of secrets) { const k0 = crypto.createHmac('sha256', Buffer.alloc(32)).update(sx).digest();
+    for (const uc of UC) for (const a of A) for (const b of B) {
       try {
         const key = crypto.createHmac('sha256', k0).update(Buffer.concat([Buffer.from(tk.id), Buffer.from(a), Buffer.from(b), Buffer.from(uc), Buffer.from([1])])).digest();
         for (const aad of [tk.id + '\0' + b, tk.id + '\0' + a, tk.id]) {
@@ -386,8 +392,8 @@ module.exports = function makeWhatsApp(o) {
           return nm;
         }
       } catch (e) { /* wrong guess - try the next one */ }
-    }
-    edWhy = 'key match nahi hui (type ' + sem.secretEncType + ', ' + authors.length + 'x' + mods.length + ' try)'; warn('WhatsApp edit keys tried', authors.join(' | ') + ' // ' + mods.join(' | '));
+    } }
+    edWhy = 'key match nahi hui (type ' + sem.secretEncType + ', sec ' + secret.length + 'B' + (wrapSec ? '+' + wrapSec.length : '') + ', ' + A.length + 'x' + B.length + ' try, iv ' + iv.length + ' ct ' + ct.length + ')'; warn('WhatsApp edit keys tried', A.join(' | ') + ' // ' + B.join(' | '));
     return null;
   }
   function editSecret(uid, s, jid, wm, sem) {
