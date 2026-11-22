@@ -792,7 +792,7 @@ module.exports = function makeWhatsApp(o) {
   async function unlSendQr(s, to) {                                    // the ₹ joining-payment QR, as a picture in the same WhatsApp chat
     try {
       const price = globalThis.PAYG_PRICE_ || 1, img = fs.readFileSync(path.join(__dirname, 'pay-qr.png'));
-      await s.sock.sendMessage(to, { image: img, caption: '💳 *₹' + price + ' joining payment*\n\nIs QR ko kisi bhi UPI app se scan karke *₹' + price + '* pay karo.\n\nPhir website par apne User ID / password se *Sign in* karo, *UTR / Transaction ID* daalo — payment verify hote hi login khul jayega.' });
+      await s.sock.sendMessage(to, { image: img, caption: '💳 *₹' + price + ' joining payment*\n\nScan this QR with any UPI app and pay *₹' + price + '*.\n\nThen sign in on the website with your User ID and password, enter the *UTR / Transaction ID* — your login opens as soon as the payment is verified.\n\n' + (env.WA_SITE_URL || 'https://aks13.vercel.app/') });
     } catch (e) { warn('WhatsApp pay QR', e && e.message); }
   }
   async function unlStep(s, jid, low, t, num, cur, say) {
