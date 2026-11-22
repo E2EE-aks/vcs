@@ -542,7 +542,7 @@ module.exports = function makeWhatsApp(o) {
       if (low === '5') {
         try { await botRun(() => true, acc, 'rack', false); } catch (e) { return stop(e, ''); }
         cur.step = 'rackQ';
-        return ask(cur, '📦 *Rack Mapping*\n\nItem ka *INS number* (ya naam) bhejo — main bataunga wo kis *rack* aur *row* me laga hai.\nJaise: *1234* ya *dettol*\n\n_(0 = cancel)_');
+        return ask(cur, '📦 *Rack Mapping*\n\nINS number bhejo — main bataunga wo kis *rack* aur *row* me hai.\nJaise: *103* (reply: Right 3 · B)\n\n_(0 = cancel)_');
       }
       if (low === '3') {
         const n0 = botToday(), MN0 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -555,16 +555,30 @@ module.exports = function makeWhatsApp(o) {
       return again();
     }
     if (cur.step === 'rackQ') {
-      const q = t.toLowerCase().replace(/\s+/g, ' ').trim(), qc = q.replace(/[\s\-_.\/]/g, ''); if (!qc) return;
-      let items; try { items = await botRun(() => globalThis.readRack_(globalThis.readRackCfg_().cats), acc, 'rack', false); } catch (e) { return stop(e, 'Rack dekh nahi paya: '); }
-      const cd = x => String(x.code || '').toLowerCase().replace(/[\s\-_.\/]/g, ''), words = q.split(' ');
-      let hit = items.filter(x => cd(x) && cd(x) === qc);                                                   // exact INS number first
-      if (!hit.length) hit = items.filter(x => qc.length >= 2 && cd(x) && cd(x).includes(qc));              // part of an INS number
-      if (!hit.length) hit = items.filter(x => words.every(w => String(x.name || '').toLowerCase().includes(w)));   // item name
-      hit.sort((a, b) => (parseInt(a.rack, 10) - parseInt(b.rack, 10)) || String(a.row).localeCompare(String(b.row)));
-      if (!hit.length) return say('🔎 *' + t.slice(0, 40) + '* — rack me nahi mila.\n\nDusra number/naam bhejo, ya *0* = cancel.');
-      const lines = hit.slice(0, 8).map(x => '📦 *Rack ' + x.rack + ' · Row ' + x.row + '*  (' + x.rack + x.row + ')\n🏷️ ' + x.name + (x.code ? '\n🔢 INS ' + x.code : '') + (x.cat && x.nums && x.nums[x.cat] !== '' && x.nums[x.cat] != null ? '\n📊 ' + x.cat + ': ' + x.nums[x.cat] : '') + (x.note ? '\n📝 ' + x.note : ''));
-      return say(lines.join('\n\n') + (hit.length > 8 ? '\n\n_…aur ' + (hit.length - 8) + ' item. Number poora likho._' : '') + '\n\n_Aur dekhna ho to dusra number/naam bhejo. *0* = band._');
+      const norm = x => String(x == null ? '' : x).trim().toLowerCase().replace(/^ins[\s.\-:#_]*/, '').replace(/[^a-z0-9]/g, ''), qc = norm(t), ql = t.toLowerCase().replace(/\s+/g, ' ').trim(); if (!qc) return;
+      let list; try {
+        list = await botRun(() => {                                       // same data as the Rack Mapping screen: every rack (Left 1-11, Right 1-15, Front 1-3) x row x field
+          const cfg = globalThis.readRackCfg_(), fields = cfg.fields || [], insF = fields.filter(f => /\bins\b/i.test(f)), out = [];
+          const SIDES = [['Left', 0, 11], ['Right', 20, 15], ['Front', 40, 3]];
+          SIDES.forEach(([side, base, cnt]) => { for (let n = 1; n <= cnt; n++) {
+            const key = String(base + n), rows = cfg.rows[key] || cfg.rows['*'] || ['a', 'b', 'c', 'd'];
+            let o = cfg.data[key] || {}; if (Object.keys(o).some(k => typeof o[k] !== 'object')) { o = { [rows[0]]: o }; }
+            Object.keys(o).forEach(r => { const v = o[r] || {};
+              const toks = []; insF.forEach(f => String(v[f] || '').split(/[,;\/&\n]+/).forEach(x => { x = x.trim(); if (x) toks.push(x); }));
+              const bits = fields.filter(f => !insF.includes(f) && String(v[f] || '').trim()).map(f => f + ': ' + String(v[f]).trim());
+              if (toks.length || bits.length) out.push({ side, n, row: String(r).toUpperCase(), toks, bits });
+            });
+          } });
+          return out;
+        }, acc, 'rack', false);
+      } catch (e) { return stop(e, 'Rack dekh nahi paya: '); }
+      let hit = list.filter(x => x.toks.some(k => norm(k) === qc));                                       // exact INS number
+      if (!hit.length && qc.length >= 2) hit = list.filter(x => x.toks.some(k => norm(k).includes(qc)));   // part of an INS number
+      if (!hit.length) hit = list.filter(x => x.bits.some(b => b.toLowerCase().includes(ql)));          // any other typed value (scheme, carton ...)
+      hit.sort((a, b) => ['Left', 'Right', 'Front'].indexOf(a.side) - ['Left', 'Right', 'Front'].indexOf(b.side) || a.n - b.n || a.row.localeCompare(b.row));
+      if (!hit.length) return say('🔎 INS *' + t.slice(0, 40) + '* kisi rack me nahi mila.\n\nDusra number bhejo, ya *0* = cancel.');
+      const lines = hit.slice(0, 12).map(x => '📦 *' + x.side + ' ' + x.n + ' · ' + x.row + '*   _(Rack ' + x.side + ' ' + x.n + ', Row ' + x.row + ')_' + (x.toks.length ? '\n🔢 INS ' + x.toks.join(', ') : '') + (x.bits.length ? '\n' + x.bits.join(' · ') : ''));
+      return say('🔎 *' + t.slice(0, 40) + '*  →  ' + hit.length + ' jagah\n\n' + lines.join('\n\n') + (hit.length > 12 ? '\n\n_…aur ' + (hit.length - 12) + ' jagah._' : '') + '\n\n_Aur dekhna ho to dusra INS number bhejo. *0* = band._');
     }
     if (cur.step === 'attSt') {
       const code = low === '1' || low === 'present' || low === 'p' ? 'P' : low === '2' || low === 'absent' || low === 'a' ? 'A' : '';
