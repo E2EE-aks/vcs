@@ -2,8 +2,10 @@
 /* YouTube video / audio downloader used by the WhatsApp helper bot (menu: "YouTube Video / Audio download").
    Engine: yt-dlp (a standalone program, downloaded once to the server's temp folder and refreshed every 3 days).
    ffmpeg comes from the "ffmpeg-static" package (needed to join video+audio and to make MP3); without it only ready-made MP4 / M4A files are possible.
-   Env (all optional):  DL_MAX_MB (default 90)  ·  YTDLP_BIN (path of your own yt-dlp)  ·  YT_COOKIES (cookies.txt text, helps when YouTube blocks the server)  */
-const fs = require('fs'), path = require('path'), os = require('os'), cp = require('child_process');
+   When YouTube says "confirm you're not a bot" (it does that to most cloud servers) we retry with other YouTube clients, then use cookies.
+   Cookies: the admin sends a cookies.txt in the WhatsApp chat (saved by o.store) or sets YT_COOKIES.  Proxy: DL_PROXY (e.g. http://user:pass@host:port).
+   Env (all optional):  DL_MAX_MB (default 90)  ·  YTDLP_BIN  ·  YT_COOKIES  ·  DL_PROXY  */
+const fs = require('fs'), path = require('path'), os = require('os'), cp = require('child_process'), zlib = require('zlib');
 
 module.exports = function (o) {
   const env = o.env || {}, warn = o.warn || (() => {});
@@ -36,7 +38,8 @@ module.exports = function (o) {
   const qualities = kind => (kind === 'audio' ? AUDIO_Q : VIDEO_Q);
   const qLabel = (kind, q) => kind === 'audio' ? q + ' kbps' : q + 'p';
 
-  function args(kind, q, url, work) {
+  let jsOk = true, ckCache = null;
+  function args(kind, q, url, work, client, hasCk) {
     const a = ['--no-playlist', '--no-warnings', '--no-simulate', '--restrict-filenames', '--max-filesize', MAX_MB + 'M',
       '-o', path.join(work, '%(title).70B.%(ext)s'), '--print', 'after_move:filepath'];
     if (kind === 'audio') {
@@ -45,14 +48,17 @@ module.exports = function (o) {
     } else if (ffmpeg) a.push('-f', 'bv*[height<=' + q + '][ext=mp4]+ba[ext=m4a]/bv*[height<=' + q + ']+ba/b[height<=' + q + ']/b', '--merge-output-format', 'mp4');
     else a.push('-f', 'b[height<=' + q + '][ext=mp4]/b[height<=' + q + ']/b[ext=mp4]/b');
     if (ffmpeg) a.push('--ffmpeg-location', ffmpeg);
-    if (String(env.YT_COOKIES || '').trim()) { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(COOK, String(env.YT_COOKIES).replace(/\\n/g, '\n')); a.push('--cookies', COOK); }
-    a.push(url);
+    if (hasCk) a.push('--cookies', COOK);
+    if (client) a.push('--extractor-args', 'youtube:player_client=' + client);
+    if (jsOk) a.push('--js-runtimes', 'node:' + process.execPath);          // YouTube's signature puzzle needs a JavaScript engine - Node is already here
+    if (env.DL_PROXY) a.push('--proxy', env.DL_PROXY);
+    a.push('--retries', '2', url);
     return a;
   }
 
   const nice = msg => {
     msg = String(msg || '');
-    if (/confirm you.?re not a bot|Sign in to confirm/i.test(msg)) return 'YouTube ne server ko bot samajh kar roka (bot check). Server par YT_COOKIES set karna padega.';
+    if (/confirm you.?re not a bot|Sign in to confirm/i.test(msg)) return 'YouTube ne server ko bot samajh kar roka (bot check). Menu → YouTube download → *3* se cookies.txt bhejo.';
     if (/Private video|members-only|Sign in/i.test(msg)) return 'Ye video private / members-only hai.';
     if (/not available|unavailable|removed|copyright/i.test(msg)) return 'Ye video available nahi hai (hata diya gaya ya is desh me band hai).';
     if (/larger than max-filesize|File is larger/i.test(msg)) return 'File ' + MAX_MB + ' MB se badi hai. Kam quality chuno.';
@@ -60,22 +66,57 @@ module.exports = function (o) {
     return msg.replace(/\s+/g, ' ').slice(0, 140) || 'Download fail ho gaya.';
   };
 
+  /* ---------- cookies: sent by the admin in WhatsApp (kept in o.store) or taken from YT_COOKIES ---------- */
+  const looksLikeCookies = t => { const rows = String(t).split('\n').filter(l => l.split('\t').length >= 7 && !l.startsWith('# ')); return rows.length >= 3 && /youtube\.com|google\.com/i.test(t); };
+  async function cookies() {
+    if (ckCache !== null) return ckCache;
+    let t = ''; try { const b = o.store && await o.store.get(); if (b) t = zlib.gunzipSync(Buffer.from(b, 'base64')).toString('utf8'); } catch (e) { warn('YouTube cookies read', e && e.message); }
+    if (!t && String(env.YT_COOKIES || '').trim()) t = String(env.YT_COOKIES).replace(/\\n/g, '\n');
+    return (ckCache = t);
+  }
+  async function setCookies(text) {                                    // -> number of cookies saved; throws a readable error when the file is wrong
+    const t = String(text || '').replace(/\r\n?/g, '\n').trim() + '\n';
+    if (!looksLikeCookies(t)) throw new Error('Ye cookies.txt (Netscape format) nahi lag rahi, ya usme youtube.com / google.com ki cookies nahi hain.');
+    const b = zlib.gzipSync(Buffer.from(t, 'utf8')).toString('base64');
+    if (b.length > 45000) throw new Error('Cookies file bahut badi hai. Sirf youtube.com / google.com ki cookies export karo.');
+    if (!o.store) throw new Error('Cookies save karne ki jagah nahi mili.');
+    await o.store.set(b); ckCache = t;
+    return t.split('\n').filter(l => l.split('\t').length >= 7 && !l.startsWith('# ')).length;
+  }
+  const hasCookies = async () => !!(await cookies());
+
+  function once(bin, kind, q, url, work, client, hasCk) {              // one yt-dlp run -> its output, or an Error (e.raw = what yt-dlp complained about)
+    return new Promise((res, rej) => {
+      const p = cp.spawn(bin, args(kind, q, url, work, client, hasCk), { stdio: ['ignore', 'pipe', 'pipe'] });
+      let so = '', se = '';
+      const kill = setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) {} rej(new Error('Download bahut der laga raha tha, band kar diya.')); }, 12 * 60000);
+      p.stdout.on('data', d => { so += d; }); p.stderr.on('data', d => { se += d; if (se.length > 20000) se = se.slice(-20000); });
+      p.on('error', e => { clearTimeout(kill); rej(e); });
+      p.on('close', code => {
+        clearTimeout(kill); if (code === 0) return res(so);
+        const raw = se.split('\n').filter(x => /ERROR/i.test(x)).pop() || se, e = new Error(nice(raw)); e.raw = raw; rej(e);
+      });
+    });
+  }
+
   /* -> { file, name, size, dir }.  The caller sends the file and then calls done(dir). */
   async function run(kind, q, url) {
     if (busy) throw new Error('Ek download pehle se chal raha hai. Thodi der baad try karo.');
     busy = true;
     let work = '';
     try {
-      const bin = await ensureBin();
+      const bin = await ensureBin(), ck = await cookies();
       fs.mkdirSync(DIR, { recursive: true }); work = fs.mkdtempSync(path.join(DIR, 'j-'));
-      const out = await new Promise((res, rej) => {
-        const p = cp.spawn(bin, args(kind, q, url, work), { stdio: ['ignore', 'pipe', 'pipe'] });
-        let so = '', se = '';
-        const kill = setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) {} rej(new Error('Download bahut der laga raha tha, band kar diya.')); }, 12 * 60000);
-        p.stdout.on('data', d => { so += d; }); p.stderr.on('data', d => { se += d; if (se.length > 20000) se = se.slice(-20000); });
-        p.on('error', e => { clearTimeout(kill); rej(e); });
-        p.on('close', code => { clearTimeout(kill); code === 0 ? res(so) : rej(new Error(nice(se.split('\n').filter(x => /ERROR/i.test(x)).pop() || se))); });
-      });
+      if (ck) fs.writeFileSync(COOK, ck);
+      const clients = ['', 'android_vr', 'tv', 'mweb', 'ios'];           // default first, then other YouTube "devices" that are not always asked for a bot check
+      let out = '', last = null;
+      for (let i = 0; i < clients.length && !out; i++) {
+        try {
+          try { out = await once(bin, kind, q, url, work, clients[i], !!ck); }
+          catch (e) { if (jsOk && /no such option.*js-runtimes|unrecognized arguments.*js-runtimes/i.test(e.raw || '')) { jsOk = false; out = await once(bin, kind, q, url, work, clients[i], !!ck); } else throw e; }
+        } catch (e) { last = e; if (!/not a bot|Sign in to confirm/i.test(e.raw || '')) throw e; }   // only a bot check is worth another client
+      }
+      if (!out) throw last || new Error('Download fail ho gaya.');
       const file = out.split('\n').map(x => x.trim()).filter(Boolean).pop();
       if (!file || !fs.existsSync(file)) throw new Error('Download hua par file nahi mili.');
       return { file, name: path.basename(file), size: fs.statSync(file).size, dir: work };
@@ -84,5 +125,5 @@ module.exports = function (o) {
   }
   function done(dir) { try { if (dir && dir.startsWith(DIR)) fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {} }
 
-  return { link, run, done, qualities, qLabel, maxMb: MAX_MB, hasFfmpeg: !!ffmpeg };
+  return { link, run, done, qualities, qLabel, setCookies, hasCookies, maxMb: MAX_MB, hasFfmpeg: !!ffmpeg };
 };

@@ -451,7 +451,7 @@ module.exports = function makeWhatsApp(o) {
     return (botCfg = botNorm(j));
   }
   const BOT_TTL = 10 * 60 * 1000;
-  let DL = null; try { DL = require('./dl-server')({ env, warn }); } catch (e) { warn('YouTube downloader', e && e.message); }
+  let DL = null; try { DL = require('./dl-server')({ env, warn, store: { get: () => withWb(() => PROPS().getProperty('YT_COOKIES') || ''), set: v => withWb(() => { PROPS().setProperty('YT_COOKIES', v); }) } }); } catch (e) { warn('YouTube downloader', e && e.message); }
   const botState = new Map(), botQ = new Map(), botSeen = new Map();
   const botMatch = (pn, list) => { const d = digits(pn); if (!d) return ''; return list.find(c => d === c || d === CC + c || d.endsWith(c)) || ''; };   // -> the saved number that matches, or ''
   const botDup = (wm, text) => {                                       // WhatsApp can hand us the same message twice: answer it only once
@@ -887,9 +887,21 @@ module.exports = function makeWhatsApp(o) {
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (/^dl/.test(cur.step || '') && DL) {                              // YouTube download: 1) video / audio  2) link  3) quality  4) the file comes in this chat
       if (cur.step === 'dlKind') {
+        if (low === '3') {
+          cur.step = 'dlCk';
+          return ask(cur, '🍪 *YouTube cookies*\n\nAgar bot-check ka error aa raha hai to yahan apni *cookies.txt* file bhejo (📎 → Document), ya uska text paste kar do.\n\n⚠️ Apne asli Google account ki jagah ek *alag / naya* account use karo.\n\nSirf *youtube.com* ki cookies export karo (Netscape format).\n\n_0 = cancel_');
+        }
         if (low !== '1' && low !== '2') return say(cur.prompt);
         cur.kind = low === '1' ? 'video' : 'audio'; cur.step = 'dlLink';
         return ask(cur, (cur.kind === 'video' ? '🎬 *Video download*' : '🎵 *Audio download*') + '\n\nKis *YouTube link* se download karna hai? Link yahan bhejo:\n\n_0 = cancel_');
+      }
+      if (cur.step === 'dlCk') {
+        const doc = unwrap(wm && wm.message).documentMessage; let txt = '';
+        if (doc) { try { txt = (await L().downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage })).toString('utf8'); } catch (e) { return say('❌ File download nahi hui, dobara bhejo.'); } }
+        else if (String(text || '').length > 200) txt = String(text);
+        else return say(cur.prompt);
+        try { const n = await DL.setCookies(txt); botState.delete(jid); return say('✅ *Cookies save ho gayi* (' + n + ' cookies)\n\nAb *help* → YouTube download se dobara try karo.\n\n_Safety ke liye cookies wala message chat se delete kar do._'); }
+        catch (e) { return say('❌ ' + botErr(e) + '\n\nDobara bhejo ya *0* = cancel.'); }
       }
       if (cur.step === 'dlLink') {
         const u = DL.link(t); if (!u) return say('❌ Ye YouTube ka link nahi lag raha. Poora link bhejo (youtube.com / youtu.be):');
@@ -918,7 +930,7 @@ module.exports = function makeWhatsApp(o) {
       if (key === 'dl') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         cur.step = 'dlKind';
-        return ask(cur, '📥 *YouTube Download*\n\nKya chahiye?\n\n1️⃣  Video\n2️⃣  Audio\n\n_Number bhejo: 1 ya 2  ·  0 = cancel_');
+        return ask(cur, '📥 *YouTube Download*\n\nKya chahiye?\n\n1️⃣  Video\n2️⃣  Audio\n3️⃣  Cookies set karo (bot-check error aaye tab)\n\n_Number bhejo: 1, 2 ya 3  ·  0 = cancel_');
       }
       if (key === 'vcs') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
