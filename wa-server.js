@@ -407,11 +407,13 @@ module.exports = function makeWhatsApp(o) {
     return fn();
   });
   async function botStep(s, jid, text) {
-    const say = t => s.sock.sendMessage(jid, { text: t });
+    const pn = pnOf(s, jid), to = pn || jid;                            // answer on the phone-number chat when we know it (same as the app's own send)
+    const say = async t => { await new Promise(r => setTimeout(r, 700)); return s.sock.sendMessage(to, { text: t }); };
     const t = String(text || '').trim(), low = t.toLowerCase();
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) cur = null;
     if (!cur || ['0', 'menu', 'cancel', 'stop'].includes(low)) { botState.set(jid, { step: 'menu', at: Date.now() }); return say(BOT_MENU); }
     cur.at = Date.now();
+    if (cur.step !== 'expAmt' && !/^\d+$/.test(low)) { cur.step = 'menu'; return say(BOT_MENU); }      // hello / hi / any words = start again with the menu
     if (cur.step === 'menu') {
       if (low === '1') { cur.step = 'expAmt'; return say('💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = wapas menu)_'); }
       if (low === '2') {
@@ -499,8 +501,10 @@ module.exports = function makeWhatsApp(o) {
     const useVer = vi !== 1 && version;                                                      // variant 1 uses the library's own built-in version
     const sock = makeWASocket(Object.assign({ auth: state, printQRInTerminal: false, logger: quietLog(), markOnlineOnConnect: false, syncFullHistory: vi === 0, shouldSyncHistoryMessage: () => true, browser,
       connectTimeoutMs: 45000, defaultQueryTimeoutMs: 60000, keepAliveIntervalMs: 25000,
-      getMessage: async () => undefined }, useVer ? { version } : {}));
+      getMessage: async key => { const m = key && s.sent && s.sent.get(key.id); return m || undefined; } }, useVer ? { version } : {}));      // WhatsApp asks "send this again" when a phone could not open a message: answer it from what we sent
     s.sock = sock;
+    { s.sent = s.sent || new Map(); const raw = sock.sendMessage.bind(sock);
+      sock.sendMessage = async function () { const r = await raw.apply(null, arguments); try { if (r && r.key && r.key.id && r.message) { s.sent.set(r.key.id, r.message); if (s.sent.size > 800) s.sent.delete(s.sent.keys().next().value); } } catch (e) {} return r; }; }
     const wd = setTimeout(() => { if (s.gen === gen && s.status === 'starting') { s.err = 'WhatsApp did not answer in time. Tap “Show QR code” to try again.'; try { sock.end(undefined); } catch (e) {} } }, 30000);   // no QR in 30 s -> give up with a message
     sock.ev.on('creds.update', () => { Promise.resolve(saveCreds()).catch(() => {}).then(() => scheduleBackup(uid, 5000)); });   // keep the sheet copy of the login up to date
     sock.ev.on('connection.update', async u => {
