@@ -442,7 +442,7 @@ module.exports = function makeWhatsApp(o) {
   const botNorm = j => {
     j = j || {};
     const nums = [...new Set((Array.isArray(j.nums) ? j.nums : BOT_DEFAULT).map(x => String(x).replace(/\D/g, '')).filter(x => x.length >= 8 && x.length <= 15))].slice(0, 20);
-    const bind = {}; nums.forEach(n => { const b = j.bind && j.bind[n]; if (b && b.unl && !b.acc) bind[n] = { unl: true, acc: '', emp: '', label: 'Not linked', led: '' }; else if (b && b.acc) bind[n] = { acc: String(b.acc).slice(0, 60), emp: String(b.emp || '').slice(0, 60), label: String(b.label || '').slice(0, 90), led: String(b.led || '').trim().slice(0, 80) }; });
+    const bind = {}; nums.forEach(n => { const b = j.bind && j.bind[n]; if (b && b.unl && !b.acc) bind[n] = { unl: true, acc: '', emp: '', label: 'New user', led: '' }; else if (b && b.acc) bind[n] = { acc: String(b.acc).slice(0, 60), emp: String(b.emp || '').slice(0, 60), label: String(b.label || '').slice(0, 90), led: String(b.led || '').trim().slice(0, 80) }; });
     return { on: j.on === undefined ? true : (j.on !== false && j.on !== 'false'), nums, bind };
   };
   async function botGet() {
@@ -782,14 +782,14 @@ module.exports = function makeWhatsApp(o) {
   }
   const aprLine = x => x.k === 'del' ? '🗑 *' + (x.r.n || 'User') + '* — ' + (x.r.d || 'delete request') : '💳 *' + (x.r.name || x.r.username || 'User') + '* — ' + (x.r.planName || 'payment') + ' ₹' + (x.r.price || 0) + ' · UTR ' + (x.r.utr || '—');
 
-  /* ---------- "Not linked" numbers: help -> 1 Login  2 Create account.  After a good login / new account the number is tied to that account and works like any linked number ---------- */
+  /* ---------- "New user" numbers: help -> 1 Login  2 Create account.  After a good login / new account the number is tied to that account and works like any linked number ---------- */
   async function unlBind(num, id, label) {
     const c = await botGet(), b = Object.assign({}, c.bind); b[num] = { acc: id, emp: '', label: label || '', led: '' };
     const n = botNorm({ on: c.on, nums: c.nums, bind: b });
     await withWb(() => { PROPS().setProperty('WA_BOT_CFG', JSON.stringify(n)); }); botCfg = n;
   }
   async function unlStep(s, jid, low, t, num, cur, say) {
-    if (BOT_HI.test(low)) { botState.set(jid, { step: 'unMenu', at: Date.now() }); return say('👋 *Welcome!*\n\nAapka number abhi kisi account se linked nahi hai.\n\n1️⃣  Login\n2️⃣  Create account\n\n_Number bhejo: 1 ya 2_'); }
+    if (BOT_HI.test(low)) { botState.set(jid, { step: 'unMenu', at: Date.now() }); return say('👋 *Welcome!*\n\nAap naye user ho — number abhi kisi account se linked nahi hai.\n\n1️⃣  Login\n2️⃣  Create account\n\n_Number bhejo: 1 ya 2_'); }
     if (!cur || !/^un/.test(cur.step)) return;                          // not in a chat and not "help" -> stay silent
     if (['0', 'cancel', 'stop'].includes(low)) { botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
@@ -865,7 +865,7 @@ module.exports = function makeWhatsApp(o) {
       const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
       return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
-    { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "Not linked": only Login / Create account
+    { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
     if (BOT_HI.test(low)) return menu();
     if (await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
