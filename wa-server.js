@@ -271,6 +271,26 @@ module.exports = function makeWhatsApp(o) {
 
   /* "Delete for everyone" by the OTHER person: we keep the message (text / photo / video) on our side and only flag it as deleted,
      so the screen can show "this person deleted this message". Your own deletes are not touched. */
+  /* ---------- ALERT: somebody deleted (for everyone) or edited a message they had sent -> a WhatsApp alert goes to the alert number (the same number whose chat shows the menu) ----------
+     Set WA_MSG_ALERT=0 on the server to switch it off. Messages from the alert number itself are skipped (no loops). */
+  let alertQ = Promise.resolve();
+  function waAlert(uid, s, jid, m, type, newText, oldText) {
+    try {
+      if (uid !== 'ADMIN' || !m || m.out || String(env.WA_MSG_ALERT || '1') === '0') return;
+      alertQ = alertQ.then(async () => {
+        const to = (await licCfg()).to; if (!to) return;
+        const c = s.chats.get(jid) || {}, pn = pnOf(s, jid), num = c.group ? '' : (pn ? '+' + pn.split('@')[0] : numOf(jid));
+        if (num && digits(num) && digits(to) && (digits(num).endsWith(digits(to)) || digits(to).endsWith(digits(num)))) return;   // the alert number's own chat
+        const who = c.name || c.pn || m.from || (c.group ? 'Group' : num || 'Unknown');
+        const what = x => x.kind === 'text' ? (x.text || '') : ((x.label || x.kind || 'Message') + (x.text ? ' ' + x.text : ''));
+        const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date()), sent = m.at ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(m.at * 1000)) : '';
+        const head = (type === 'del' ? '🗑️ *Message DELETE hua* (Delete for everyone)' : '✏️ *Message EDIT hua*') + '\n\n👤 *' + who + '*' + (c.group ? ' (group)' : '') + (num ? '\n📞 ' + num : '') + (sent ? '\n📨 Bheja tha: ' + sent + ' IST' : '') + '\n🕒 ' + (type === 'del' ? 'Delete' : 'Edit') + ' kiya: ' + hm + ' IST';
+        const body = type === 'del' ? '\n\n💬 *Message:*\n' + (what(m) || '—')
+          : '\n\n❌ *Purana:*\n' + (oldText || '—') + '\n\n✅ *Naya:*\n' + (newText == null ? '_(naya text padha nahi ja saka)_' : (newText || '—'));
+        await sendText(uid, to, head + body);
+      }).catch(e => warn('WhatsApp message alert', e && e.message));
+    } catch (e) { warn('WhatsApp message alert', e && e.message); }
+  }
   function markDeleted(uid, s, key, jidHint) {
     try {
       if (!key || !key.id) return;
@@ -279,7 +299,7 @@ module.exports = function makeWhatsApp(o) {
       tryList(jidHint); tryList(key.remoteJid);
       if (!m) for (const j of s.msgs.keys()) { tryList(j); if (m) break; }
       if (!m || m.out || m.deleted) return;
-      m.deleted = true; m.delAt = Date.now();
+      m.deleted = true; m.delAt = Date.now(); waAlert(uid, s, list, m, 'del');
       if (m.media) keepMedia(s, list, m);
       saveSoon(uid, s);
     } catch (e) { warn('WhatsApp keep-deleted', e && e.message); }
@@ -319,10 +339,11 @@ module.exports = function makeWhatsApp(o) {
       if (!m) return;
       const k = kindText(newMsg); if (!k) return;
       const nt = String(k.text || ''); if (nt === (m.text || '')) return;      // same edit seen twice
+      const oldT = m.text || '';
       (m.hist || (m.hist = [])).push(m.text || ''); if (m.hist.length > 12) m.hist.shift();
       m.text = nt; m.editAt = ts || Date.now();
       const l = s.msgs.get(list), c = s.chats.get(list); if (c && l && l[l.length - 1] === m && m.kind === 'text') c.last = nt.slice(0, 80);
-      saveSoon(uid, s);
+      saveSoon(uid, s); waAlert(uid, s, list, m, 'edit', nt, oldT);
     } catch (e) { warn('WhatsApp keep-edit', e && e.message); }
   }
 
@@ -356,7 +377,7 @@ module.exports = function makeWhatsApp(o) {
       const nm = openEdit(s, jid, wm, sem);
       if (nm && kindText(nm)) { applyEdit(uid, s, { id: tk.id, remoteJid: jid }, jid, nm, tsOf(wm.messageTimestamp) * 1000); return; }
       const orig = (s.msgs.get(jid) || []).find(x => x.id === tk.id);                // could not read the new text: at least mark it as edited
-      if (orig) { orig.edN = (orig.edN || 0) + 1; orig.editAt = Date.now(); saveSoon(uid, s); }
+      if (orig) { orig.edN = (orig.edN || 0) + 1; orig.editAt = Date.now(); saveSoon(uid, s); waAlert(uid, s, jid, orig, 'edit', null, orig.text || ''); }
       warn('WhatsApp edit not readable', orig ? (orig.sec ? 'key did not fit' : 'original has no secret') : 'original message not stored');
     } catch (e) { warn('WhatsApp edit', e && e.message); }
   }
