@@ -691,6 +691,11 @@ module.exports = function makeWhatsApp(o) {
         s.status = 'open'; s.qr = ''; s.tries = 0;
         const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
         setTimeout(() => { if (s.gen === gen && s.status === 'open') { resolveLids(s).then(() => saveSoon(uid, s)); } }, 6000);
+        /* people who do not have your number saved see your WhatsApp *profile name* — keep it "VCS" (change with env WA_PROFILE_NAME; set it to "-" to leave the name alone) */
+        const wantName = String(env.WA_PROFILE_NAME == null ? 'VCS' : env.WA_PROFILE_NAME).trim();
+        if (uid === 'ADMIN' && wantName && wantName !== '-' && typeof sock.updateProfileName === 'function' && s.name !== wantName) {
+          setTimeout(() => { if (s.gen === gen && s.status === 'open') sock.updateProfileName(wantName).then(() => { s.name = wantName; }).catch(e => warn('WhatsApp profile name', e && e.message)); }, 4000);
+        }
         try { const g = await sock.groupFetchAllParticipating(); Object.keys(g || {}).forEach(id => { const c = chatOf(s, id); setName(c, g[id].subject); }); saveSoon(uid, s); } catch (e) {}
       }
       if (connection === 'close') {
