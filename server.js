@@ -1184,7 +1184,8 @@ function makeApp(store, env) {
       const last = await withWb(() => P().getProperty(VW_SHA) || '');
       if (!last) { await withWb(() => { P().setProperty(VW_SHA, list[0].sha); return true; }); return; }   // first look: only remember where we are (no old alarm)
       const idx = list.findIndex(x => x.sha === last); if (idx === 0) return;
-      const fresh = (idx < 0 ? list : list.slice(0, idx)).slice().reverse();                              // oldest first
+      const fresh = (idx < 0 ? list : list.slice(0, idx)).filter(x => !/\(from WhatsApp\)/.test(String((x.commit || {}).message || ''))).reverse();   // oldest first; uploads made from WhatsApp already get their own progress message
+      if (!fresh.length) { await withWb(() => { P().setProperty(VW_SHA, list[0].sha); return true; }); return; }
       let text = '🚀 *Website update' + (fresh.length > 1 ? ' (' + fresh.length + ' changes)' : '') + '*\n📦 ' + GH.repo + ' · ' + GH.branch;
       for (const x of fresh.slice(-5)) {
         let det = null; try { det = await gh('GET', '/commits/' + x.sha); } catch (e) {}
@@ -1211,7 +1212,7 @@ function makeApp(store, env) {
       const P = () => globalThis.PropertiesService.getScriptProperties();
       const last = await withWb(() => P().getProperty(VW_LIVE) || '');
       if (last === cur.id) return;
-      if (last) await WA.sendText('ADMIN', to, '✅ *Update live ho gaya (Render deploy)*\n📝 ' + String((cur.commit && cur.commit.message) || 'Deploy').split('\n')[0].slice(0, 150) + '\n🕒 ' + attNow().hm + ' IST');
+      if (last && !/\(from WhatsApp\)/.test(String((cur.commit && cur.commit.message) || ''))) await WA.sendText('ADMIN', to, '✅ *Update live ho gaya (Render deploy)*\n📝 ' + String((cur.commit && cur.commit.message) || 'Deploy').split('\n')[0].slice(0, 150) + '\n🕒 ' + attNow().hm + ' IST');
       await withWb(() => { P().setProperty(VW_LIVE, cur.id); return true; });
     } catch (e) {} finally { vwLiveBusy = false; }
   }

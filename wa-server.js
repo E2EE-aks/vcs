@@ -414,7 +414,6 @@ module.exports = function makeWhatsApp(o) {
     return !!dup;
   };
   const botToday = () => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value])); return { date: p.year + '-' + p.month + '-' + p.day, y: Number(p.year), m: Number(p.month), d: Number(p.day) }; };
-  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n4️⃣  VCS (website update)\n5️⃣  Rack Mapping (item kis rack/row me hai)\n\n_Number bhejo: 1, 2, 3, 4 ya 5_';
   /* run fn as the account this number belongs to, with fresh sheet data (changes are saved).
      sec = 'att' | 'exp': that account must have that right (edit = true -> needs EDIT access, otherwise view is enough) */
   const botRun = (fn, acc, sec, edit) => withWb(() => {
@@ -559,13 +558,15 @@ module.exports = function makeWhatsApp(o) {
   const rdList = typeof o.renderDeploys === 'function' ? o.renderDeploys : null;     // () -> Render's list of deploys, or null when RENDER_API_KEY / RENDER_SERVICE_ID are not set
   const RD_BAD = new Set(['build_failed', 'update_failed', 'pre_deploy_failed', 'canceled']);
   const istHM = () => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+  const waLive = s => (s && s.status === 'open' && s.sock) ? 'ok' : 'fail';      // is the WhatsApp server itself connected right now?
   const depIc = x => x === 'ok' ? '✅' : x === 'fail' ? '❌' : '⏳';
   function depText(st) {
-    const bad = [st.gh, st.rd, st.web].includes('fail'), all = st.gh === 'ok' && st.rd === 'ok' && st.web === 'ok';
+    const bad = [st.gh, st.rd, st.web, st.wa].includes('fail'), all = st.gh === 'ok' && st.rd === 'ok' && st.web === 'ok' && st.wa === 'ok';
     return depIc(st.gh) + ' *GitHub Upload:* ' + (st.gh === 'ok' ? 'Done' : st.gh === 'fail' ? 'Failed' : 'Uploading…') + '\n'
       + depIc(st.rd) + ' *Render Deploy:* ' + (st.rd === 'ok' ? 'Live' : st.rd === 'fail' ? 'Failed' : (st.rdTxt || 'Waiting…')) + '\n'
       + depIc(st.file) + ' *File updated:* ' + ((st.files || []).join(', ') || '-') + (st.file === 'ok' ? ' — Done' : '') + '\n'
-      + depIc(st.web) + ' *Website:* ' + (st.web === 'ok' ? 'Live 🌐' : st.web === 'fail' ? 'Failed' : 'Waiting…')
+      + depIc(st.web) + ' *Website:* ' + (st.web === 'ok' ? 'Live 🌐' : st.web === 'fail' ? 'Failed' : 'Waiting…') + '\n'
+      + depIc(st.wa) + ' *WhatsApp Server:* ' + (st.wa === 'ok' ? 'Live' : st.wa === 'fail' ? 'Live nahi hai' : 'Waiting…')
       + (all ? '\n\n🚀 *All Done! Website is Live* 🎊 (`' + (st.at || istHM()) + ' IST`)' : bad ? '\n\n❌ *Kuch fail ho gaya* — Deploy tab me log dekho.' : '');
   }
   async function depShow(s, jid, st, h) {                                 // first call sends the message, later calls edit it (if WhatsApp refuses the edit, a new message is sent)
@@ -581,7 +582,7 @@ module.exports = function makeWhatsApp(o) {
       let l = null; try { l = await rdList(); } catch (e) {}
       const d = (Array.isArray(l) ? l : []).map(x => x.deploy || x).find(x => x && x.commit && p.sha && String(x.commit.id || '').startsWith(p.sha));
       if (d) {
-        if (d.status === 'live' || d.status === 'deactivated') { p.st.rd = 'ok'; p.st.web = 'ok'; p.st.at = istHM(); }
+        if (d.status === 'live' || d.status === 'deactivated') { p.st.rd = 'ok'; p.st.web = 'ok'; p.st.wa = waLive(s); p.st.at = istHM(); }
         else if (RD_BAD.has(d.status)) { p.st.rd = 'fail'; p.st.web = 'fail'; }
         else p.st.rdTxt = d.status === 'build_in_progress' ? 'Build ho raha hai…' : d.status === 'update_in_progress' ? 'Live ho raha hai…' : 'Shuru ho raha hai…';
       } else p.st.rdTxt = 'Render shuru hone ka wait…';
@@ -599,7 +600,7 @@ module.exports = function makeWhatsApp(o) {
     p.boot = BOOT; await depSave(p);
     const h = { key: p.key || null };
     try {
-      if (!(await depWatch(s, p.jid, h, p))) { p.st.rd = 'ok'; p.st.web = 'ok'; p.st.at = istHM(); await depShow(s, p.jid, p.st, h); await depSave(null); }   // no Render API: a server that is running again after the upload = the new version is live
+      if (!(await depWatch(s, p.jid, h, p))) { p.st.rd = 'ok'; p.st.web = 'ok'; p.st.wa = waLive(s); p.st.at = istHM(); await depShow(s, p.jid, p.st, h); await depSave(null); }   // no Render API: a server that is running again after the upload = the new version is live
     } catch (e) { warn('WhatsApp deploy status', e && e.message); }
   }
   async function botVcsFlush(s, jid, cur) {
@@ -608,7 +609,7 @@ module.exports = function makeWhatsApp(o) {
     const files = cur.files || []; if (!files.length) return;
     cur.busy = true;
     const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
-    const names = files.map(f => f.path.split('/').pop()), st = { gh: 'wait', rd: 'wait', file: 'wait', web: 'wait', files: names }, h = {};
+    const names = files.map(f => f.path.split('/').pop()), st = { gh: 'wait', rd: 'wait', file: 'wait', web: 'wait', wa: 'wait', files: names }, h = {};
     await depShow(s, jid, st, h);
     try {
       const r = await deployFiles(files.map(f => ({ path: f.path, buf: f.buf })), 'Update ' + names.slice(0, 6).join(', ') + ' (from WhatsApp)');
@@ -620,7 +621,7 @@ module.exports = function makeWhatsApp(o) {
       await depSave(p);
       depWatch(s, jid, h, p).catch(e => warn('WhatsApp deploy status', e && e.message));   // runs on in the background (this server is replaced when the deploy is live)
     } catch (e) {
-      botState.delete(jid); st.gh = 'fail'; st.rd = 'fail'; st.file = 'fail'; st.web = 'fail';
+      botState.delete(jid); st.gh = 'fail'; st.rd = 'fail'; st.file = 'fail'; st.web = 'fail'; st.wa = waLive(s);
       await depShow(s, jid, st, h).catch(() => {});
       return say('❌ Upload nahi hua: ' + botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._');
     }
@@ -653,38 +654,52 @@ module.exports = function makeWhatsApp(o) {
     const t = String(text || '').trim(), low = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
     const ask = (c, m) => { c.prompt = m; return say(m); };            // remember the question, so a wrong answer just repeats it
-    const menu = () => { const c = { step: 'menu', at: Date.now() }; botState.set(jid, c); return ask(c, BOT_MENU); };
+    const menu = async () => {                                          // welcome (name) + ONLY the options this number's account is allowed to use
+      const cfg0 = await botGet(), bd0 = (cfg0.bind || {})[num] || {}, acc0 = bd0.acc || 'ADMIN';
+      let me; try { me = await botRun(a => ({ name: a.name || a.username || '', perms: a.perms || {} }), acc0); } catch (e) { botState.delete(jid); return say('❌ ' + botErr(e)); }
+      const pm = me.perms, ok = k => pm[k] === 'view' || pm[k] === 'edit', opts = [];
+      if (pm.exp === 'edit') opts.push(['exp', 'Expense']);
+      if (pm.att === 'edit') opts.push(['att', 'Attendance']);
+      if (ok('exp')) opts.push(['bill', 'Bill PDF']);
+      if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
+      if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
+      const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
+      if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
+      const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
+      return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
+    };
     if (BOT_HI.test(low)) return menu();
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
     const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
-    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance), *3* (Bill PDF), *4* (VCS) ya *5* (Rack) bhejo. Cancel: *0*') : undefined;   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
+    const again = () => cur.step === 'menu' ? say('🙏 Menu me diya hua number (1-' + (cur.opts || []).length + ') bhejo. Cancel: *0*') : undefined;   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (cur.step === 'menu') {
-      if (low === '4') {
+      const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
+      if (key === 'vcs') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
         cur.step = 'vcsFile'; cur.files = [];
         return ask(cur, '🌐 *VCS — website update*\n\nFile ko *Document* ke roop me bhejo (📎 → Document). Ek ya kai file bhej sakte ho — sab ek hi baar me GitHub pe jayengi aur website live hogi.\n\n_Folder me daalni ho to file ke caption me path likho, jaise_ *public/app.js*\n\n_(0 = cancel)_');
       }
-      if (low === '1') {
+      if (key === 'exp') {
         try { await botRun(() => true, acc, 'exp', true); } catch (e) { return stop(e, ''); }
         cur.step = 'expAmt'; return ask(cur, '💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = cancel)_');
       }
-      if (low === '2') {
+      if (key === 'att') {
         let e; try { e = await botRun(() => { const l = globalThis.readEmployees_(), x = l.find(y => y.id === wantEmp) || l[0]; return x ? { id: x.id, name: x.name } : null; }, acc, 'att', true); } catch (er) { return stop(er, ''); }
         if (!e) { botState.delete(jid); return say('❌ Attendance me koi employee nahi mila.'); }
         cur.emp = e.id; cur.empName = e.name; cur.step = 'attSt';
         return ask(cur, '🗓️ *' + (e.name || 'Attendance') + '*\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
       }
-      if (low === '5') {
+      if (key === 'rack') {
         try { await botRun(() => true, acc, 'rack', false); } catch (e) { return stop(e, ''); }
         cur.step = 'rackQ';
         return ask(cur, '📦 *Rack Mapping*\n\nINS number bhejo — main bataunga wo kis *rack* aur *row* me hai.\nJaise: *103* (reply: Right 3 · B)\n\n_(0 = cancel)_');
       }
-      if (low === '3') {
+      if (key === 'bill') {
         const n0 = botToday(), MN0 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const since = (n0.y - 1) + '-' + String(n0.m).padStart(2, '0');            // last 12 months only (this month + the 11 before it)
         let ms; try { ms = await botRun(a => { const D = ledLoad(), L = ledPick(D, a, bd); const rows = ledStatement(D, L, '', '').rows; return { any: rows.length > 0, list: [...new Set(rows.filter(r => /^\d{4}-\d{2}/.test(r.date)).map(r => r.date.slice(0, 7)))].filter(k => k > since).sort().reverse() }; }, acc, 'exp', false); } catch (e) { return stop(e, ''); }
