@@ -4,7 +4,7 @@
 // Without it nothing is sent and everything else keeps working.
 const crypto = require('crypto');
 
-module.exports = function ({ env, warn, withWb }) {
+module.exports = function ({ env, warn, withWb, mirror }) {
   const P = () => globalThis.PropertiesService.getScriptProperties();
   let sa = null, tok = { v: '', exp: 0 };
   function account() {
@@ -50,6 +50,7 @@ module.exports = function ({ env, warn, withWb }) {
 
   // m = { title, body, channel, tag, ttl, call, data }
   async function send(uid, m) {
+    try { if (typeof mirror === 'function') mirror(uid, m); } catch (e) {}          // every alert the app shows can also go to WhatsApp (see server.js, "VCS alerts on WhatsApp")
     if (!account()) return;
     const list = tokens(uid); if (!list.length) return;
     const at = await accessToken(), dead = new Set();

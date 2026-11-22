@@ -1320,7 +1320,29 @@ function depProgHtml(){
 }
 function vDeploy(){
   const t = DEP.tab || 'deploy';
-  return depTabs() + (t === 'version' ? vVersion() : t === 'updates' ? vUpdates() : vDeployMain());
+  return depTabs() + (t === 'version' || t === 'updates' ? '' : vcsWaCard()) + (t === 'version' ? vVersion() : t === 'updates' ? vUpdates() : vDeployMain());
+}
+/* ---------- WhatsApp alerts for website updates + all VCS alerts (main admin only) ---------- */
+function vcsWaCard(){
+  if (!(isAdmin() && S.me && S.me.primary && !S.as)) return '';
+  const c = S.vcsWa || { on:true, up:true, mirror:true, to:'' };
+  if (!S.vcsWa && !S.vcsWaLoading){ S.vcsWaLoading = true; api('vcsWaGet').then(r => { S.vcsWa = r.cfg; S.vcsWaTo = r.to; S.vcsWaConn = !!r.connected; const e = $('#vcsWaBox'); if (e) e.outerHTML = vcsWaCard(); }).catch(() => {}).finally(() => { S.vcsWaLoading = false; }); }
+  return `<div class="card" id="vcsWaBox" style="margin-bottom:16px"><h3>📲 WhatsApp alerts <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· website update + VCS alerts</span></h3>
+    <label class="tog" style="margin-bottom:8px"><input type="checkbox" id="vwOn" ${c.on ? 'checked' : ''}> Send alerts</label>
+    <label class="tog" style="margin-bottom:8px"><input type="checkbox" id="vwUp" ${c.up ? 'checked' : ''}> 🚀 Website update (kya naya hua: commit, files, kaun, kab)</label>
+    <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="vwMir" ${c.mirror ? 'checked' : ''}> 🔔 VCS Management ke saare alerts (mail, chat, attendance, deploy / build fail)</label>
+    <div class="form-grid"><div class="field"><label>Send to (WhatsApp number)</label><input class="input" id="vwTo" type="tel" inputmode="tel" value="${esc(c.to)}" placeholder="${esc(S.vcsWaTo || '9876543210')}"></div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="vcsWaSave()">💾 Save</button><button class="btn ghost" onclick="vcsWaTest()">📨 Send test message</button></div>
+    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Number khali chhodo to LIC alert wale number par jayega. Sent from the WhatsApp you linked in the WhatsApp tab; wo connected rehna chahiye.</p></div>`;
+}
+async function vcsWaSave(){
+  try{
+    const r = await api('vcsWaSet', { on:$('#vcsWaBox #vwOn').checked, up:$('#vcsWaBox #vwUp').checked, mirror:$('#vcsWaBox #vwMir').checked, to:$('#vcsWaBox #vwTo').value.trim() });
+    S.vcsWa = r.cfg; S.vcsWaTo = r.to; toast('✓ Saved · alerts go to ' + r.to);
+  }catch(e){ handleErr(e); }
+}
+async function vcsWaTest(){
+  try{ await vcsWaSave(); const r = await api('vcsWaTest'); toast('✓ Test message sent to ' + r.to); }catch(e){ handleErr(e); }
 }
 function vDeployMain(){
   if (!DEP.st) return '<div class="card"><div class="empty-state">Loading…</div></div>';
@@ -4212,26 +4234,23 @@ function licFs(d){                                    // premium text size: each
   if (window.ksMy) ksMy.set('licfs', n); else document.documentElement.style.setProperty('--lic-fs', (n / 100).toFixed(2));
   const e = document.getElementById('licFsV'); if (e) e.textContent = n + '%';
 }
-/* ---------- LIC alert on WhatsApp: number / time / days-before can be edited here (main admin only) ---------- */
-const LICWA_OPTS = [['0', 'Only on the due date'], ['1,0', '1 day before + on the due date'], ['3,0', '3 days before + on the due date'], ['7,3,0', '7 and 3 days before + on the due date']];
+/* ---------- LIC alert on WhatsApp: only the number can be edited here (main admin only); alerts are automatic ---------- */
 function licWaCard(){
   if (!(isAdmin() && S.me && S.me.primary && !S.as)) return '';
-  const c = S.licWa || { on:true, to:'9621755459', at:'08:00', before:[0] }, bf = (c.before || [0]).join(',');
+  const c = S.licWa || { on:true, to:'9621755459' };
   if (!S.licWa && !S.licWaLoading){ S.licWaLoading = true; api('licWaGet').then(r => { S.licWa = r.cfg; S.licWaConn = !!r.connected; const e = $('#licWaBox'); if (e) e.outerHTML = licWaCard(); }).catch(() => {}).finally(() => { S.licWaLoading = false; }); }
-  return `<div class="card" id="licWaBox" style="margin-bottom:16px"><h3>📲 WhatsApp alert <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· premium due / policy end</span></h3>
+  return `<div class="card" id="licWaBox" style="margin-bottom:16px"><h3>📲 WhatsApp alert <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· premium due / expire / deactivate</span></h3>
     <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="lwOn" ${c.on ? 'checked' : ''}> Send alerts</label>
     <div class="form-grid">
       <div class="field"><label>Send to (WhatsApp number)</label><input class="input" id="lwTo" type="tel" inputmode="tel" value="${esc(c.to)}" placeholder="9876543210"></div>
-      <div class="field"><label>Send at (time)</label><input class="input" id="lwAt" type="time" value="${esc(c.at)}"></div>
-      <div class="field"><label>When</label><select class="select" id="lwBf">${LICWA_OPTS.map(o => `<option value="${o[0]}" ${o[0] === bf ? 'selected' : ''}>${o[1]}</option>`).join('')}</select></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="licWaSave()">💾 Save</button><button class="btn ghost" onclick="licWaTest()">📨 Send test message</button></div>
-    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Sent from the WhatsApp you linked in the WhatsApp tab. It must stay connected.</p></div>`;
+    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Alert hamesha automatic jata hai (koi time ya option set nahi karna): premium <b>7, 3, 1 din pehle aur due date par</b>, aur policy <b>mature / expire (completed) ya deactivate</b> hote hi turant. Sent from the WhatsApp you linked in the WhatsApp tab. It must stay connected.</p></div>`;
 }
 async function licWaSave(){
   try{
-    const r = await api('licWaSet', { on:$('#licWaBox #lwOn').checked, to:$('#licWaBox #lwTo').value.trim(), at:$('#licWaBox #lwAt').value, before:$('#licWaBox #lwBf').value });
-    S.licWa = r.cfg; toast('✓ Saved · alerts go to ' + r.cfg.to + ' at ' + r.cfg.at);
+    const r = await api('licWaSet', { on:$('#licWaBox #lwOn').checked, to:$('#licWaBox #lwTo').value.trim() });
+    S.licWa = r.cfg; toast('✓ Saved · alerts go to ' + r.cfg.to);
   }catch(e){ handleErr(e); }
 }
 async function licWaTest(){

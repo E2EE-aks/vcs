@@ -103,13 +103,14 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
   }
   async function quote(sym, full) {
     const list = [['yahoo', srcYahoo], ['nse', srcNse]]; if (full) list.push(['twelvedata', srcTd]);
-    const res = await Promise.allSettled(list.map(x => x[1](sym, full))), ok = [], by = {}, all = {};
-    res.forEach((r, i) => { if (r.status === 'fulfilled' && r.value && r.value.p > 0) { ok.push(Object.assign({ n: list[i][0] }, r.value)); by[list[i][0]] = r.value.p; all[list[i][0]] = r.value; } });
+    const res = await Promise.allSettled(list.map(x => x[1](sym, full))), ok = [], by = {}, all = {}, errs = {};
+    res.forEach((r, i) => { if (r.status === 'fulfilled' && r.value && r.value.p > 0) { ok.push(Object.assign({ n: list[i][0] }, r.value)); by[list[i][0]] = r.value.p; all[list[i][0]] = r.value; }
+      else errs[list[i][0]] = r.status === 'rejected' ? String((r.reason && r.reason.message) || r.reason).slice(0, 40) : 'no price'; });
     if (!ok.length) throw new Error('no source');
     const pick = ok.length >= 3 ? ok.slice().sort((a, b) => a.p - b.p)[1] : ok.length === 2 ? ((ok[1].t || 0) > (ok[0].t || 0) ? ok[1] : ok[0]) : ok[0];
     const lo = Math.min.apply(null, ok.map(x => x.p)), hi = Math.max.apply(null, ok.map(x => x.p));
     const prev = pick.prev || (ok.find(x => x.prev) || {}).prev;
-    return { p: pick.p, prev, t: pick.t || 0, at: Date.now(), src: pick.n, n: ok.length, spread: pick.p ? (hi - lo) / pick.p * 100 : 0, by, all };
+    return { p: pick.p, prev, t: pick.t || 0, at: Date.now(), src: pick.n, n: ok.length, spread: pick.p ? (hi - lo) / pick.p * 100 : 0, by, all, errs };
   }
 
   // ---- candle chart data (Yahoo, Twelve Data as fallback) ----
@@ -247,7 +248,7 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
     const c = await readOne(uid), prices = {};
     await Promise.all(c.symbols.slice(0, 40).map(async s => {
       if (!px[s] || Date.now() - px[s].at > 60000) { try { px[s] = await quote(s); } catch (e) {} }
-      if (px[s]) prices[s] = { p: px[s].p, prev: px[s].prev, t: px[s].t, n: px[s].n, src: px[s].src, spread: px[s].spread, by: px[s].by };
+      if (px[s]) prices[s] = { p: px[s].p, prev: px[s].prev, t: px[s].t, n: px[s].n, src: px[s].src, spread: px[s].spread, by: px[s].by, errs: px[s].errs };
     }));
     return { ok: true, cfg: c, px: prices, waOk: WA.isOpen(uid), market: marketOpen(), alerts: (hist.get(uid) || []).slice(-50) };
   }

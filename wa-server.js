@@ -543,15 +543,13 @@ module.exports = function makeWhatsApp(o) {
     if (a === 'licWaSet') {
       if (uid !== 'ADMIN') fail('Only the main admin can change this.');
       const to = String(req.to || '').replace(/[^\d+]/g, ''); toJid(to);                                    // checks the number looks right
-      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(String(req.at || ''))) fail('Enter the time like 08:00.');
-      const bf = String(req.before === undefined ? '0' : req.before).split(',').map(x => parseInt(x, 10)).filter(x => x >= 0 && x <= 30);
-      const c = licNorm({ on: req.on !== false && req.on !== 'false', to, at: String(req.at), before: bf });
+      const c = licNorm({ on: req.on !== false && req.on !== 'false', to });
       await withWb(() => { PROPS().setProperty('LIC_WA_CFG', JSON.stringify(c)); });
       licC = c; return { ok: true, cfg: c };
     }
     if (a === 'licWaTest') {
       if (uid !== 'ADMIN') fail('Only the main admin can use this.');
-      const c = await licCfg(); await sendText(uid, c.to, '✅ *LIC alert test*\n\nYeh test message hai. Premium due date par aise hi alert aayega (subah ' + c.at + ' baje).');
+      const c = await licCfg(); await sendText(uid, c.to, '✅ *LIC alert test*\n\nYeh test message hai. Premium due (7, 3, 1 din pehle + due date par) aur policy expire / deactivate hone par aise hi alert aayega.');
       return { ok: true, to: c.to };
     }
     const r = await connected(uid);

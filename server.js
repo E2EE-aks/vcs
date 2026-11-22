@@ -233,7 +233,8 @@ function makeApp(store, env) {
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });
   const YT = require('./yt-server')({ env, warn });
-  const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn) });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
+  let vcsMirror = null;                                                                     // set below: copies the app's alerts to WhatsApp
+  const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn), mirror: (u, m) => { if (vcsMirror) vcsMirror(u, m); } });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
   // ---------- Gmail: a notification when a new unread mail arrives (the server looks every minute, only for users who have notifications on) ----------
   const mailSeen = new Map();                                  // uid -> Set of mail ids already known
   const mailFrom = f => { const m = /^\s*"?([^"<]*?)"?\s*<[^>]*>\s*$/.exec(String(f || '')); return (m && m[1].trim()) || String(f || '').replace(/[<>"]/g, '').trim() || 'New mail'; };
@@ -1023,7 +1024,7 @@ function makeApp(store, env) {
   const failSeen = { rd: null, ver: null };                                  // ids already known; the first look only remembers what is there (no old alarms after a restart)
   const RD_FAILED = new Set(['build_failed', 'update_failed', 'pre_deploy_failed']);
   async function failWatch() {
-    if (!(GH.repo && GH.token) || !PUSH.has('ADMIN')) return;
+    if (!(GH.repo && GH.token) || !(PUSH.has('ADMIN') || WA.isOpen('ADMIN'))) return;
     try {
       const rr = await gh('GET', '/actions/workflows/' + VER_WF + '/runs?per_page=8');
       const runs = rr.workflow_runs || [], first = !failSeen.ver;
@@ -1049,7 +1050,8 @@ function makeApp(store, env) {
   { const t = setInterval(() => failWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
 
   // ---------- LIC alert on WhatsApp: when a premium falls due (or a policy matures) a WhatsApp message goes to the agent's number ----------
-  // Number, time and "days before" are edited in the app (LIC tab > WhatsApp alert, main admin only); env LIC_WA_TO / LIC_WA_AT / LIC_WA_BEFORE only give the starting values.
+  // Only the number is edited in the app (LIC tab > WhatsApp alert, main admin only). There is no time / "when" setting any more: premium alerts go 7, 3, 1 day before and on the due date,
+  // and a policy that expires / completes / is deactivated (or becomes active again) is alerted the moment the server sees it (checked every minute).
   // The message is sent from the main admin's linked WhatsApp (WhatsApp tab > Connect). If WhatsApp is not linked/connected the server simply tries again every minute, so nothing is lost.
   const LICW_STEP = { monthly: 1, quarterly: 3, halfyearly: 6, yearly: 12 };
   const licIso_ = d => d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
@@ -1064,13 +1066,14 @@ function makeApp(store, env) {
   }
   const licRs_ = n => '₹' + Number(n || 0).toLocaleString('en-IN');
   const licD_ = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? (+m[3]) + '-' + m[2] + '-' + m[1] : iso; };
+  const LICW_LEADS = [7, 3, 1, 0];                                              // premium alerts: 7, 3, 1 day before and on the due date
   let licwBusy = false;
   async function licWatch() {
     if (licwBusy) return;
     licwBusy = true;
     try {
       const n = attNow(), C = await WA.licCfg();
-      if (!C.on || n.hm < C.at || !WA.isOpen('ADMIN')) return;                        // only once the chosen time has come and WhatsApp is connected
+      if (!C.on || !WA.isOpen('ADMIN')) return;                                        // no time setting any more: alerts go out as soon as they are due (WhatsApp must be connected)
       const todo = await withWb(() => {
         const P = globalThis.PropertiesService.getScriptProperties(), s = globalThis.readSettings_().values, a = globalThis.getAccount_('ADMIN', s);
         if (!a) return [];
@@ -1080,7 +1083,7 @@ function makeApp(store, env) {
         for (const x of globalThis.readLic_()) {
           const who = (x.name || 'Policy') + (x.policyNo ? ' (' + x.policyNo + ')' : '');
           const due = licNext_(x, n.date);
-          if (due) for (const b of C.before) {
+          if (due) for (const b of LICW_LEADS) {
             if (licDiff_(n.date, due) !== b) continue;
             const key = 'p|' + x.id + '|' + due + '|' + b; if (sent[key]) continue;
             out.push({ key, text: (b === 0 ? '⚠️ *LIC Premium aaj due hai*' : '🔔 *LIC Premium ' + b + ' din me due*') + '\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n💰 Premium: ' + licRs_(x.amount) + (x.freq ? ' (' + x.freq + ')' : '') + '\n📅 Due date: ' + licD_(due) + (x.phone ? '\n📞 ' + x.phone : '') });
@@ -1089,6 +1092,23 @@ function makeApp(store, env) {
             const key = 'm|' + x.id + '|' + x.endDate; if (!sent[key]) out.push({ key, text: '✅ *LIC Policy aaj mature / expire ho rahi hai*\n\n👤 ' + who + (x.policyName ? '\n📄 ' + x.policyName : '') + '\n📅 End date: ' + licD_(x.endDate) + (x.totalAmount ? '\n💰 Amount: ' + licRs_(x.totalAmount) : '') + (x.phone ? '\n📞 ' + x.phone : '') });
           }
         }
+        // policy STATUS alerts, same rule as the LIC tab: no (valid) end date = Deactivated, end date over = Completed (expired), else Active.
+        // Every change of status is alerted once; policies that are already expired / deactivated are alerted once the first time.
+        let st = {}; try { st = JSON.parse(P.getProperty('LIC_WA_STATE') || '{}') || {}; } catch (e) {}
+        const grp = { Completed: [], Deactivated: [], Active: [] }; let silent = false;
+        for (const x of globalThis.readLic_()) {
+          const status = !x.endDate ? 'Deactivated' : x.endDate < n.date ? 'Completed' : 'Active', prev = st[x.id];
+          if (prev === status) continue;
+          if (prev === undefined && status === 'Active') { st[x.id] = status; silent = true; continue; }   // first sight of a normal active policy: just remember it
+          grp[status].push({ x, status, prev });
+        }
+        const HEAD = { Completed: '✅ *LIC Policy expire / complete ho chuki hai*', Deactivated: '🔴 *LIC Policy deactivate hai*', Active: '🟢 *LIC Policy phir se active ho gayi*' };
+        for (const k of ['Completed', 'Deactivated', 'Active']) {
+          const g = grp[k]; if (!g.length) continue;
+          const lines = g.slice(0, 15).map(o => '• ' + (o.x.name || 'Policy') + (o.x.policyNo ? ' (' + o.x.policyNo + ')' : '') + (o.x.policyName ? ' – ' + o.x.policyName : '') + (o.x.endDate ? ' · end ' + licD_(o.x.endDate) : ' · end date nahi hai') + (o.x.amount ? ' · ' + licRs_(o.x.amount) : ''));
+          out.push({ states: g.map(o => [o.x.id, o.status]), text: HEAD[k] + (g.length > 1 ? ' (' + g.length + ')' : '') + '\n\n' + lines.join('\n') + (g.length > 15 ? '\n… aur ' + (g.length - 15) + ' policies' : '') });
+        }
+        if (silent) P.setProperty('LIC_WA_STATE', JSON.stringify(st));
         return out;
       });
       for (const t of todo) {
@@ -1096,6 +1116,10 @@ function makeApp(store, env) {
         catch (e) { warn('LIC WhatsApp alert', e && e.message); break; }              // not sent -> not marked -> tried again next minute
         await withWb(() => {                                                         // mark as sent only after it really went out (never twice)
           const P = globalThis.PropertiesService.getScriptProperties(); let sent = {}; try { sent = JSON.parse(P.getProperty('LIC_WA_SENT') || '{}') || {}; } catch (e) {}
+          if (t.states) {                                                            // status alert: remember the new status of each policy so it is not sent again
+            let st = {}; try { st = JSON.parse(P.getProperty('LIC_WA_STATE') || '{}') || {}; } catch (e) {}
+            t.states.forEach(a => { st[a[0]] = a[1]; }); P.setProperty('LIC_WA_STATE', JSON.stringify(st)); return;
+          }
           sent[t.key] = n.date; const keep = {}; Object.keys(sent).filter(k => licDiff_(sent[k], n.date) <= 60).forEach(k => { keep[k] = sent[k]; });
           P.setProperty('LIC_WA_SENT', JSON.stringify(keep));
         });
@@ -1104,6 +1128,104 @@ function makeApp(store, env) {
     } catch (e) { warn('LIC watcher', e && e.message); } finally { licwBusy = false; }
   }
   { const t = setInterval(() => licWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
+
+
+  // ---------- VCS alerts on WhatsApp ----------
+  // 1) "Website update": every new commit on the deploy branch is sent to WhatsApp with WHAT is new (commit message, who, when, which files, +/- lines),
+  //    and when Render finishes the deploy a second "update live" message follows.  2) Every alert the app shows the main admin (new mail, chat message,
+  //    attendance, failed deploy / APK build, the "VCS Management" alerts) is copied to WhatsApp too.  Number + switches: Deploy tab > WhatsApp alerts (main admin).
+  const VW_KEY = 'VCS_WA_CFG', VW_SHA = 'VCS_LAST_SHA', VW_LIVE = 'VCS_LAST_LIVE';
+  const vwNorm = j => { j = j || {}; const b = (x, d) => x === undefined ? d : (x !== false && x !== 'false' && x !== 0); return { on: b(j.on, true), up: b(j.up, true), mirror: b(j.mirror, true), to: String(j.to || '').replace(/[^\d+]/g, '') }; };
+  let vwC = null;
+  async function vwCfg() { if (!vwC) { let j = {}; try { j = JSON.parse(await withWb(() => globalThis.PropertiesService.getScriptProperties().getProperty(VW_KEY) || '') || '{}'); } catch (e) {} vwC = vwNorm(j); } return vwC; }
+  async function vwTo() { const c = await vwCfg(); return c.to || (await WA.licCfg()).to; }     // empty = same number as the LIC alerts
+  const vwWhen = iso => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(iso)) + ' IST';
+  const VW_KINDS = new Set(['mail', 'att', 'fail', 'msg']);                    // WhatsApp / Telegram incoming messages, calls and stock alerts are NOT copied (no loops, no double alerts)
+  const vwSeen = new Map(); let vwq = Promise.resolve(), vwDay = { d: '', n: 0 };
+  vcsMirror = (uid, m) => {
+    if (uid !== 'ADMIN' || !m || m.call || !VW_KINDS.has(String((m.data || {}).kind))) return;
+    const key = String(m.tag || '') + '|' + String(m.body || ''), t = Date.now();
+    if ((vwSeen.get(key) || 0) > t - 20000) return; vwSeen.set(key, t); if (vwSeen.size > 300) vwSeen.clear();
+    vwq = vwq.then(async () => {
+      try {
+        const c = await vwCfg(); if (!c.on || !c.mirror || !WA.isOpen('ADMIN')) return;
+        const to = await vwTo(); if (!to) return;
+        const n = attNow(); if (vwDay.d !== n.date) vwDay = { d: n.date, n: 0 }; if (vwDay.n >= 300) return; vwDay.n++;
+        await WA.sendText('ADMIN', to, '🔔 *' + String(m.title || 'VCS').replace(/\s*\n\s*/g, ' · ') + '*\n' + String(m.body || '') + '\n🕒 ' + n.hm + ' IST');
+        await new Promise(r => setTimeout(r, 2500));
+      } catch (e) { warn('VCS WhatsApp copy', e && e.message); }
+    });
+  };
+  let vwBusy = false;
+  async function commitWatch() {
+    if (vwBusy || !(GH.repo && GH.token) || !WA.isOpen('ADMIN')) return;
+    vwBusy = true;
+    try {
+      const c = await vwCfg(); if (!c.on || !c.up) return;
+      const to = await vwTo(); if (!to) return;
+      const list = await gh('GET', '/commits?sha=' + encodeURIComponent(GH.branch) + '&per_page=10');
+      if (!Array.isArray(list) || !list.length) return;
+      const P = () => globalThis.PropertiesService.getScriptProperties();
+      const last = await withWb(() => P().getProperty(VW_SHA) || '');
+      if (!last) { await withWb(() => { P().setProperty(VW_SHA, list[0].sha); return true; }); return; }   // first look: only remember where we are (no old alarm)
+      const idx = list.findIndex(x => x.sha === last); if (idx === 0) return;
+      const fresh = (idx < 0 ? list : list.slice(0, idx)).slice().reverse();                              // oldest first
+      let text = '🚀 *Website update' + (fresh.length > 1 ? ' (' + fresh.length + ' changes)' : '') + '*\n📦 ' + GH.repo + ' · ' + GH.branch;
+      for (const x of fresh.slice(-5)) {
+        let det = null; try { det = await gh('GET', '/commits/' + x.sha); } catch (e) {}
+        const cm = x.commit || {}, lines = String(cm.message || '').trim().split('\n'), more = lines.slice(1).join('\n').trim(), files = (det && det.files) || [], st = (det && det.stats) || {};
+        text += '\n\n🆕 *' + (lines[0] || 'Update').slice(0, 150) + '*' + (more ? '\n' + more.slice(0, 300) : '') +
+          '\n👤 ' + ((cm.author && cm.author.name) || '—') + ' · ' + (cm.author && cm.author.date ? vwWhen(cm.author.date) : '') + ' · ' + String(x.sha).slice(0, 7) +
+          (files.length ? '\n📝 ' + files.length + (files.length > 1 ? ' files' : ' file') + ' (+' + (st.additions || 0) + ' −' + (st.deletions || 0) + '): ' + files.slice(0, 8).map(f => String(f.filename).split('/').pop()).join(', ') + (files.length > 8 ? ' …' : '') : '');
+      }
+      if (fresh.length > 5) text += '\n\n… aur ' + (fresh.length - 5) + ' purane changes';
+      await WA.sendText('ADMIN', to, text.slice(0, 3800));
+      await withWb(() => { P().setProperty(VW_SHA, list[0].sha); return true; });                          // marked only after it really went out
+    } catch (e) { warn('VCS update watcher', e && e.message); } finally { vwBusy = false; }
+  }
+  { const t = setInterval(() => commitWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
+  let vwLiveBusy = false;
+  async function liveWatch() {
+    if (vwLiveBusy || !(RD.key && RD.svc) || !WA.isOpen('ADMIN')) return;
+    vwLiveBusy = true;
+    try {
+      const c = await vwCfg(); if (!c.on || !c.up) return;
+      const to = await vwTo(); if (!to) return;
+      const l = await rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=6');
+      const cur = (Array.isArray(l) ? l : []).map(x => x.deploy || x).find(d => d.status === 'live'); if (!cur) return;
+      const P = () => globalThis.PropertiesService.getScriptProperties();
+      const last = await withWb(() => P().getProperty(VW_LIVE) || '');
+      if (last === cur.id) return;
+      if (last) await WA.sendText('ADMIN', to, '✅ *Update live ho gaya (Render deploy)*\n📝 ' + String((cur.commit && cur.commit.message) || 'Deploy').split('\n')[0].slice(0, 150) + '\n🕒 ' + attNow().hm + ' IST');
+      await withWb(() => { P().setProperty(VW_LIVE, cur.id); return true; });
+    } catch (e) {} finally { vwLiveBusy = false; }
+  }
+  { const t = setInterval(() => liveWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
+  const VW_ACTIONS = new Set(['vcsWaGet', 'vcsWaSet', 'vcsWaTest']);
+  async function vwRoute(r) {
+    const uid = globalThis.checkToken_(r.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    if (uid !== 'ADMIN') globalThis.fail_('Only the main admin can use this.', 'PERM');
+    if (r.action === 'vcsWaSet') {
+      const to = String(r.to || '').replace(/[^\d+]/g, '');
+      if (to && to.replace(/\D/g, '').length < 8) globalThis.fail_('WhatsApp number sahi daalo (country code ke saath, jaise 919876543210).', 'VCSWA');
+      const c = vwNorm({ on: r.on, up: r.up, mirror: r.mirror, to });
+      await withWb(() => { globalThis.PropertiesService.getScriptProperties().setProperty(VW_KEY, JSON.stringify(c)); return true; });
+      vwC = c;
+    }
+    if (r.action === 'vcsWaTest') {
+      if (!WA.isOpen('ADMIN')) globalThis.fail_('WhatsApp connected nahi hai. WhatsApp tab me QR scan karke connect karo.', 'VCSWA');
+      const to = await vwTo();
+      try { await WA.sendText('ADMIN', to, '✅ *VCS alerts ON*\n\nAb website me koi bhi update hoga to yahin batayenge ki kya naya hua, aur VCS Management ke alerts bhi yahin aayenge.'); }
+      catch (e) { globalThis.fail_('Message nahi gaya: ' + String((e && e.message) || e).slice(0, 120), 'VCSWA'); }
+      return { ok: true, to };
+    }
+    return { ok: true, cfg: await vwCfg(), to: await vwTo(), connected: WA.isOpen('ADMIN') };
+  }
+  const fastVw = body => {
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || !VW_ACTIONS.has(r.action)) return null;
+    return Promise.resolve().then(() => vwRoute(r)).catch(errOut);
+  };
 
   // ---------- Updates tab: the main admin uploads app-update files, every signed-in user can download them ----------
   // The files are stored in the GitHub repository on a SEPARATE branch (default "app-updates"), so uploading never makes Render redeploy.
@@ -1561,7 +1683,7 @@ function makeApp(store, env) {
   };
   const handle0 = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastStock(body) || fastRtc(body) || fastTr(body) || fastRingtone(body));
+    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastStock(body) || fastVw(body) || fastRtc(body) || fastTr(body) || fastRingtone(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);

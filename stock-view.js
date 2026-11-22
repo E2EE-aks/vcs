@@ -75,6 +75,7 @@
     if (!q || !q.p) return 'vs previous close';
     var h = 'vs prev close' + (q.t ? ' · price time ' + tmS(q.t) + ' IST' : '');
     if (q.by){ h += '<br>' + Object.keys(q.by).map(function(k){ return k + ' ₹' + inr(q.by[k]); }).join(' · ') + (q.n > 1 ? (q.spread > 0.3 ? ' · <span style="color:#c8372d;font-weight:700">⚠ ' + q.spread.toFixed(2) + '% farak</span>' : ' · <span style="color:#0e8a5f;font-weight:700">✓ match</span>') : ' · 1 source'); }
+    if (q.errs){ var bad = Object.keys(q.errs).filter(function(k){ return q.errs[k] !== 'n/a'; }).map(function(k){ return k + ' ✗ ' + esc(q.errs[k]); }); if (bad.length) h += '<br><span style="color:#c8372d">' + bad.join(' · ') + '</span>'; }
     return h;
   }
 
@@ -207,7 +208,7 @@
     var g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
     g.font = '800 14px system-ui,-apple-system,sans-serif'; g.fillStyle = INK; g.textBaseline = 'alphabetic'; g.textAlign = 'left'; g.fillText(sym, 8, 17);
     var q0 = D.px[sym], symW = g.measureText(sym).width;
-    if (q0 && q0.n){ g.font = '600 10.5px system-ui,-apple-system,sans-serif'; g.fillStyle = q0.spread > 0.3 ? DN : TXT; g.fillText((q0.spread > 0.3 ? '⚠ ' : '✓ ') + q0.n + (q0.n > 1 ? ' sources' : ' source') + (d && d.src === 'twelvedata' ? ' · TD' : ''), 8 + symW + 8, 17); }
+    if (q0 && q0.n){ g.font = '600 10.5px system-ui,-apple-system,sans-serif'; g.fillStyle = q0.spread > 0.3 ? DN : TXT; g.fillText((q0.spread > 0.3 || (q0.n < 2 && q0.errs && q0.errs.nse && q0.errs.nse !== 'n/a') ? '⚠ ' : '✓ ') + q0.n + (q0.n > 1 ? ' sources' : ' source') + (q0.errs && q0.errs.nse && q0.errs.nse !== 'n/a' ? ' (NSE ✗ ' + q0.errs.nse + ')' : '') + (d && d.src === 'twelvedata' ? ' · TD' : ''), 8 + symW + 8, 17); }
     // header: live price + change vs previous close
     var q = D.px[sym], last = cs.length ? cs[cs.length - 1][4] : null, pr = q && q.p ? q.p : last, pv = q && q.prev ? q.prev : (d && d.prev);
     if (pr){
