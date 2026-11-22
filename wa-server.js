@@ -18,7 +18,7 @@ module.exports = function makeWhatsApp(o) {
   const { env, warn, sign, withWb, enc, dec } = o;
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward', 'waBotGet', 'waBotSet']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward', 'waBotGet', 'waBotSet', 'waBotPeople']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -389,26 +389,84 @@ module.exports = function makeWhatsApp(o) {
        1 = Expense  (amount + note, then pick a category)      2 = Attendance  (1 = Present, 2 = Absent -> marked for today)
      Works only for the main admin's linked WhatsApp.  "0" / "menu" / "cancel" starts again.  A half-finished chat is forgotten after 10 minutes. */
   const BOT_DEFAULT = String(env.WA_BOT_FROM || '96706492422').split(',').map(x => x.replace(/\D/g, '')).filter(Boolean);   // used until you save your own list in the app
-  let botCfg = null;                                                   // { on, nums:[digits] } - edited in the app (Deploy tab > WhatsApp helper)
-  const botNorm = j => { j = j || {}; const nums = [...new Set((Array.isArray(j.nums) ? j.nums : BOT_DEFAULT).map(x => String(x).replace(/\D/g, '')).filter(x => x.length >= 8 && x.length <= 15))].slice(0, 20); return { on: j.on === undefined ? true : (j.on !== false && j.on !== 'false'), nums }; };
+  let botCfg = null;                                                   // { on, nums:[digits], bind:{ number: {acc, emp, label} } } - edited in the app (Deploy tab > WhatsApp helper)
+  const botNorm = j => {
+    j = j || {};
+    const nums = [...new Set((Array.isArray(j.nums) ? j.nums : BOT_DEFAULT).map(x => String(x).replace(/\D/g, '')).filter(x => x.length >= 8 && x.length <= 15))].slice(0, 20);
+    const bind = {}; nums.forEach(n => { const b = j.bind && j.bind[n]; if (b && b.acc) bind[n] = { acc: String(b.acc).slice(0, 60), emp: String(b.emp || '').slice(0, 60), label: String(b.label || '').slice(0, 90) }; });
+    return { on: j.on === undefined ? true : (j.on !== false && j.on !== 'false'), nums, bind };
+  };
   async function botGet() {
     if (botCfg) return botCfg;
     let j = null; try { const raw = await withWb(() => PROPS().getProperty('WA_BOT_CFG') || ''); if (raw) j = JSON.parse(raw); } catch (e) {}
     return (botCfg = botNorm(j));
   }
   const BOT_TTL = 10 * 60 * 1000;
-  const botState = new Map(), botQ = new Map();
-  const botMatch = (pn, list) => { const d = digits(pn); return !!d && list.some(c => d === c || d === CC + c || d.endsWith(c)); };
+  const botState = new Map(), botQ = new Map(), botSeen = new Map();
+  const botMatch = (pn, list) => { const d = digits(pn); if (!d) return ''; return list.find(c => d === c || d === CC + c || d.endsWith(c)) || ''; };   // -> the saved number that matches, or ''
+  const botDup = (wm, text) => {                                       // WhatsApp can hand us the same message twice: answer it only once
+    const now = Date.now(), k1 = 'i' + String((wm.key && wm.key.id) || ''), k2 = 't' + wm.key.remoteJid + '|' + String(wm.messageTimestamp || '') + '|' + text;
+    const dup = (wm.key && wm.key.id && botSeen.has(k1)) || (wm.messageTimestamp && botSeen.has(k2));
+    botSeen.set(k1, now); botSeen.set(k2, now);
+    if (botSeen.size > 600) { botSeen.forEach((v, k) => { if (now - v > 120000) botSeen.delete(k); }); if (botSeen.size > 600) botSeen.clear(); }
+    return !!dup;
+  };
   const botToday = () => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value])); return { date: p.year + '-' + p.month + '-' + p.day, y: Number(p.year), m: Number(p.month), d: Number(p.day) }; };
-  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n\n_Number bhejo: 1 ya 2_';
-  const botRun = fn => withWb(() => {                                  // run fn as the main admin, with fresh sheet data (changes are saved)
-    const set = globalThis.readSettings_().values, a = globalThis.getAccount_('ADMIN', set);
-    if (!a) throw new Error('Admin account not found.');
+  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n\n_Number bhejo: 1, 2 ya 3_';
+  /* run fn as the account this number belongs to, with fresh sheet data (changes are saved).
+     sec = 'att' | 'exp': that account must have that right (edit = true -> needs EDIT access, otherwise view is enough) */
+  const botRun = (fn, acc, sec, edit) => withWb(() => {
+    const set = globalThis.readSettings_().values, a = globalThis.getAccount_(acc || 'ADMIN', set);
+    if (!a || a.active === false) throw new Error('Is number ka account nahi mila ya band hai.');
+    if (sec) { const lv = (a.perms || {})[sec]; if (!(lv === 'edit' || (!edit && lv === 'view'))) throw new Error('Is account ko ' + (sec === 'att' ? 'attendance' : 'expense') + (edit ? ' edit karne' : ' dekhne') + ' ki permission nahi hai.'); }
     globalThis.buildCtx_(a.id);
-    return fn();
+    return fn(a);
   });
+  const botErr = e => String((e && e.message) || e).slice(0, 150);
+
+  /* a small PDF writer (no library needed): title + table of expenses + total */
+  function botPdf(o) {
+    const esc = x => String(x == null ? '' : x).replace(/₹/g, 'Rs.').replace(/[^\x20-\x7E\xA0-\xFF]/g, '?').replace(/([\\()])/g, '\\$1');
+    const cut = (x, n) => { x = String(x == null ? '' : x).replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 2) + '..' : x; };
+    const T = (x, y, sz, b, s) => 'BT /F' + (b ? 2 : 1) + ' ' + sz + ' Tf ' + x.toFixed(1) + ' ' + y.toFixed(1) + ' Td (' + esc(s) + ') Tj ET\n';
+    const wAmt = s => { let w = 0; for (const ch of String(s)) w += (ch === ',' || ch === '.' || ch === ' ') ? 2.78 : 5.56; return w; };
+    const money = n => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+    const W = 595, H = 842, M = 40, R = 555, pages = []; let c = '', y = 0;
+    const tableHead = () => { c += T(M, y, 10, 1, 'Date') + T(105, y, 10, 1, 'Category') + T(235, y, 10, 1, 'Note') + T(R - wAmt('Amount (Rs.)') * 1.0, y, 10, 1, 'Amount (Rs.)'); y -= 6; c += M + ' ' + y.toFixed(1) + ' m ' + R + ' ' + y.toFixed(1) + ' l S\n'; y -= 14; };
+    const newPage = first => {
+      if (c) pages.push(c); c = ''; y = H - 50;
+      if (first) { c += T(M, y, 18, 1, o.title); y -= 22; c += T(M, y, 10, 0, 'Name: ' + o.who); y -= 14; c += T(M, y, 10, 0, 'Period: ' + o.period); y -= 14; c += T(M, y, 10, 0, 'Generated: ' + o.when); y -= 24; }
+      tableHead();
+    };
+    newPage(true);
+    let total = 0;
+    o.rows.forEach(r => {
+      if (y < 70) newPage(false);
+      const a = money(r.amount); total += Number(r.amount) || 0;
+      c += T(M, y, 10, 0, r.date) + T(105, y, 10, 0, cut(r.category, 22)) + T(235, y, 10, 0, cut(r.note, 40)) + T(R - wAmt(a), y, 10, 0, a); y -= 16;
+    });
+    if (y < 90) newPage(false);
+    y -= 4; c += M + ' ' + y.toFixed(1) + ' m ' + R + ' ' + y.toFixed(1) + ' l S\n'; y -= 18;
+    c += T(M, y, 12, 1, 'Total: Rs. ' + money(total) + '    (' + o.rows.length + ' entries)');
+    pages.push(c);
+    const objs = [null, '<< /Type /Catalog /Pages 2 0 R >>', null, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'];
+    const kids = [];
+    pages.forEach((pc, i) => {
+      const po = 5 + 2 * i, co = 6 + 2 * i, body = pc + T(M, 28, 8, 0, 'Page ' + (i + 1) + ' of ' + pages.length);
+      kids.push(po + ' 0 R');
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ' + co + ' 0 R >>';
+      objs[co] = '<< /Length ' + Buffer.byteLength(body, 'latin1') + ' >>\nstream\n' + body + 'endstream';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n'; const offs = [];
+    for (let k = 1; k < objs.length; k++) { offs[k] = Buffer.byteLength(out, 'latin1'); out += k + ' 0 obj\n' + objs[k] + '\nendobj\n'; }
+    const xo = Buffer.byteLength(out, 'latin1');
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n' + offs.slice(1).map(x => String(x).padStart(10, '0') + ' 00000 n \n').join('') + 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + xo + '\n%%EOF\n';
+    return Buffer.from(out, 'latin1');
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
-  async function botStep(s, jid, text) {
+  async function botStep(s, jid, text, num) {
     const to = jid;                                                     // answer in the very same chat the message came from
     const say = async t => { await new Promise(r => setTimeout(r, 700)); return s.sock.sendMessage(to, { text: t }); };
     const t = String(text || '').trim(), low = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -419,23 +477,25 @@ module.exports = function makeWhatsApp(o) {
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
     if (['0', 'cancel', 'stop'].includes(low)) { botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
-    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense) ya *2* (Attendance) bhejo. Cancel: *0*') : say('🙏 Samajh nahi aaya.\n\n' + cur.prompt);
+    const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
+    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance) ya *3* (Bill PDF) bhejo. Cancel: *0*') : say('🙏 Samajh nahi aaya.\n\n' + cur.prompt);
+    const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'menu') {
-      if (low === '1') { cur.step = 'expAmt'; return ask(cur, '💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = cancel)_'); }
+      if (low === '1') {
+        try { await botRun(() => true, acc, 'exp', true); } catch (e) { return stop(e, ''); }
+        cur.step = 'expAmt'; return ask(cur, '💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = cancel)_');
+      }
       if (low === '2') {
-        const emps = await botRun(() => globalThis.readEmployees_().map(e => ({ id: e.id, name: e.name })));
-        if (!emps.length) { botState.delete(jid); return say('❌ Attendance me koi employee nahi mila.'); }
-        cur.emps = emps;
-        if (emps.length > 1) { cur.step = 'attEmp'; return ask(cur, '🗓️ *Attendance* — kiski?\n\n' + emps.map((e, i) => (i + 1) + '. ' + e.name).join('\n') + '\n\n_(0 = cancel)_'); }
-        cur.emp = emps[0].id; cur.empName = emps[0].name; cur.step = 'attSt';
-        return ask(cur, '🗓️ *Attendance* — ' + (emps[0].name || 'Aaj') + '\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
+        let e; try { e = await botRun(() => { const l = globalThis.readEmployees_(), x = l.find(y => y.id === wantEmp) || l[0]; return x ? { id: x.id, name: x.name } : null; }, acc, 'att', true); } catch (er) { return stop(er, ''); }
+        if (!e) { botState.delete(jid); return say('❌ Attendance me koi employee nahi mila.'); }
+        cur.emp = e.id; cur.empName = e.name; cur.step = 'attSt';
+        return ask(cur, '🗓️ *' + (e.name || 'Attendance') + '*\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
+      }
+      if (low === '3') {
+        try { await botRun(() => true, acc, 'exp', false); } catch (e) { return stop(e, ''); }
+        cur.step = 'billPer'; return ask(cur, '🧾 *Bill PDF* — kaun si period?\n\n1️⃣  Aaj\n2️⃣  Is mahine\n3️⃣  Pichhla mahina\n\n_(0 = cancel)_');
       }
       return again();
-    }
-    if (cur.step === 'attEmp') {
-      const e = cur.emps[parseInt(low, 10) - 1] || cur.emps.find(x => low && String(x.name || '').toLowerCase().includes(low)); if (!e) return again();
-      cur.emp = e.id; cur.empName = e.name; cur.step = 'attSt';
-      return ask(cur, '🗓️ *' + e.name + '*\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
     }
     if (cur.step === 'attSt') {
       const code = low === '1' || low === 'present' || low === 'p' ? 'P' : low === '2' || low === 'absent' || low === 'a' ? 'A' : '';
@@ -446,15 +506,15 @@ module.exports = function makeWhatsApp(o) {
           const yr = globalThis.publicSettings_(globalThis.readSettings_()).year;
           if (yr && Number(yr) !== n.y) throw new Error('Attendance register ' + yr + ' ka hai, aaj ' + n.y + ' hai.');
           return globalThis.setAttendance_({ emp: cur.emp, entries: [{ month: n.m, day: n.d, code }] });
-        });
-      } catch (e) { botState.delete(jid); return say('❌ Attendance mark nahi hui: ' + String((e && e.message) || e).slice(0, 150)); }
+        }, acc, 'att', true);
+      } catch (e) { return stop(e, 'Attendance mark nahi hui: '); }
       botState.delete(jid);
       return say((code === 'P' ? '✅ *Present*' : '❌ *Absent*') + ' mark ho gaya\n👤 ' + (cur.empName || '') + '\n📅 ' + n.d + '-' + String(n.m).padStart(2, '0') + '-' + n.y + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
     }
     if (cur.step === 'expAmt') {
       const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return say('Amount samajh nahi aaya. Aise bhejo: *150 chai*');
       const amount = Number(m[1].replace(',', '.')); if (!(amount > 0)) return say('Amount 0 se zyada hona chahiye.');
-      const cats = await botRun(() => globalThis.readCategories_().filter(c => c.type === 'Expense').map(c => c.name));
+      let cats; try { cats = await botRun(() => globalThis.readCategories_().filter(c => c.type === 'Expense').map(c => c.name), acc, 'exp', true); } catch (e) { return stop(e, ''); }
       if (!cats.length) { botState.delete(jid); return say('❌ Koi expense category nahi mili. Pehle app me category banao.'); }
       cur.amount = amount; cur.note = t.replace(m[0], '').replace(/\s+/g, ' ').trim(); cur.cats = cats; cur.step = 'expCat';
       return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + '\n\n*Category chuno (number bhejo):*\n' + cats.map((c, i) => (i + 1) + '. ' + c).join('\n') + '\n\n_(0 = cancel)_');
@@ -462,10 +522,33 @@ module.exports = function makeWhatsApp(o) {
     if (cur.step === 'expCat') {
       const c = cur.cats[parseInt(low, 10) - 1] || cur.cats.find(x => low && String(x).toLowerCase() === low) || cur.cats.find(x => low.length > 1 && String(x).toLowerCase().includes(low)); if (!c) return again();
       const n = botToday();
-      try { await botRun(() => globalThis.addExpense_({ date: n.date, category: c, amount: cur.amount, note: cur.note })); }
-      catch (e) { botState.delete(jid); return say('❌ Expense save nahi hua: ' + String((e && e.message) || e).slice(0, 150)); }
+      try { await botRun(() => globalThis.addExpense_({ date: n.date, category: c, amount: cur.amount, note: cur.note }), acc, 'exp', true); }
+      catch (e) { return stop(e, 'Expense save nahi hua: '); }
       botState.delete(jid);
       return say('✅ *Expense save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
+    }
+    if (cur.step === 'billPer') {
+      if (!['1', '2', '3'].includes(low)) return again();
+      const n = botToday(), pad = x => String(x).padStart(2, '0'), MN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      let from, till, label;
+      if (low === '1') { from = till = n.date; label = pad(n.d) + '-' + pad(n.m) + '-' + n.y; }
+      else { let y = n.y, m = n.m; if (low === '3') { m -= 1; if (m < 1) { m = 12; y -= 1; } } from = y + '-' + pad(m) + '-01'; till = y + '-' + pad(m) + '-31'; label = MN[m - 1] + ' ' + y; }
+      let data;
+      try {
+        data = await botRun(a => {
+          const inc = new Set(globalThis.readCategories_().filter(c => c.type === 'Income').map(c => c.name));
+          const rows = globalThis.readExpenses_().filter(e => e.date >= from && e.date <= till && !inc.has(e.category)).sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
+          const emp = wantEmp ? globalThis.readEmployees_().find(y => y.id === wantEmp) : null;
+          return { rows, who: (emp && emp.name) || a.name || a.username || 'User' };
+        }, acc, 'exp', false);
+      } catch (e) { return stop(e, 'Bill nahi ban saka: '); }
+      botState.delete(jid);
+      if (!data.rows.length) return say('🧾 ' + label + ' me koi expense nahi mila.\n\n_Dobara kuch karna ho to *help* bhejo._');
+      const when = pad(n.d) + '-' + pad(n.m) + '-' + n.y;
+      let buf; try { buf = botPdf({ title: 'Expense Bill', who: data.who, period: label, when, rows: data.rows }); } catch (e) { return say('❌ PDF nahi ban saka: ' + botErr(e)); }
+      await new Promise(r => setTimeout(r, 700));
+      const tot = data.rows.reduce((x, r) => x + (Number(r.amount) || 0), 0);
+      return s.sock.sendMessage(to, { document: buf, mimetype: 'application/pdf', fileName: 'Expense-Bill-' + label.replace(/\s+/g, '-') + '.pdf', caption: '🧾 *Expense Bill* — ' + label + '\n💰 Total: ₹' + tot.toLocaleString('en-IN') + ' (' + data.rows.length + ' entries)\n\n_Dobara kuch karna ho to *help* bhejo._' });
     }
     botState.delete(jid);
   }
@@ -475,10 +558,11 @@ module.exports = function makeWhatsApp(o) {
       const jid = wm.key.remoteJid; if (!/@(s\.whatsapp\.net|lid)$/.test(jid || '')) return;
       if (Date.now() - tsOf(wm.messageTimestamp) > 120000) return;          // old message (history sync) - never answer those
       botGet().then(c => {
-        if (!c.on || !c.nums.length || !botMatch(pnOf(s, jid), c.nums)) return;
+        const num = c.on && c.nums.length ? botMatch(pnOf(s, jid), c.nums) : ''; if (!num) return;
         const k = kindText(wm.message), text = k && k.kind === 'text' ? (k.text || '') : '';
+        if (botDup(wm, text)) return;                                   // the same message again -> no second answer
         const prev = botQ.get(jid) || Promise.resolve();                // one message at a time per chat
-        botQ.set(jid, prev.then(() => botStep(s, jid, text)).catch(e => warn('WhatsApp bot', e && e.message)));
+        botQ.set(jid, prev.then(() => botStep(s, jid, text, num)).catch(e => warn('WhatsApp bot', e && e.message)));
       }).catch(e => warn('WhatsApp bot', e && e.message));
     } catch (e) { warn('WhatsApp bot', e && e.message); }
   }
@@ -651,11 +735,22 @@ module.exports = function makeWhatsApp(o) {
       licC = c; return { ok: true, cfg: c };
     }
     if (a === 'waBotGet') { if (uid !== 'ADMIN') fail('Only the main admin can use this.'); return { ok: true, cfg: await botGet(), connected: !!(s.status === 'open' && s.sock) }; }
+    if (a === 'waBotPeople') {                                           // who can a number be tied to: every account + its employees
+      if (uid !== 'ADMIN') fail('Only the main admin can use this.');
+      const people = await withWb(() => {
+        const set = globalThis.readSettings_().values, out = [];
+        [globalThis.getAccount_('ADMIN', set)].concat(globalThis.readUsers_().filter(u => u.active)).forEach(a => {
+          try { globalThis.buildCtx_(a.id); globalThis.readEmployees_().forEach(e => out.push({ acc: a.id, accName: String(a.name || a.username || a.id), emp: e.id, empName: String(e.name || '') })); } catch (e) {}
+        });
+        return out;
+      });
+      return { ok: true, people };
+    }
     if (a === 'waBotSet') {
       if (uid !== 'ADMIN') fail('Only the main admin can change this.');
       const raw = (Array.isArray(req.nums) ? req.nums : String(req.nums || '').split(/[\s,;]+/)).map(x => String(x).replace(/\D/g, '')).filter(Boolean);
       raw.forEach(x => { if (x.length < 8 || x.length > 15) fail('"' + x + '" does not look like a phone number. Use the digits only, e.g. 9876543210 or 919876543210.'); });
-      const c = botNorm({ on: req.on, nums: raw });
+      const c = botNorm({ on: req.on, nums: raw, bind: req.bind && typeof req.bind === 'object' ? req.bind : {} });
       await withWb(() => { PROPS().setProperty('WA_BOT_CFG', JSON.stringify(c)); });
       botCfg = c; return { ok: true, cfg: c };
     }

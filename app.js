@@ -1344,21 +1344,35 @@ async function vcsWaSave(){
 async function vcsWaTest(){
   try{ await vcsWaSave(); const r = await api('vcsWaTest'); toast('✓ Test message sent to ' + r.to); }catch(e){ handleErr(e); }
 }
-/* ---------- WhatsApp helper bot: which numbers may chat with it (Expense / Attendance by WhatsApp) - main admin only ---------- */
+/* ---------- WhatsApp helper bot: which numbers may chat with it, and WHOSE data each number may fill (main admin only) ---------- */
+function waBotOpts(sel){
+  const P = S.waPeople || [];
+  return `<option value="">Default · Admin ka pehla employee</option>` + P.map((p, k) => `<option value="${k}" ${sel && sel.acc === p.acc && sel.emp === p.emp ? 'selected' : ''}>${esc(p.empName || '—')} · ${esc(p.accName)}</option>`).join('');
+}
 function waBotCard(){
   if (!(isAdmin() && S.me && S.me.primary && !S.as)) return '';
-  const c = S.waBot || { on:true, nums:[] };
+  const c = S.waBot || { on:true, nums:[], bind:{} }, bind = c.bind || {};
   if (!S.waBot && !S.waBotLoading){ S.waBotLoading = true; api('waBotGet').then(r => { S.waBot = r.cfg; const e = $('#waBotBox'); if (e) e.outerHTML = waBotCard(); }).catch(() => {}).finally(() => { S.waBotLoading = false; }); }
-  const rows = c.nums.length ? c.nums.map((n, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin-bottom:6px"><b>+${esc(n)}</b><button class="btn ghost" style="padding:4px 10px" onclick="waBotDel(${i})">🗑️ Remove</button></div>`).join('') : '<p class="muted" style="margin:6px 0">Koi number nahi hai. Neeche se add karo.</p>';
-  return `<div class="card" id="waBotBox" style="margin-bottom:16px"><h3>🤖 WhatsApp helper <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· Expense / Attendance WhatsApp se</span></h3>
-    <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="wbOn" ${c.on ? 'checked' : ''} onchange="waBotSave()"> Helper ON (in numbers ke message par auto reply)</label>
+  if (!S.waPeople && !S.waPeopleLoading){ S.waPeopleLoading = true; api('waBotPeople').then(r => { S.waPeople = r.people || []; const e = $('#waBotBox'); if (e) e.outerHTML = waBotCard(); }).catch(() => {}).finally(() => { S.waPeopleLoading = false; }); }
+  const rows = c.nums.length ? c.nums.map((n, i) => `<div style="padding:8px 10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px"><b>+${esc(n)}</b><button class="btn ghost" style="padding:4px 10px" onclick="waBotDel(${i})">🗑️ Remove</button></div>
+      <select class="input" onchange="waBotBind(${i}, this.value)" title="Ye number kiska data bhar sakta hai">${waBotOpts(bind[n])}</select></div>`).join('') : '<p class="muted" style="margin:6px 0">Koi number nahi hai. Neeche se add karo.</p>';
+  return `<div class="card" id="waBotBox" style="margin-bottom:16px"><h3>🤖 WhatsApp helper <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· Expense / Attendance / Bill PDF WhatsApp se</span></h3>
+    <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="wbOn" ${c.on ? 'checked' : ''} onchange="waBotSave()"> Helper ON (in numbers ke <b>help</b> message par reply)</label>
     ${rows}
-    <div class="form-grid" style="margin-top:10px"><div class="field"><label>Naya number add karo</label><input class="input" id="wbNew" type="tel" inputmode="tel" placeholder="9876543210" onkeydown="if(event.key==='Enter'){event.preventDefault();waBotAdd();}"></div></div>
+    <div class="form-grid" style="margin-top:10px">
+      <div class="field"><label>Naya number add karo</label><input class="input" id="wbNew" type="tel" inputmode="tel" placeholder="9876543210" onkeydown="if(event.key==='Enter'){event.preventDefault();waBotAdd();}"></div>
+      <div class="field"><label>Ye number kiska data bhar sakta hai?</label><select class="input" id="wbWho">${waBotOpts(null)}</select></div>
+    </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="waBotAdd()">➕ Add number</button></div>
-    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">In numbers se message aane par aapke linked WhatsApp se menu jayega: <b>1 Expense · 2 Attendance</b> (phir Present / Absent). Number 10 digit (ya country code ke saath) likho. Dusre numbers ko reply nahi jayega. WhatsApp tab me WhatsApp connected rehna chahiye.</p></div>`;
+    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Number se <b>help</b> bhejne par menu aata hai: <b>1 Expense · 2 Attendance · 3 Bill PDF</b>. Har number sirf <b>apne</b> chune hue person / account ka data bhar sakta hai (attendance sirf us employee ki, expense sirf us account ke). Us account ko app me us section ka <b>edit</b> access hona chahiye. Dusre numbers ko reply nahi jayega. WhatsApp tab me WhatsApp connected rehna chahiye.</p></div>`;
 }
-async function waBotPut(nums){
-  const r = await api('waBotSet', { on:($('#waBotBox #wbOn') ? $('#waBotBox #wbOn').checked : true), nums });
+function waBotPick(v){
+  if (v === '' || v === undefined || v === null) return null;
+  const p = (S.waPeople || [])[Number(v)]; return p ? { acc:p.acc, emp:p.emp, label:(p.empName || '') + ' · ' + p.accName } : null;
+}
+async function waBotPut(nums, bind){
+  const r = await api('waBotSet', { on:($('#waBotBox #wbOn') ? $('#waBotBox #wbOn').checked : true), nums, bind });
   S.waBot = r.cfg; const e = $('#waBotBox'); if (e) e.outerHTML = waBotCard();
 }
 async function waBotAdd(){
@@ -1367,18 +1381,28 @@ async function waBotAdd(){
     const d = v.replace(/\D/g, ''); if (d.length < 8 || d.length > 15){ toast('Number sahi nahi lag raha'); return; }
     const cur = (S.waBot && S.waBot.nums) || [];
     if (cur.some(x => x === d)){ toast('Ye number pehle se hai'); return; }
-    await waBotPut(cur.concat(d)); toast('✓ Number add ho gaya');
+    const bind = Object.assign({}, (S.waBot && S.waBot.bind) || {}), pk = waBotPick($('#waBotBox #wbWho').value); if (pk) bind[d] = pk;
+    await waBotPut(cur.concat(d), bind); toast('✓ Number add ho gaya');
+  }catch(e){ handleErr(e); }
+}
+async function waBotBind(i, v){
+  try{
+    const cur = ((S.waBot && S.waBot.nums) || []).slice(), n = cur[i]; if (!n) return;
+    const bind = Object.assign({}, (S.waBot && S.waBot.bind) || {}), pk = waBotPick(v);
+    if (pk) bind[n] = pk; else delete bind[n];
+    await waBotPut(cur, bind); toast('✓ Saved · +' + n + (pk ? ' → ' + pk.label : ' → Default'));
   }catch(e){ handleErr(e); }
 }
 async function waBotDel(i){
   try{
     const cur = ((S.waBot && S.waBot.nums) || []).slice(); if (!cur[i]) return;
     if (!confirm('+' + cur[i] + ' hata du?')) return;
-    cur.splice(i, 1); await waBotPut(cur); toast('✓ Number hata diya');
+    const bind = Object.assign({}, (S.waBot && S.waBot.bind) || {}); delete bind[cur[i]];
+    cur.splice(i, 1); await waBotPut(cur, bind); toast('✓ Number hata diya');
   }catch(e){ handleErr(e); }
 }
 async function waBotSave(){
-  try{ await waBotPut((S.waBot && S.waBot.nums) || []); toast('✓ Saved'); }catch(e){ handleErr(e); }
+  try{ await waBotPut((S.waBot && S.waBot.nums) || [], (S.waBot && S.waBot.bind) || {}); toast('✓ Saved'); }catch(e){ handleErr(e); }
 }
 function vDeployMain(){
   if (!DEP.st) return '<div class="card"><div class="empty-state">Loading…</div></div>';
