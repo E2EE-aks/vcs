@@ -71,6 +71,13 @@
     }).catch(function(e){ D.loading = false; D.err = (e && e.message) || 'Could not reach the server'; draw(); });
   }
 
+  function srcLine(q){
+    if (!q || !q.p) return 'vs previous close';
+    var h = 'vs prev close' + (q.t ? ' · price time ' + tmS(q.t) + ' IST' : '');
+    if (q.by){ h += '<br>' + Object.keys(q.by).map(function(k){ return k + ' ₹' + inr(q.by[k]); }).join(' · ') + (q.n > 1 ? (q.spread > 0.3 ? ' · <span style="color:#c8372d;font-weight:700">⚠ ' + q.spread.toFixed(2) + '% farak</span>' : ' · <span style="color:#0e8a5f;font-weight:700">✓ match</span>') : ' · 1 source'); }
+    return h;
+  }
+
   function draw(){
     var root = $('#skRoot'); if (!root) return;
     var c = D.cfg, h = '';
@@ -89,9 +96,9 @@
     h += c.symbols.length ? c.symbols.map(function(s){
       var q = D.px[s], pr = '–', ch = '<span class="sk-ch fl">–</span>';
       if (q && q.p){ pr = '₹' + inr(q.p); var d = q.prev ? (q.p - q.prev) / q.prev * 100 : 0; ch = '<span class="sk-ch ' + (d > 0 ? 'up' : d < 0 ? 'dn' : 'fl') + '">' + (d >= 0 ? '▲ +' : '▼ ') + d.toFixed(2) + '%</span>'; }
-      return '<div class="sk-it"><div class="sk-nm">' + esc(s) + '<small>vs previous close</small></div><div class="sk-px">' + pr + '</div>' + ch + '<button class="sk-x" data-r="' + esc(s) + '" aria-label="Remove ' + esc(s) + '">✕</button></div>';
+      return '<div class="sk-it"><div class="sk-nm">' + esc(s) + '<small>' + srcLine(q) + '</small></div><div class="sk-px">' + pr + '</div>' + ch + '<button class="sk-x" data-r="' + esc(s) + '" aria-label="Remove ' + esc(s) + '">✕</button></div>';
     }).join('') : '<div class="sk-empty">Koi stock nahi hai. Upar symbol likhke add karo.</div>';
-    h += '</div></div><div class="sk-note" style="padding:0 4px">Alerts full time ON hain (market open ya band). Market me server har 30 sec, band hone par har 2 min price check karta hai. NSE/BSE stock band market me hilta nahi, isliye alert tabhi aayega jab price badle; raat ko BTC-USD, GC=F, USDINR=X jaise 24h symbols ke alert aate rahenge. Prices Yahoo Finance se aate hain, thode late ho sakte hain. ' + (D.market === false ? '<b>Market abhi band hai (alerts phir bhi ON).</b>' : '') + '</div>';
+    h += '</div></div><div class="sk-note" style="padding:0 4px">Alerts full time ON hain (market open ya band). Market me server har 30 sec, band hone par har 2 min price check karta hai. NSE/BSE stock band market me hilta nahi, isliye alert tabhi aayega jab price badle; raat ko BTC-USD, GC=F, USDINR=X jaise 24h symbols ke alert aate rahenge. Yahoo aur NSE dono alag-alag apne price ke hisaab se alert bhejte hain (message me likha hota hai kis source se), saath me dono ka comparison bhi. ' + (D.market === false ? '<b>Market abhi band hai (alerts phir bhi ON).</b>' : '') + '</div>';
     root.innerHTML = h;
   }
 
@@ -150,7 +157,7 @@
       '<div class="sk-chips"><button data-cs="ALL" class="' + (D.sel === 'ALL' ? 'on' : '') + '">Sab stocks</button>' +
       D.cfg.symbols.map(function(s){ return '<button data-cs="' + esc(s) + '" class="' + (D.sel === s ? 'on' : '') + '">' + esc(s) + '</button>'; }).join('') + '</div>' +
       '<div class="sk-row" style="margin-bottom:6px"><button class="sk-btn gr" data-z="-1" style="min-height:34px;padding:0 12px">－</button><button class="sk-btn gr" data-z="1" style="min-height:34px;padding:0 12px">＋</button><button class="sk-btn gr" data-z="0" style="min-height:34px;padding:0 12px">⟲ Latest</button></div>' +
-      '<div class="sk-note" style="margin:0 0 6px">Candle par tap/hover karo: time (IST), Open/High/Low/Close dikhega. ▲▼ marker = jis time pe alert aaya. Left-right drag se purane candles dekho.' + (D.market === false ? ' <b>Market band hai, last session ka chart dikh raha hai. Alerts phir bhi ON hain.</b>' : '') + '</div>' +
+      '<div class="sk-note" style="margin:0 0 6px">Time upar aur neeche dono taraf IST me hai; sabse upar/neeche ka price uske time ke saath likha hai. Candle par tap/hover karo: Open/High/Low/Close dikhega. ▲▼ marker = jis time pe alert aaya (Y = Yahoo ka alert, N = NSE ka). Neeli dotted line = NSE ka price, candles Yahoo ke hain. Left-right drag se purane candles dekho.' + (D.market === false ? ' <b>Market band hai, last session ka chart dikh raha hai. Alerts phir bhi ON hain.</b>' : '') + '</div>' +
       '<div id="skChErr">' + (D.chErr ? '<div class="sk-warn">⚠ ' + esc(D.chErr) + '</div>' : '') + '</div>' +
       '<div id="skPanels"></div></div><div class="sk-box" id="skAlLog"></div>';
     return h;
@@ -191,13 +198,16 @@
 
   function idxAtOrBefore(cs, t){ var lo = 0, hi = cs.length - 1, r = -1; while (lo <= hi){ var m = (lo + hi) >> 1; if (cs[m][0] <= t){ r = m; lo = m + 1; } else hi = m - 1; } return r; }
 
+  function srcTag(a){ return a.src === 'nse' ? 'N ' : a.src === 'yahoo' ? 'Y ' : ''; }
   function paintPanel(cv){
     var sym = cv.dataset.s, d = D.ch && D.ch.data[sym], all = D.sel === 'ALL';
     var cs = (d && d.c) || [], W = (cv.parentNode && cv.parentNode.clientWidth) || 320, dpr = window.devicePixelRatio || 1;
-    var H = cs.length ? (all ? 215 : 400) : 74;
+    var H = cs.length ? (all ? 235 : 420) : 74;
     if (cv.__w !== W || cv.__h !== H || cv.__d !== dpr){ cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.width = W + 'px'; cv.style.height = H + 'px'; cv.__w = W; cv.__h = H; cv.__d = dpr; }
     var g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
     g.font = '800 14px system-ui,-apple-system,sans-serif'; g.fillStyle = INK; g.textBaseline = 'alphabetic'; g.textAlign = 'left'; g.fillText(sym, 8, 17);
+    var q0 = D.px[sym], symW = g.measureText(sym).width;
+    if (q0 && q0.n){ g.font = '600 10.5px system-ui,-apple-system,sans-serif'; g.fillStyle = q0.spread > 0.3 ? DN : TXT; g.fillText((q0.spread > 0.3 ? '⚠ ' : '✓ ') + q0.n + (q0.n > 1 ? ' sources' : ' source') + (d && d.src === 'twelvedata' ? ' · TD' : ''), 8 + symW + 8, 17); }
     // header: live price + change vs previous close
     var q = D.px[sym], last = cs.length ? cs[cs.length - 1][4] : null, pr = q && q.p ? q.p : last, pv = q && q.prev ? q.prev : (d && d.prev);
     if (pr){
@@ -209,11 +219,11 @@
       g.fillText(!d ? 'Chart load ho raha hai…' : (d.err ? 'Data nahi mila (' + d.err + ')' : 'Is timeframe ka data abhi nahi hai'), 8, 48);
       cv.__g = null; return;
     }
-    var x0 = 6, x1 = W - 58, y0 = 28, y1 = H - 20, nvis = Math.min(D.n, cs.length), off = Math.min(D.off, cs.length - nvis), end = cs.length - off, start = end - nvis, cw = (x1 - x0) / nvis;
+    var x0 = 6, x1 = W - 58, y0 = 46, y1 = H - 20, nvis = Math.min(D.n, cs.length), off = Math.min(D.off, cs.length - nvis), end = cs.length - off, start = end - nvis, cw = (x1 - x0) / nvis;
     var lo = Infinity, hi = -Infinity, i;
     for (i = start; i < end; i++){ if (cs[i][3] < lo) lo = cs[i][3]; if (cs[i][2] > hi) hi = cs[i][2]; }
     if (hi === lo){ hi *= 1.005; lo *= 0.995; }
-    var padv = (hi - lo) * 0.07; hi += padv; lo -= padv;
+    var padv = (hi - lo) * 0.12; hi += padv; lo -= padv;
     var Y = function(v){ return y1 - (v - lo) / (hi - lo) * (y1 - y0); };
     var X = function(k){ return x0 + (k - start + 0.5) * cw; };
     // grid + price axis
@@ -224,10 +234,12 @@
     g.textAlign = 'center';
     for (i = start; i < end; i++){
       var newDay = intraday && i > 0 && dtS(cs[i][0]) !== dtS(cs[i - 1][0]), cx = X(i);
-      if (newDay){ g.setLineDash([3, 3]); g.strokeStyle = '#cfcfdb'; g.beginPath(); g.moveTo(Math.round(cx - cw / 2) + 0.5, y0); g.lineTo(Math.round(cx - cw / 2) + 0.5, y1); g.stroke(); g.setLineDash([]); g.fillStyle = TXT; g.textAlign = 'left'; g.fillText(dtS(cs[i][0]), cx - cw / 2 + 3, y0 + 10); g.textAlign = 'center'; }
+      if (newDay){ g.setLineDash([3, 3]); g.strokeStyle = '#cfcfdb'; g.beginPath(); g.moveTo(Math.round(cx - cw / 2) + 0.5, y0); g.lineTo(Math.round(cx - cw / 2) + 0.5, y1); g.stroke(); g.setLineDash([]); g.fillStyle = TXT; g.textAlign = 'left'; g.fillText(dtS(cs[i][0]), cx - cw / 2 + 3, y0 + 22); g.textAlign = 'center'; }
       if (i % step === 0 && cx - lastLbl > 56){
         lastLbl = cx; g.strokeStyle = GRID; g.beginPath(); g.moveTo(Math.round(cx) + 0.5, y1); g.lineTo(Math.round(cx) + 0.5, y1 + 4); g.stroke();
-        g.fillStyle = TXT; g.fillText(intraday ? (newDay ? dtS(cs[i][0]) + ' ' : '') + tmS(cs[i][0]) : dtS(cs[i][0]), Math.min(Math.max(cx, x0 + 22), x1 - 22), H - 5);
+        var lbl = intraday ? (newDay ? dtS(cs[i][0]) + ' ' : '') + tmS(cs[i][0]) : dtS(cs[i][0]), lx = Math.min(Math.max(cx, x0 + 22), x1 - 22);
+        g.fillStyle = TXT; g.fillText(lbl, lx, H - 5); g.fillText(lbl, lx, y0 - 6);                 // time shown on the top and the bottom edge
+        g.beginPath(); g.moveTo(Math.round(cx) + 0.5, y0); g.lineTo(Math.round(cx) + 0.5, y0 - 4); g.stroke();
       }
     }
     // candles
@@ -237,10 +249,24 @@
       g.beginPath(); g.moveTo(Math.round(cx2) + 0.5, Y(c[2])); g.lineTo(Math.round(cx2) + 0.5, Y(c[3])); g.stroke();
       var yt = Y(Math.max(c[1], c[4])), yb = Y(Math.min(c[1], c[4])); g.fillRect(cx2 - bw / 2, yt, bw, Math.max(1, yb - yt));
     }
+    // highest high / lowest low of the visible candles, with the time they happened
+    var iH = start, iL = start; for (i = start; i < end; i++){ if (cs[i][2] > cs[iH][2]) iH = i; if (cs[i][3] < cs[iL][3]) iL = i; }
+    g.font = '700 10px system-ui,-apple-system,sans-serif'; g.fillStyle = INK; g.textAlign = 'center';
+    var lab = function(k, v){ return inr(v) + ' · ' + (intraday ? tmS(cs[k][0]) : dtS(cs[k][0])); };
+    var tw1 = g.measureText(lab(iH, cs[iH][2])).width / 2 + 2, tw2 = g.measureText(lab(iL, cs[iL][3])).width / 2 + 2;
+    g.fillText(lab(iH, cs[iH][2]), Math.min(Math.max(X(iH), x0 + tw1), x1 - tw1), Math.max(Y(cs[iH][2]) - 4, y0 + 9));
+    g.fillText(lab(iL, cs[iL][3]), Math.min(Math.max(X(iL), x0 + tw2), x1 - tw2), Math.min(Y(cs[iL][3]) + 12, y1 - 2));
     // last price line + tag
     var lc = cs[end - 1][4], ly = Y(lc), lup = lc >= cs[end - 1][1];
     g.setLineDash([4, 3]); g.strokeStyle = lup ? UP : DN; g.beginPath(); g.moveTo(x0, Math.round(ly) + 0.5); g.lineTo(x1, Math.round(ly) + 0.5); g.stroke(); g.setLineDash([]);
     g.fillStyle = lup ? UP : DN; g.fillRect(x1 + 1, ly - 8, 56, 16); g.fillStyle = '#fff'; g.textAlign = 'left'; g.font = '700 11px system-ui,-apple-system,sans-serif'; g.fillText(inr(lc), x1 + 4, ly + 4);
+    // NSE price (blue) next to the Yahoo candles, so both sources can be compared on the chart
+    var qn = D.px[sym];
+    if (off === 0 && qn && qn.by && qn.by.nse > 0 && qn.by.nse >= lo && qn.by.nse <= hi){
+      var ny = Y(qn.by.nse), tagY = Math.abs(ny - ly) < 17 ? (ny >= ly ? ly + 17 : ly - 17) : ny;
+      g.setLineDash([2, 3]); g.strokeStyle = '#2563eb'; g.beginPath(); g.moveTo(x0, Math.round(ny) + 0.5); g.lineTo(x1, Math.round(ny) + 0.5); g.stroke(); g.setLineDash([]);
+      g.fillStyle = '#2563eb'; g.fillRect(x1 + 1, tagY - 8, 56, 16); g.fillStyle = '#fff'; g.textAlign = 'left'; g.font = '700 10px system-ui,-apple-system,sans-serif'; g.fillText('NSE ' + inr(qn.by.nse), x1 + 3, tagY + 4);
+    }
     // alert markers (time of every alert)
     var sec = TFSEC[D.tf] || 300; g.font = '700 10px system-ui,-apple-system,sans-serif';
     (D.alerts || []).forEach(function(a){
@@ -249,8 +275,8 @@
       if (k < 0 || t - cs[k][0] > sec * 2 || k < start || k >= end) return;
       var ax = X(k), upA = a.pct > 0; g.fillStyle = upA ? UP : DN;
       g.beginPath();
-      if (upA){ var ay = Y(cs[k][3]) + 5; g.moveTo(ax, ay); g.lineTo(ax - 5, ay + 9); g.lineTo(ax + 5, ay + 9); g.fill(); g.textAlign = 'center'; g.fillText('+' + a.pct.toFixed(2) + '%', ax, Math.min(ay + 20, y1 - 1)); }
-      else { var by = Y(cs[k][2]) - 5; g.moveTo(ax, by); g.lineTo(ax - 5, by - 9); g.lineTo(ax + 5, by - 9); g.fill(); g.textAlign = 'center'; g.fillText(a.pct.toFixed(2) + '%', ax, Math.max(by - 12, y0 + 10)); }
+      if (upA){ var ay = Y(cs[k][3]) + 5; g.moveTo(ax, ay); g.lineTo(ax - 5, ay + 9); g.lineTo(ax + 5, ay + 9); g.fill(); g.textAlign = 'center'; g.fillText(srcTag(a) + '+' + a.pct.toFixed(2) + '%', ax, Math.min(ay + 20, y1 - 1)); }
+      else { var by = Y(cs[k][2]) - 5; g.moveTo(ax, by); g.lineTo(ax - 5, by - 9); g.lineTo(ax + 5, by - 9); g.fill(); g.textAlign = 'center'; g.fillText(srcTag(a) + a.pct.toFixed(2) + '%', ax, Math.max(by - 12, y0 + 10)); }
     });
     cv.__g = { start:start, end:end, cw:cw, x0:x0, x1:x1, cs:cs };
     // crosshair + tooltip (same time on every stock panel)
@@ -296,7 +322,7 @@
     var h = '<b>🔔 Alert log (kab kitne baje hila)</b>';
     h += al.length ? al.map(function(a){
       var s = a.t / 1000, up = a.pct > 0;
-      return '<div class="sk-it"><div class="sk-nm">' + esc(a.s) + '<small>' + dtS(s) + ' · ' + fTS.format(new Date(a.t)) + ' IST</small></div><div class="sk-px" style="font-size:13px">₹' + inr(a.ref) + ' → ₹' + inr(a.p) + '</div><span class="sk-ch ' + (up ? 'up' : 'dn') + '">' + (up ? '▲ +' : '▼ ') + a.pct.toFixed(2) + '%</span></div>';
+      return '<div class="sk-it"><div class="sk-nm">' + esc(a.s) + '<small>' + dtS(s) + ' · ' + fTS.format(new Date(a.t)) + ' IST · ' + (a.src === 'nse' ? 'NSE India' : a.src === 'yahoo' ? 'Yahoo' : esc(a.src || '')) + '</small></div><div class="sk-px" style="font-size:13px">₹' + inr(a.ref) + ' → ₹' + inr(a.p) + '</div><span class="sk-ch ' + (up ? 'up' : 'dn') + '">' + (up ? '▲ +' : '▼ ') + a.pct.toFixed(2) + '%</span></div>';
     }).join('') : '<div class="sk-empty">Abhi tak koi alert nahi aaya. Jaise hi koi stock ' + esc(D.cfg.thr) + '% hilega, yahan time ke saath dikhega (server restart par ye log reset hota hai).</div>';
     el.innerHTML = h;
   }
