@@ -735,6 +735,13 @@ module.exports = function makeWhatsApp(o) {
     } catch (e) { warn('VCS approvals on WhatsApp', e && e.message); } finally { aprBusy = false; }
   }
   { const t = setInterval(() => aprWatch().catch(() => {}), 45000); if (t.unref) t.unref(); }
+  function aprWhere(r) {                                                // is this entry still in the sheet, and whose data is it in? (null = kind not checked)
+    const sp = { exp: ['EXP', 5, 6], lge: ['LGE', 6, 7], lic: ['LIC', 7, 8] }[r.k]; if (!sp) return null;
+    const sh = r.k === 'lic' ? globalThis.licSheet_() : globalThis.getSheet_(sp[0]), last = sh.getLastRow(); if (last < 2) return { found: false };
+    const v = sh.getRange(2, 1, last - 1, sp[2]).getValues();
+    for (let i = 0; i < v.length; i++) if (String(v[i][sp[1] - 1]) === String(r.i)) return { found: true, owner: globalThis.ownerOf_(v[i][sp[2] - 1]) };
+    return { found: false };
+  }
   async function aprHandle(jid, low, num, wm, say) {                    // true = this message was an approval answer (handled), false = not ours
     const m = /^([a-z0-9]+)(?:\s+([a-f0-9]{4,10}))?$/.exec(low); if (!m) return false;
     const word = m[1], code = m[2] || '', approve = APR_YES.has(word);
@@ -749,13 +756,19 @@ module.exports = function makeWhatsApp(o) {
       out = await botRun(() => {
         const it = aprPending().find(x => ref ? x.k === ref.k && x.id === ref.id : x.id.startsWith(code));
         if (!it) return null;
+        const pre = it.k === 'del' && approve ? aprWhere(it.r) : null;
         if (it.k === 'del') globalThis.decideDelete_({ id: it.id, approve }); else globalThis.payDecide_({ id: it.id, approve });
-        return it;
+        return { it, pre, post: it.k === 'del' && approve ? aprWhere(it.r) : null };
       }, 'ADMIN');
     } catch (e) { await say('❌ ' + botErr(e)); return true; }
     if (!out) { await say(ref ? 'ℹ️ Ye request pehle hi decide ho chuki hai (app ya WhatsApp se).' : '❌ Is code ki koi pending request nahi mili.'); return true; }
+    const chk = out; out = chk.it;
     const who = out.k === 'del' ? (out.r.n || 'User') + ' — ' + (out.r.d || 'delete request') : (out.r.name || out.r.username || 'User') + ' — ' + (out.r.planName || 'payment') + ' ₹' + (out.r.price || 0);
-    await say((approve ? '✅ *Approve ho gaya*' : '❌ *Deny kar diya*') + '\n' + who + '\n\n_User ko app ke chat me bata diya gaya hai._');
+    let note = '_User ko app ke chat me bata diya gaya hai._';
+    if (chk.pre && chk.post && chk.post.found) note = '⚠️ *Entry abhi bhi hai — delete nahi hui.* Entry ' + (chk.pre.owner === out.r.o ? 'sahi user ke data me thi, phir bhi nahi hati' : '*' + chk.pre.owner + '* ke data me hai, request *' + out.r.o + '* ki thi') + '. Admin se seedha delete kar do.';
+    else if (chk.pre && !chk.pre.found) note = '⚠️ Entry us user ke data me mili hi nahi (pehle hi delete / badal chuki ho sakti hai). Request approved mark ho gayi, par *kuch delete nahi hua*.';
+    else if (chk.pre && chk.post && !chk.post.found) note = '🗑 Entry delete ho gayi (check kar liya). ' + note;
+    await say((approve ? '✅ *Approve ho gaya*' : '❌ *Deny kar diya*') + '\n' + who + '\n\n' + note);
     return true;
   }
 
