@@ -1356,7 +1356,8 @@ function waBotCard(){
   if (!S.waPeople && !S.waPeopleLoading){ S.waPeopleLoading = true; api('waBotPeople').then(r => { S.waPeople = r.people || []; const e = $('#waBotBox'); if (e) e.outerHTML = waBotCard(); }).catch(() => {}).finally(() => { S.waPeopleLoading = false; }); }
   const rows = c.nums.length ? c.nums.map((n, i) => `<div style="padding:8px 10px;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin-bottom:8px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px"><b>+${esc(n)}</b><button class="btn ghost" style="padding:4px 10px" onclick="waBotDel(${i})">🗑️ Remove</button></div>
-      <select class="input" onchange="waBotBind(${i}, this.value)" title="Ye number kiska data bhar sakta hai">${waBotOpts(bind[n])}</select></div>`).join('') : '<p class="muted" style="margin:6px 0">Koi number nahi hai. Neeche se add karo.</p>';
+      <select class="input" onchange="waBotBind(${i}, this.value)" title="Ye number kiska data bhar sakta hai">${waBotOpts(bind[n])}</select>
+      <input class="input" style="margin-top:6px" value="${esc((bind[n] || {}).led || '')}" placeholder="Ledger account ka naam jisme se paisa cut ho (khali = user ke naam wala account, warna My Account)" onchange="waBotLed(${i}, this.value)"></div>`).join('') : '<p class="muted" style="margin:6px 0">Koi number nahi hai. Neeche se add karo.</p>';
   return `<div class="card" id="waBotBox" style="margin-bottom:16px"><h3>🤖 WhatsApp helper <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· Expense / Attendance / Bill PDF WhatsApp se</span></h3>
     <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="wbOn" ${c.on ? 'checked' : ''} onchange="waBotSave()"> Helper ON (in numbers ke <b>help</b> message par reply)</label>
     ${rows}
@@ -1365,7 +1366,7 @@ function waBotCard(){
       <div class="field"><label>Ye number kiska data bhar sakta hai?</label><select class="input" id="wbWho">${waBotOpts(null)}</select></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="waBotAdd()">➕ Add number</button></div>
-    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Number se <b>help</b> bhejne par menu aata hai: <b>1 Expense · 2 Attendance · 3 Bill PDF</b>. Har number sirf <b>apne</b> chune hue person / account ka data bhar sakta hai (attendance sirf us employee ki, expense sirf us account ke). Us account ko app me us section ka <b>edit</b> access hona chahiye. Dusre numbers ko reply nahi jayega. WhatsApp tab me WhatsApp connected rehna chahiye.</p></div>`;
+    <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Number se <b>help</b> bhejne par menu aata hai: <b>1 Expense · 2 Attendance · 3 Bill PDF · 4 VCS · 5 Rack · 6 Balance till today</b>. Expense / income us number ke <b>ledger account</b> me se cut / add hota hai (upar wale box me account ka naam likho). Har number sirf <b>apne</b> chune hue person / account ka data bhar sakta hai (attendance sirf us employee ki, expense sirf us account ke). Us account ko app me us section ka <b>edit</b> access hona chahiye. Dusre numbers ko reply nahi jayega. WhatsApp tab me WhatsApp connected rehna chahiye.</p></div>`;
 }
 function waBotPick(v){
   if (v === '' || v === undefined || v === null) return null;
@@ -1389,8 +1390,17 @@ async function waBotBind(i, v){
   try{
     const cur = ((S.waBot && S.waBot.nums) || []).slice(), n = cur[i]; if (!n) return;
     const bind = Object.assign({}, (S.waBot && S.waBot.bind) || {}), pk = waBotPick(v);
-    if (pk) bind[n] = pk; else delete bind[n];
+    const led = (bind[n] || {}).led || '';
+    if (pk) bind[n] = Object.assign({}, pk, { led }); else if (led) bind[n] = { acc:'ADMIN', emp:'', label:'', led }; else delete bind[n];
     await waBotPut(cur, bind); toast('✓ Saved · +' + n + (pk ? ' → ' + pk.label : ' → Default'));
+  }catch(e){ handleErr(e); }
+}
+async function waBotLed(i, v){
+  try{
+    const cur = ((S.waBot && S.waBot.nums) || []).slice(), n = cur[i]; if (!n) return;
+    const bind = Object.assign({}, (S.waBot && S.waBot.bind) || {});
+    bind[n] = Object.assign({ acc:'ADMIN', emp:'', label:'' }, bind[n] || {}, { led:String(v || '').trim() });
+    await waBotPut(cur, bind); toast('✓ Saved · +' + n + ' → ' + (bind[n].led || 'auto'));
   }catch(e){ handleErr(e); }
 }
 async function waBotDel(i){

@@ -394,7 +394,7 @@ module.exports = function makeWhatsApp(o) {
   const botNorm = j => {
     j = j || {};
     const nums = [...new Set((Array.isArray(j.nums) ? j.nums : BOT_DEFAULT).map(x => String(x).replace(/\D/g, '')).filter(x => x.length >= 8 && x.length <= 15))].slice(0, 20);
-    const bind = {}; nums.forEach(n => { const b = j.bind && j.bind[n]; if (b && b.acc) bind[n] = { acc: String(b.acc).slice(0, 60), emp: String(b.emp || '').slice(0, 60), label: String(b.label || '').slice(0, 90) }; });
+    const bind = {}; nums.forEach(n => { const b = j.bind && j.bind[n]; if (b && b.acc) bind[n] = { acc: String(b.acc).slice(0, 60), emp: String(b.emp || '').slice(0, 60), label: String(b.label || '').slice(0, 90), led: String(b.led || '').trim().slice(0, 80) }; });
     return { on: j.on === undefined ? true : (j.on !== false && j.on !== 'false'), nums, bind };
   };
   async function botGet() {
@@ -414,7 +414,7 @@ module.exports = function makeWhatsApp(o) {
     return !!dup;
   };
   const botToday = () => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value])); return { date: p.year + '-' + p.month + '-' + p.day, y: Number(p.year), m: Number(p.month), d: Number(p.day) }; };
-  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n4️⃣  VCS (website update)\n5️⃣  Rack Mapping (item kis rack/row me hai)\n\n_Number bhejo: 1, 2, 3, 4 ya 5_';
+  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n4️⃣  VCS (website update)\n5️⃣  Rack Mapping (item kis rack/row me hai)\n6️⃣  Balance till today\n\n_Number bhejo: 1, 2, 3, 4, 5 ya 6_';
   /* run fn as the account this number belongs to, with fresh sheet data (changes are saved).
      sec = 'att' | 'exp': that account must have that right (edit = true -> needs EDIT access, otherwise view is enough) */
   const botRun = (fn, acc, sec, edit) => withWb(() => {
@@ -425,6 +425,80 @@ module.exports = function makeWhatsApp(o) {
     return fn(a);
   });
   const botErr = e => String((e && e.message) || e).slice(0, 150);
+
+
+  /* ---------- ledger: the same maths as the Ledgers screen (Dr = plus, Cr = minus) ---------- */
+  const ledLoad = () => { const ty = {}; globalThis.readCategories_().forEach(c => { ty[c.name] = c.type; }); return { ty, exps: globalThis.readExpenses_(), ents: globalThis.readLgEntries_(), accs: globalThis.readLgAccounts_() }; };
+  const ledIsCat = id => String(id).startsWith('C:'), ledIsMe = id => id === 'ME' || ledIsCat(id);
+  const ledName = (D, id) => id === 'ME' ? 'My Account' : ledIsCat(id) ? String(id).slice(2) : ((D.accs.find(a => a.id === id) || {}).name || '(deleted account)');
+  function ledPick(D, a, bd) {                                          // this number's own ledger account: the name saved for it in the app, else the account named like the user, else "My Account"
+    const want = [bd && bd.led, a && a.name, a && a.username].map(x => String(x || '').trim().toLowerCase()).filter(Boolean);
+    const hit = D.accs.find(x => want.includes(String(x.name).trim().toLowerCase()));
+    return hit ? hit.id : 'ME';
+  }
+  function ledStatement(D, id, from, to) {
+    const P = [], cat = ledIsCat(id), cn = cat ? String(id).slice(2) : '';
+    if (id === 'ME' || cat) D.exps.forEach(x => { if (cat && x.category !== cn) return; const inc = D.ty[x.category] === 'Income';
+      P.push({ date: x.date, part: inc ? x.category : (cat ? 'My Account' : x.category), note: x.note, dr: inc ? x.amount : 0, cr: inc ? 0 : x.amount }); });
+    D.ents.forEach(e => {
+      if (id === 'ME') { const f = ledIsMe(e.from), t = ledIsMe(e.to); if (f === t) return;
+        if (t) P.push({ date: e.date, part: ledName(D, e.from) + (e.to !== 'ME' ? ' > ' + ledName(D, e.to) : ''), note: e.note, dr: e.amount, cr: 0 });
+        else P.push({ date: e.date, part: ledName(D, e.to) + (e.from !== 'ME' ? ' < ' + ledName(D, e.from) : ''), note: e.note, dr: 0, cr: e.amount }); }
+      else if (e.to === id) P.push({ date: e.date, part: ledName(D, e.from), note: e.note, dr: e.amount, cr: 0 });
+      else if (e.from === id) P.push({ date: e.date, part: ledName(D, e.to), note: e.note, dr: 0, cr: e.amount });
+    });
+    P.forEach((p, i) => { p.i = i; }); P.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.i - b.i);
+    const acc = ledIsMe(id) ? null : D.accs.find(x => x.id === id); let bal = acc ? (Number(acc.opening) || 0) : 0;
+    if (from) P.forEach(p => { if (p.date < from) bal += p.dr - p.cr; });
+    const open = bal, rows = []; let dr = 0, cr = 0;
+    P.forEach(p => { if ((from && p.date < from) || (to && p.date > to)) return; bal += p.dr - p.cr; dr += p.dr; cr += p.cr; rows.push(Object.assign({}, p, { bal })); });
+    return { open, rows, dr, cr, close: bal };
+  }
+  const ledMoney = n => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const ledBal = n => '₹' + ledMoney(Math.abs(n)) + (Math.abs(n) < 0.005 ? '' : n > 0 ? ' Dr' : ' Cr');
+
+  /* statement PDF: opening balance, EVERY entry (money in = Debit +, money out = Credit -), running balance, closing balance */
+  function botPdfStatement(o) {
+    const esc = x => String(x == null ? '' : x).replace(/₹/g, 'Rs.').replace(/[^\x20-\x7E\xA0-\xFF]/g, '?').replace(/([\\()])/g, '\\$1');
+    const cut = (x, n) => { x = String(x == null ? '' : x).replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 2) + '..' : x; };
+    const T = (x, y, sz, b, s) => 'BT /F' + (b ? 2 : 1) + ' ' + sz + ' Tf ' + x.toFixed(1) + ' ' + y.toFixed(1) + ' Td (' + esc(s) + ') Tj ET\n';
+    const wd = s => { let w = 0; for (const ch of String(s)) w += (ch === ',' || ch === '.' || ch === ' ') ? 2.78 : 5.56; return w; };
+    const m2 = n => Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const bl = n => m2(Math.abs(n)) + (Math.abs(n) < 0.005 ? '' : n > 0 ? ' Dr' : ' Cr');
+    const W = 595, H = 842, M = 36, R = 559, XD = 372, XC = 442, XB = R, pages = []; let c = '', y = 0;
+    const right = (xr, yy, sz, b, s) => T(xr - wd(s) * sz / 10, yy, sz, b, s);
+    const head = () => { c += T(M, y, 9, 1, 'Date') + T(86, y, 9, 1, 'Particulars') + T(190, y, 9, 1, 'Note') + right(XD, y, 9, 1, 'Debit (+)') + right(XC, y, 9, 1, 'Credit (-)') + right(XB, y, 9, 1, 'Balance'); y -= 6; c += M + ' ' + y.toFixed(1) + ' m ' + R + ' ' + y.toFixed(1) + ' l S\n'; y -= 13; };
+    const newPage = first => {
+      if (c) pages.push(c); c = ''; y = H - 48;
+      if (first) { c += T(M, y, 17, 1, o.title); y -= 20; c += T(M, y, 10, 0, 'Account: ' + o.account); y -= 13; c += T(M, y, 10, 0, 'Name: ' + o.who); y -= 13; c += T(M, y, 10, 0, 'Period: ' + o.period); y -= 13; c += T(M, y, 10, 0, 'Generated: ' + o.when); y -= 13; c += T(M, y, 8, 0, 'Debit (+) = money in / added.   Credit (-) = money paid / cut.   Dr = balance in plus, Cr = balance in minus.'); y -= 20; }
+      head();
+    };
+    newPage(true);
+    c += T(86, y, 9, 1, 'Opening Balance') + right(XB, y, 9, 1, bl(o.open)); y -= 15;
+    o.rows.forEach(r => {
+      if (y < 66) newPage(false);
+      c += T(M, y, 9, 0, r.date) + T(86, y, 9, 0, cut(r.part, 20)) + T(190, y, 9, 0, cut(r.note, 30)) + (r.dr ? right(XD, y, 9, 0, m2(r.dr)) : '') + (r.cr ? right(XC, y, 9, 0, m2(r.cr)) : '') + right(XB, y, 9, 0, bl(r.bal)); y -= 14;
+    });
+    if (y < 90) newPage(false);
+    y -= 2; c += M + ' ' + y.toFixed(1) + ' m ' + R + ' ' + y.toFixed(1) + ' l S\n'; y -= 14;
+    c += T(86, y, 10, 1, 'Total (' + o.rows.length + ' entries)') + right(XD, y, 10, 1, m2(o.dr)) + right(XC, y, 10, 1, m2(o.cr)); y -= 16;
+    c += T(86, y, 11, 1, 'Closing Balance') + right(XB, y, 11, 1, bl(o.close));
+    pages.push(c);
+    const objs = [null, '<< /Type /Catalog /Pages 2 0 R >>', null, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>'];
+    const kids = [];
+    pages.forEach((pc, i) => {
+      const po = 5 + 2 * i, co = 6 + 2 * i, body = pc + T(M, 26, 8, 0, 'Page ' + (i + 1) + ' of ' + pages.length);
+      kids.push(po + ' 0 R');
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ' + co + ' 0 R >>';
+      objs[co] = '<< /Length ' + Buffer.byteLength(body, 'latin1') + ' >>\nstream\n' + body + 'endstream';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n'; const offs = [];
+    for (let k = 1; k < objs.length; k++) { offs[k] = Buffer.byteLength(out, 'latin1'); out += k + ' 0 obj\n' + objs[k] + '\nendobj\n'; }
+    const xo = Buffer.byteLength(out, 'latin1');
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n' + offs.slice(1).map(x => String(x).padStart(10, '0') + ' 00000 n \n').join('') + 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + xo + '\n%%EOF\n';
+    return Buffer.from(out, 'latin1');
+  }
 
   /* a small PDF writer (no library needed): title + table of expenses + total */
   function botPdf(o) {
@@ -575,7 +649,7 @@ module.exports = function makeWhatsApp(o) {
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
     const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
-    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance), *3* (Bill PDF), *4* (VCS) ya *5* (Rack) bhejo. Cancel: *0*') : undefined;   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
+    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance), *3* (Bill PDF), *4* (VCS), *5* (Rack) ya *6* (Balance) bhejo. Cancel: *0*') : undefined;   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (cur.step === 'menu') {
@@ -600,11 +674,21 @@ module.exports = function makeWhatsApp(o) {
         cur.step = 'rackQ';
         return ask(cur, '📦 *Rack Mapping*\n\nINS number bhejo — main bataunga wo kis *rack* aur *row* me hai.\nJaise: *103* (reply: Right 3 · B)\n\n_(0 = cancel)_');
       }
+      if (low === '6') {                                                  // Balance till today: every entry (money in and out) from the beginning up to today
+        const n6 = botToday(), pad6 = x => String(x).padStart(2, '0');
+        let d6; try { d6 = await botRun(a => { const D = ledLoad(), L = ledPick(D, a, bd), stt = ledStatement(D, L, '', n6.date); return { stt, name: ledName(D, L), who: a.name || a.username || 'User' }; }, acc, 'exp', false); } catch (e) { return stop(e, 'Balance nahi nikal paya: '); }
+        botState.delete(jid);
+        const when6 = pad6(n6.d) + '-' + pad6(n6.m) + '-' + n6.y;
+        if (!d6.stt.rows.length) return say('💰 *Balance till today* (' + when6 + ')\n👤 ' + d6.name + '\n\nAbhi tak koi entry nahi hai. Balance: *' + ledBal(d6.stt.close) + '*\n\n_Dobara kuch karna ho to *help* bhejo._');
+        let buf6; try { buf6 = botPdfStatement({ title: 'Balance Statement - till today', account: d6.name, who: d6.who, period: 'Beginning to ' + when6, when: when6, open: d6.stt.open, rows: d6.stt.rows.map(r => Object.assign({}, r, { date: r.date.slice(8, 10) + '-' + r.date.slice(5, 7) + '-' + r.date.slice(2, 4) })), dr: d6.stt.dr, cr: d6.stt.cr, close: d6.stt.close }); } catch (e) { return say('❌ PDF nahi ban saka: ' + botErr(e)); }
+        await new Promise(r => setTimeout(r, 700));
+        return s.sock.sendMessage(to, { document: buf6, mimetype: 'application/pdf', fileName: 'Balance-till-' + when6 + '.pdf', caption: '💰 *Balance till today* (' + when6 + ')\n👤 ' + d6.name + '\n➕ Money in: ₹' + ledMoney(d6.stt.dr) + '\n➖ Money out: ₹' + ledMoney(d6.stt.cr) + '\n🏦 *Balance: ' + ledBal(d6.stt.close) + '*\n📄 ' + d6.stt.rows.length + ' entries\n\n_Dobara kuch karna ho to *help* bhejo._' });
+      }
       if (low === '3') {
         const n0 = botToday(), MN0 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         const since = (n0.y - 1) + '-' + String(n0.m).padStart(2, '0');            // last 12 months only (this month + the 11 before it)
-        let ms; try { ms = await botRun(() => { const inc = new Set(globalThis.readCategories_().filter(c => c.type === 'Income').map(c => c.name)); return [...new Set(globalThis.readExpenses_().filter(e => !inc.has(e.category) && /^\d{4}-\d{2}/.test(e.date)).map(e => e.date.slice(0, 7)))].filter(k => k > since).sort().reverse(); }, acc, 'exp', false); } catch (e) { return stop(e, ''); }
-        if (!ms.length) { botState.delete(jid); return say('🧾 Pichhle 1 saal me koi expense record nahi hai.\n\n_Dobara kuch karna ho to *help* bhejo._'); }
+        let ms; try { ms = await botRun(a => { const D = ledLoad(), L = ledPick(D, a, bd); return [...new Set(ledStatement(D, L, '', '').rows.filter(r => /^\d{4}-\d{2}/.test(r.date)).map(r => r.date.slice(0, 7)))].filter(k => k > since).sort().reverse(); }, acc, 'exp', false); } catch (e) { return stop(e, ''); }
+        if (!ms.length) { botState.delete(jid); return say('🧾 Pichhle 1 saal me koi entry nahi hai.\n\n_Dobara kuch karna ho to *help* bhejo._'); }
         cur.months = ms; cur.step = 'billPer';
         return ask(cur, '🧾 *Bill PDF* — kaun sa mahina?\n\n' + ms.map((k, i) => (i + 1) + '. ' + MN0[Number(k.slice(5, 7)) - 1] + ' ' + k.slice(0, 4)).join('\n') + '\n\n_(0 = cancel)_');
       }
@@ -663,10 +747,17 @@ module.exports = function makeWhatsApp(o) {
     if (cur.step === 'expCat') {
       const c = cur.cats[parseInt(low, 10) - 1] || cur.cats.find(x => low && String(x).toLowerCase() === low) || cur.cats.find(x => low.length > 1 && String(x).toLowerCase().includes(low)); if (!c) return again();
       const n = botToday();
-      try { await botRun(() => globalThis.addExpense_({ date: n.date, category: c, amount: cur.amount, note: cur.note }), acc, 'exp', true); }
-      catch (e) { return stop(e, 'Expense save nahi hua: '); }
+      let sv;
+      try {
+        sv = await botRun(a => {
+          const D = ledLoad(), L = ledPick(D, a, bd), isInc = cur.inc && cur.inc.has(c);
+          if (L === 'ME') globalThis.addExpense_({ date: n.date, category: c, amount: cur.amount, note: cur.note });                  // no own account found: normal entry on My Account
+          else globalThis.addLgEntry_({ date: n.date, from: isInc ? 'C:' + c : L, to: isInc ? L : 'C:' + c, amount: cur.amount, note: cur.note });   // expense: category plus, YOUR account minus (income: the other way)
+          const D2 = ledLoad(); return { name: ledName(D2, L), bal: ledStatement(D2, L, '', '').close, own: L !== 'ME' };
+        }, acc, 'exp', true);
+      } catch (e) { return stop(e, 'Expense save nahi hua: '); }
       botState.delete(jid);
-      return say('✅ *' + (cur.inc && cur.inc.has(c) ? 'Income' : 'Expense') + ' save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
+      return say('✅ *' + (cur.inc && cur.inc.has(c) ? 'Income' : 'Expense') + ' save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date + '\n🏦 ' + sv.name + (sv.own ? (cur.inc && cur.inc.has(c) ? ' me add hua' : ' me se cut hua') : '') + '\n💳 *Balance: ' + ledBal(sv.bal) + '*\n\n_Dobara kuch record karna ho to *help* bhejo._');
     }
     if (cur.step === 'billPer') {
       const mk = /^\d+$/.test(low) ? (cur.months || [])[parseInt(low, 10) - 1] : ''; if (!mk) return again();          // only the months that were listed
@@ -675,19 +766,17 @@ module.exports = function makeWhatsApp(o) {
       let data;
       try {
         data = await botRun(a => {
-          const inc = new Set(globalThis.readCategories_().filter(c => c.type === 'Income').map(c => c.name));
-          const rows = globalThis.readExpenses_().filter(e => e.date >= from && e.date <= till && !inc.has(e.category)).sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
+          const D = ledLoad(), L = ledPick(D, a, bd), stt = ledStatement(D, L, from, till);          // opening balance carried from before this month, then every entry of the month
           const emp = wantEmp ? globalThis.readEmployees_().find(y => y.id === wantEmp) : null;
-          return { rows, who: (emp && emp.name) || a.name || a.username || 'User' };
+          return { stt, name: ledName(D, L), who: (emp && emp.name) || a.name || a.username || 'User' };
         }, acc, 'exp', false);
       } catch (e) { return stop(e, 'Bill nahi ban saka: '); }
       botState.delete(jid);
-      if (!data.rows.length) return say('🧾 ' + label + ' me koi expense nahi mila.\n\n_Dobara kuch karna ho to *help* bhejo._');
+      if (!data.stt.rows.length) return say('🧾 ' + label + ' me koi entry nahi mili.\n\n_Dobara kuch karna ho to *help* bhejo._');
       const when = pad(n.d) + '-' + pad(n.m) + '-' + n.y;
-      let buf; try { buf = botPdf({ title: 'Expense Bill', who: data.who, period: label, when, rows: data.rows }); } catch (e) { return say('❌ PDF nahi ban saka: ' + botErr(e)); }
+      let buf; try { buf = botPdfStatement({ title: 'Account Bill', account: data.name, who: data.who, period: label, when, open: data.stt.open, rows: data.stt.rows.map(r => Object.assign({}, r, { date: r.date.slice(8, 10) + '-' + r.date.slice(5, 7) + '-' + r.date.slice(2, 4) })), dr: data.stt.dr, cr: data.stt.cr, close: data.stt.close }); } catch (e) { return say('❌ PDF nahi ban saka: ' + botErr(e)); }
       await new Promise(r => setTimeout(r, 700));
-      const tot = data.rows.reduce((x, r) => x + (Number(r.amount) || 0), 0);
-      return s.sock.sendMessage(to, { document: buf, mimetype: 'application/pdf', fileName: 'Expense-Bill-' + label.replace(/\s+/g, '-') + '.pdf', caption: '🧾 *Expense Bill* — ' + label + '\n💰 Total: ₹' + tot.toLocaleString('en-IN') + ' (' + data.rows.length + ' entries)\n\n_Dobara kuch karna ho to *help* bhejo._' });
+      return s.sock.sendMessage(to, { document: buf, mimetype: 'application/pdf', fileName: 'Bill-' + label.replace(/\s+/g, '-') + '.pdf', caption: '🧾 *Bill* — ' + label + '\n👤 ' + data.name + '\n🏁 Opening: ' + ledBal(data.stt.open) + '\n➕ Money in: ₹' + ledMoney(data.stt.dr) + '\n➖ Money out: ₹' + ledMoney(data.stt.cr) + '\n🏦 *Balance: ' + ledBal(data.stt.close) + '*\n📄 ' + data.stt.rows.length + ' entries\n\n_Dobara kuch karna ho to *help* bhejo._' });
     }
     botState.delete(jid);
   }
