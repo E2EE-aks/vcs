@@ -451,6 +451,7 @@ module.exports = function makeWhatsApp(o) {
     return (botCfg = botNorm(j));
   }
   const BOT_TTL = 10 * 60 * 1000;
+  let DL = null; try { DL = require('./dl-server')({ env, warn }); } catch (e) { warn('YouTube downloader', e && e.message); }
   const botState = new Map(), botQ = new Map(), botSeen = new Map();
   const botMatch = (pn, list) => { const d = digits(pn); if (!d) return ''; return list.find(c => d === c || d === CC + c || d.endsWith(c)) || ''; };   // -> the saved number that matches, or ''
   const botDup = (wm, text) => {                                       // WhatsApp can hand us the same message twice: answer it only once
@@ -867,6 +868,7 @@ module.exports = function makeWhatsApp(o) {
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
       if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
+      if (acc0 === 'ADMIN' && DL) opts.push(['dl', 'YouTube Video / Audio download']);
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
@@ -883,8 +885,41 @@ module.exports = function makeWhatsApp(o) {
     const again = () => undefined;                                     // wrong number in the menu: stay quiet   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
+    if (/^dl/.test(cur.step || '') && DL) {                              // YouTube download: 1) video / audio  2) link  3) quality  4) the file comes in this chat
+      if (cur.step === 'dlKind') {
+        if (low !== '1' && low !== '2') return say(cur.prompt);
+        cur.kind = low === '1' ? 'video' : 'audio'; cur.step = 'dlLink';
+        return ask(cur, (cur.kind === 'video' ? '🎬 *Video download*' : '🎵 *Audio download*') + '\n\nKis *YouTube link* se download karna hai? Link yahan bhejo:\n\n_0 = cancel_');
+      }
+      if (cur.step === 'dlLink') {
+        const u = DL.link(t); if (!u) return say('❌ Ye YouTube ka link nahi lag raha. Poora link bhejo (youtube.com / youtu.be):');
+        cur.url = u; cur.step = 'dlQ'; const qs = DL.qualities(cur.kind), E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
+        return ask(cur, '⚙️ *Kis quality me chahiye?*\n\n' + qs.map((q, i) => E[i] + '  ' + DL.qLabel(cur.kind, q)).join('\n') + '\n\n_Number bhejo: 1–' + qs.length + '. Badi quality = badi file (limit ' + DL.maxMb + ' MB)._');
+      }
+      if (cur.step === 'dlQ') {
+        const qs = DL.qualities(cur.kind), q = qs[Number(low) - 1]; if (!/^\d$/.test(low) || !q) return say(cur.prompt);
+        const kind = cur.kind, url = cur.url; botState.delete(jid);
+        await say('⏳ *' + (kind === 'video' ? 'Video' : 'Audio') + ' download ho raha hai* (' + DL.qLabel(kind, q) + ')…\nKuch minute lag sakte hain, file isi chat me aayegi.');
+        let r = null;
+        try {
+          r = await DL.run(kind, q, url);
+          const mb = (r.size / 1048576).toFixed(1), title = r.name.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
+          if (kind === 'audio') await s.sock.sendMessage(to, { audio: { url: r.file }, mimetype: /\.mp3$/i.test(r.file) ? 'audio/mpeg' : 'audio/mp4', fileName: r.name });
+          else if (r.size <= 50 * 1048576) await s.sock.sendMessage(to, { video: { url: r.file }, mimetype: 'video/mp4', caption: '🎬 ' + title + '\n' + DL.qLabel(kind, q) + ' · ' + mb + ' MB' });
+          else await s.sock.sendMessage(to, { document: { url: r.file }, mimetype: 'video/mp4', fileName: r.name, caption: '🎬 ' + title + '\n' + DL.qLabel(kind, q) + ' · ' + mb + ' MB' });
+          return say('✅ *' + (kind === 'video' ? 'Video' : 'Audio') + ' mil gaya* — ' + title + ' (' + mb + ' MB)\n\n_Dobara kuch karna ho to *help* bhejo._');
+        } catch (e) { return say('❌ Download nahi hua: ' + botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); }
+        finally { if (r) DL.done(r.dir); }
+      }
+      return;
+    }
     if (cur.step === 'menu') {
       const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
+      if (key === 'dl') {
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        cur.step = 'dlKind';
+        return ask(cur, '📥 *YouTube Download*\n\nKya chahiye?\n\n1️⃣  Video\n2️⃣  Audio\n\n_Number bhejo: 1 ya 2  ·  0 = cancel_');
+      }
       if (key === 'vcs') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
