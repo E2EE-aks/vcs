@@ -251,7 +251,7 @@ function makeApp(store, env) {
 
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });
-  const YT = require('./yt-server')({ env, warn });
+  const YT = require('./yt-server')({ env, warn, sign, dl: () => WA.dl() });
   let vcsMirror = null;                                                                     // set below: copies the app's alerts to WhatsApp
   const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn), mirror: (u, m) => { if (vcsMirror) vcsMirror(u, m); } });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
   // ---------- ₹1 joining payment: checked automatically in the ADMIN's Gmail (read-only link made in the Mail tab) ----------
@@ -1789,6 +1789,7 @@ function makeApp(store, env) {
   };
   return { handle, warm: () => withWb(async () => { try { const P = globalThis.PropertiesService.getScriptProperties(); if (String(P.getProperty('DEPLOY_PENDING') || '')) { P.setProperty('DEPLOY_STAMP', String(Date.now())); P.setProperty('DEPLOY_PENDING', ''); } } catch (e) {} }),   // a WhatsApp upload was waiting for this restart: the new version is live now -> new browser-cache stamp
       // load the sheet right at start-up so the first visitor does not wait for it
+           ytFile: q => YT.file(q),
            waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r), srcOpen: q => srcOpen(q),
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            rtMax: RT_MAX, rtRe: RT_MIME, rtUp: (t, q, b) => rtUpload(t, q, b).catch(errOut),
@@ -1915,6 +1916,12 @@ function start(app, env) {
     }
     if (rq.method === 'GET' && url.pathname === '/vcs-src' && app.srcOpen) {                   // source-code ZIP download link (signed, expires)
       return app.srcOpen(Object.fromEntries(url.searchParams)).then(o => { rs.writeHead(o.code, o.headers); rs.end(o.body); }).catch(() => { rs.writeHead(500); rs.end('Error'); });
+    }
+    if (rq.method === 'GET' && url.pathname === '/yt/file' && app.ytFile) {                  // YT Download: stream the finished file (one-time 2-minute ticket)
+      const o = app.ytFile(Object.fromEntries(url.searchParams));
+      if (o.code !== 200) { rs.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' }); return rs.end('<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><body style="font-family:system-ui;padding:32px"><h2>Download expire ho gaya</h2><p>App me wapas jaakar dobara download karo.</p>'); }
+      rs.writeHead(200, { 'Content-Type': /\.mp3$/i.test(o.name) ? 'audio/mpeg' : /\.m4a$/i.test(o.name) ? 'audio/mp4' : 'video/mp4', 'Content-Length': String(o.size), 'Content-Disposition': 'attachment; filename="' + o.name.replace(/[^\w.\- ]/g, '_') + '"; filename*=UTF-8\'\'' + encodeURIComponent(o.name), 'Cache-Control': 'private, no-store' });
+      const st = fs.createReadStream(o.path); st.on('error', () => rs.destroy()); rs.on('close', () => st.destroy()); st.pipe(rs); return;
     }
     if (rq.method === 'GET' && url.pathname === '/wa/media' && app.waOpen) {                // WhatsApp profile photo / photo / video / voice / file (signed link, Range for seeking)
       return app.waOpen(Object.fromEntries(url.searchParams), rq.headers.range).then(o => {

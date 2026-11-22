@@ -1513,5 +1513,5 @@ module.exports = function makeWhatsApp(o) {
     const ids = [...users.keys()].filter(u => hasSaved(u));
     Promise.race([Promise.all(ids.map(u => backup(u))), new Promise(r => setTimeout(r, 9000))]).catch(() => {}).then(() => process.exit(0));
   });
-  return { actions: ACTIONS, route, upload, media, max: MAX, sendText, isOpen, licCfg };
+  return { actions: ACTIONS, route, upload, media, max: MAX, sendText, isOpen, licCfg, dl: () => DL };
 };

@@ -5,7 +5,7 @@
    Playback happens in the browser through YouTube's own embedded player. Nothing is downloaded or stored. */
 module.exports = function makeYouTube(o) {
   const { env, warn } = o;
-  const ACTIONS = new Set(['ytConfig', 'ytHome', 'ytSearch', 'ytRelated']);
+  const ACTIONS = new Set(['ytConfig', 'ytHome', 'ytSearch', 'ytRelated', 'ytDlConfig', 'ytDlStart', 'ytDlStatus']);
   const CC = String(env.MUSIC_COUNTRY || 'IN').toUpperCase().slice(0, 2);
   const KEY = env.YT_API_KEY || '';
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -40,8 +40,49 @@ module.exports = function makeYouTube(o) {
     const j = await Y('search', Object.assign({ part: 'snippet', type: 'video', maxResults: 20, regionCode: CC, safeSearch: 'moderate', q }, extra || {}));
     return enrich(clean((j.items || []).map(x => ({ id: x.id && x.id.videoId }))).map(x => x.id));
   }
+  /* ---------- download for every logged-in user (Tools > YT Download): video / song -> file on this phone ----------
+     Same engine as the WhatsApp helper (dl-server.js, shared cookies). One download at a time on the server, others wait in a short queue.
+     Flow: ytDlStart -> job id;  ytDlStatus (poll) -> queue / run / done (+ one-time ticket);  GET /yt/file?id&k=ticket streams the file.  Files are deleted 15 min later. */
+  const jobs = new Map(); let chain = Promise.resolve(), waiting = 0;
+  const DLQ = 6, KEEP = 15 * 60000, uidOf = p => String(p).split('|')[0];
+  const dl = () => (typeof o.dl === 'function' ? o.dl() : o.dl) || null;
+  const drop = (id) => { const j = jobs.get(id); if (!j) return; jobs.delete(id); try { const d = dl(); if (d && j.dir) d.done(j.dir); } catch (e) {} };
+  function startJob(uid, kind, q, url) {
+    const id = require('crypto').randomBytes(12).toString('hex'), j = { id, uid, kind, q, state: 'queue', msg: 'Line me hai…', at: Date.now() };
+    jobs.set(id, j); waiting++;
+    chain = chain.then(async () => {
+      waiting--; j.state = 'run'; j.msg = 'Download ho raha hai… (1-3 minute lag sakte hain)';
+      try { const r = await dl().run(kind, q, url); Object.assign(j, { state: 'done', msg: '', file: r.file, name: r.name, size: r.size, dir: r.dir }); }
+      catch (e) { Object.assign(j, { state: 'error', msg: String((e && e.message) || e).slice(0, 300) }); }
+      j.at = Date.now(); const tm = setTimeout(() => drop(id), KEEP); if (tm.unref) tm.unref();
+    }).catch(() => {});
+    return j;
+  }
+  function dlRoute(req, uid) {
+    const D = dl(); if (!D) return { ok: false, error: 'Download abhi server par available nahi hai.' };
+    if (req.action === 'ytDlConfig') return { ok: true, maxMb: D.maxMb, hasCookies: null, video: D.qualities('video').map(x => D.qLabel('video', x)), audio: D.qualities('audio').map(x => D.qLabel('audio', x)) };
+    if (req.action === 'ytDlStart') {
+      const url = D.link(String(req.url || '')); if (!url) return { ok: false, error: 'Ye YouTube ka link nahi lag raha. Poora link daalo (youtube.com / youtu.be).' };
+      const kind = req.kind === 'audio' ? 'audio' : 'video', qs = D.qualities(kind), q = qs[Number(req.qi)]; if (!q) return { ok: false, error: 'Quality sahi nahi hai.' };
+      for (const j of jobs.values()) if (j.uid === uid && (j.state === 'queue' || j.state === 'run')) return { ok: false, error: 'Aapka ek download pehle se chal raha hai. Thoda ruko.' };
+      if (waiting >= DLQ) return { ok: false, error: 'Abhi bahut log download kar rahe hain. Thodi der baad try karo.' };
+      const j = startJob(uid, kind, q, url); return { ok: true, id: j.id };
+    }
+    const j = jobs.get(String(req.id || ''));
+    if (!j || j.uid !== uid) return { ok: false, error: 'Ye download ab nahi mila (15 minute baad hat jaata hai). Dobara start karo.', code: 'YTDL' };
+    if (j.state !== 'done') return { ok: true, state: j.state, msg: j.msg, ahead: j.state === 'queue' ? waiting : 0 };
+    const exp = Date.now() + 120000, k = exp + '.' + o.sign(j.id + '|' + exp);
+    return { ok: true, state: 'done', name: j.name, size: j.size, ticket: k };
+  }
+  /* GET /yt/file?id=..&k=exp.sig  -> { code, path, name, size } for server.js to stream */
+  function file(q) {
+    const id = String(q.id || ''), [exp, sig] = String(q.k || '').split('.'), j = jobs.get(id);
+    if (!j || j.state !== 'done' || !(Number(exp) > Date.now()) || !sig || o.sign(id + '|' + exp) !== sig) return { code: 404 };
+    return { code: 200, path: j.file, name: j.name, size: j.size };
+  }
   async function route(req) {
-    authUid(req.token);
+    const who = authUid(req.token);
+    if (req.action === 'ytDlConfig' || req.action === 'ytDlStart' || req.action === 'ytDlStatus') { try { return dlRoute(req, uidOf(who)); } catch (e) { warn('YT download', e && e.message); return { ok: false, error: e.message }; } }
     if (req.action === 'ytConfig') return { ok: true, hasKey: !!KEY, clientId: env.YT_CLIENT_ID || '' };
     if (!KEY) return { ok: false, code: 'YT_NOKEY', error: 'YouTube API key abhi server me nahi lagi hai.' };
     try {
@@ -63,5 +104,5 @@ module.exports = function makeYouTube(o) {
     } catch (e) { warn('YouTube', e && e.message); return { ok: false, error: e.message }; }
     return { ok: false, error: 'Unknown action' };
   }
-  return { actions: ACTIONS, route };
+  return { actions: ACTIONS, route, file };
 };

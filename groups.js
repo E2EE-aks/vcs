@@ -13,7 +13,7 @@
     { id: 'money', lb: 'Paisa', ic: 'wallet', items: [['expenses', 'Expenses'], ['lic', 'LIC'], ['pay', 'Plans & Payments']] },
     { id: 'talk',  lb: 'Baat',  ic: 'chat',   items: [['chat', 'Chat'], ['mail', 'Mail'], ['whatsapp', 'WhatsApp'], ['stocks', 'Stocks'], ['aitab', 'AI'], ['telegram', 'Telegram']] },
     { id: 'vault', lb: 'Vault', ic: 'lock',   items: [['passwords', 'Passwords'], ['links', 'Links'], ['websites', 'Websites']] },
-    { id: 'tools', lb: 'Tools', ic: 'grid',   items: [['pic2pdf', 'Pic2PDF'], ['pdf2pics', 'PDF2Pics'], ['ftp', 'FTP'], ['statuses', 'Status Saver'], ['music', 'Music'], ['youtube', 'YouTube']] },
+    { id: 'tools', lb: 'Tools', ic: 'grid',   items: [['pic2pdf', 'Pic2PDF'], ['pdf2pics', 'PDF2Pics'], ['ftp', 'FTP'], ['statuses', 'Status Saver'], ['music', 'Music'], ['youtube', 'YouTube'], ['ytdl', 'YT Download']] },
     { id: 'admin', lb: 'Admin', ic: 'shield', admin: true, items: [['logins', 'Logins'], ['deploy', 'Deploy'], ['updates', 'Updates'], ['version', 'Version'], ['config', 'Config'], ['settings', 'Settings']] }
   ];
   var SV = function(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>'; };
