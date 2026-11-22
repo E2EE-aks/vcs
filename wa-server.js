@@ -695,6 +695,70 @@ module.exports = function makeWhatsApp(o) {
     return say('📎 *' + path + '* mil gayi (' + cur.files.length + ' file)\nAur file bhejo, ya *done* likho. Warna ' + (VCS_WAIT / 1000) + ' second me apne aap upload ho jayegi.');
   }
 
+  /* ---------- VCS Management approvals (Approve / Deny) on WhatsApp ----------
+     Every delete request and every payment request that waits for the main admin ("VCS Management" chat) is also sent to the alert number.
+     Answer there: *reply to that message* with 1 = Approve / 2 = Deny, or write  ok <code>  /  no <code>  (the code is printed in the message).
+     It runs the very same decideDelete_ / payDecide_ as the Approve / Decline buttons in the app, so the user gets the same chat message.
+     Switches: Deploy tab > WhatsApp alerts (same number, same "VCS Management alerts" switch). Only a bot number that belongs to the main admin can decide. */
+  const APR_KEY = 'VCS_APR', APR_YES = new Set(['1', 'ok', 'approve', 'approved', 'haan', 'han', 'yes', 'y']), APR_NO = new Set(['2', 'no', 'deny', 'denied', 'decline', 'reject', 'nahi', 'na', 'n']);
+  async function aprLoad() {
+    let j = {}; try { j = JSON.parse(await withWb(() => PROPS().getProperty(APR_KEY) || '') || '{}'); } catch (e) {}
+    return { seen: Array.isArray(j.seen) ? j.seen : [], map: j.map && typeof j.map === 'object' ? j.map : {} };
+  }
+  const aprSave = a => withWb(() => {
+    const ks = Object.keys(a.map); ks.slice(0, Math.max(0, ks.length - 60)).forEach(k => { delete a.map[k]; }); a.seen = a.seen.slice(-120);
+    PROPS().setProperty(APR_KEY, JSON.stringify(a)); return true;
+  });
+  const aprPending = () => (globalThis.delReqs_() || []).filter(x => x.s === 'p').map(x => ({ k: 'del', id: x.id, r: x }))
+    .concat((globalThis.payReqs_() || []).filter(x => x.status === 'pending').map(x => ({ k: 'pay', id: x.id, r: x })));
+  function aprText(x) {
+    const r = x.r, code = x.id.slice(0, 6);
+    const head = x.k === 'del'
+      ? '🗑 *Delete request — approval chahiye*\n\n👤 ' + (r.n || '—') + '\n📄 ' + (r.d || '') + '\n\n_Approve = entry delete ho jayegi. Deny = kuch nahi badlega._'
+      : '💳 *Payment request — approval chahiye*\n\n👤 ' + (r.name || r.username || '—') + (r.username ? ' (' + r.username + ')' : '') + '\n📦 Plan: ' + (r.planName || '—') + ' · ₹' + (r.price || 0) +
+        '\n🔖 UTR / Ref: ' + (r.utr || '—') + (r.note ? '\n📝 ' + r.note : '') + '\n\n_Pehle bank / UPI me paisa check kar lo._';
+    return head + '\n\n✅ *Approve:* is message ko Reply karke *1* bhejo (ya *ok ' + code + '*)\n❌ *Deny:* is message ko Reply karke *2* bhejo (ya *no ' + code + '*)';
+  }
+  let aprBusy = false;
+  async function aprWatch() {
+    if (aprBusy || !isOpen('ADMIN')) return; aprBusy = true;
+    try {
+      let cfg = {}; try { cfg = JSON.parse(await withWb(() => PROPS().getProperty('VCS_WA_CFG') || '') || '{}'); } catch (e) {}
+      if (cfg.on === false || cfg.on === 'false' || cfg.mirror === false || cfg.mirror === 'false') return;
+      const to = String(cfg.to || '').replace(/[^\d+]/g, '') || (await licCfg()).to; if (!to) return;
+      const a = await aprLoad(), list = await withWb(() => aprPending());
+      for (const x of list.filter(y => !a.seen.includes(y.id)).slice(0, 5)) {
+        const mid = await sendText('ADMIN', to, aprText(x));           // marked as sent only after it really went out
+        a.seen.push(x.id); if (typeof mid === 'string') a.map[mid] = x.k + ':' + x.id;
+        await aprSave(a); await new Promise(r => setTimeout(r, 2500));
+      }
+    } catch (e) { warn('VCS approvals on WhatsApp', e && e.message); } finally { aprBusy = false; }
+  }
+  { const t = setInterval(() => aprWatch().catch(() => {}), 45000); if (t.unref) t.unref(); }
+  async function aprHandle(jid, low, num, wm, say) {                    // true = this message was an approval answer (handled), false = not ours
+    const m = /^([a-z0-9]+)(?:\s+([a-f0-9]{4,10}))?$/.exec(low); if (!m) return false;
+    const word = m[1], code = m[2] || '', approve = APR_YES.has(word);
+    if (!approve && !APR_NO.has(word)) return false;
+    const ci = wm && wm.message && (wm.message.extendedTextMessage || {}).contextInfo, qid = ci && ci.stanzaId ? String(ci.stanzaId) : '';
+    let ref = null; if (qid) { const a = await aprLoad(), v = String(a.map[qid] || '').split(':'); if (v.length === 2) ref = { k: v[0], id: v[1] }; }
+    if (!ref && !code) return false;                                    // a bare 1 / 2 / ok counts only when it quotes one of the approval messages
+    const bd = ((await botGet()).bind || {})[num] || {};
+    if ((bd.acc || 'ADMIN') !== 'ADMIN') { await say('❌ Approve / Deny sirf main admin ke number se ho sakta hai.'); return true; }
+    let out;
+    try {
+      out = await botRun(() => {
+        const it = aprPending().find(x => ref ? x.k === ref.k && x.id === ref.id : x.id.startsWith(code));
+        if (!it) return null;
+        if (it.k === 'del') globalThis.decideDelete_({ id: it.id, approve }); else globalThis.payDecide_({ id: it.id, approve });
+        return it;
+      }, 'ADMIN');
+    } catch (e) { await say('❌ ' + botErr(e)); return true; }
+    if (!out) { await say(ref ? 'ℹ️ Ye request pehle hi decide ho chuki hai (app ya WhatsApp se).' : '❌ Is code ki koi pending request nahi mili.'); return true; }
+    const who = out.k === 'del' ? (out.r.n || 'User') + ' — ' + (out.r.d || 'delete request') : (out.r.name || out.r.username || 'User') + ' — ' + (out.r.planName || 'payment') + ' ₹' + (out.r.price || 0);
+    await say((approve ? '✅ *Approve ho gaya*' : '❌ *Deny kar diya*') + '\n' + who + '\n\n_User ko app ke chat me bata diya gaya hai._');
+    return true;
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -718,6 +782,7 @@ module.exports = function makeWhatsApp(o) {
       return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
     if (BOT_HI.test(low)) return menu();
+    if (await aprHandle(jid, low, num, wm, say)) return;                // Approve / Deny answer to a VCS Management request
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
@@ -1262,8 +1327,8 @@ module.exports = function makeWhatsApp(o) {
   async function sendText(uid, to, text) {
     const r = await connected(uid), jid = toJid(to);
     await sendGuard(r, jid);
-    await r.sock.sendMessage(jid, { text: String(text || '').slice(0, 4000) });
-    return true;
+    const sent = await r.sock.sendMessage(jid, { text: String(text || '').slice(0, 4000) });
+    return (sent && sent.key && sent.key.id) || true;                    // message id (used to match a quoted Approve / Deny reply)
   }
   /* AUTO-CONNECT: after a deploy / restart the main admin's WhatsApp comes back BY ITSELF (nobody has to open the website).
      The saved login is restored from the sheet backup and connected; if it drops or a try fails, it is tried again every minute.
