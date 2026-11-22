@@ -228,7 +228,7 @@ function makeApp(store, env) {
   const TG = require('./tg-server')({ env, enc, dec, sign, warn, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m) });   // notify = phone notification for a new Telegram message
 
   // ---------- WhatsApp (per-user account linked by QR code; see wa-server.js) ----------
-  const WA = require('./wa-server')({ env, warn, sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m) });   // notify = phone notification for a new WhatsApp message
+  const WA = require('./wa-server')({ env, warn, sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m) });   // notify = phone notification for a new WhatsApp message
 
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });
@@ -747,6 +747,21 @@ function makeApp(store, env) {
     await gh('PATCH', '/git/refs/heads/' + br, { sha: nc.sha }, repo);
     return { sha: String(nc.sha).slice(0, 7), url: nc.html_url, changed: changed.map(f => ({ path: f.path, isNew: !cur.has(f.path) })), skipped, repo, branch };
   }
+  // used by the WhatsApp helper (menu 4 = VCS): the main admin's number sends files, they go to GitHub in ONE commit, Render redeploys.  The browser cache stamp is refreshed when the new version starts (see start-up below).
+  globalThis.WA_DEPLOY_ = async (files, message) => {
+    if (!(GH.repo && GH.token)) throw new Error('GitHub connect nahi hai (Render me GITHUB_TOKEN aur GITHUB_REPO daalo).');
+    if (!Array.isArray(files) || !files.length || files.length > 20) throw new Error('1 se 20 file bhejo.');
+    let total = 0; const seen = new Set(), bufs = [];
+    for (const f of files) {
+      if (!f || !depPathOk(f.path)) throw new Error('"' + (f && f.path) + '" sahi file path nahi hai.');
+      if (seen.has(f.path)) throw new Error('"' + f.path + '" do baar aayi.'); seen.add(f.path);
+      total += f.buf.length; if (f.buf.length > DEP_MAX || total > DEP_TOTAL) throw new Error('Files bahut badi hain (max ' + (DEP_MAX / 1048576) + ' MB har file).');
+      bufs.push({ path: f.path, buf: f.buf });
+    }
+    const r = await depCommit(bufs, String(message || 'Update (from WhatsApp)').slice(0, 120), GH.repo, GH.branch);
+    if (!r.unchanged) await withWb(() => { globalThis.PropertiesService.getScriptProperties().setProperty('DEPLOY_PENDING', '1'); });
+    return r;
+  };
 
   // ---------- Version tab: build an Android APK from chosen repository files (GitHub Actions workflow .github/workflows/build-apk.yml) ----------
   const VER_WF = 'build-apk.yml';
@@ -1695,7 +1710,8 @@ function makeApp(store, env) {
     if (r0 && r0.action === 'chatSend') p.then(res => { if (res && res.ok) PUSH.chat(r0, res).catch(e => warn('push', e && e.message)); }, () => {});
     return p;
   };
-  return { handle, warm: () => withWb(async () => {}),   // load the sheet right at start-up so the first visitor does not wait for it
+  return { handle, warm: () => withWb(async () => { try { const P = globalThis.PropertiesService.getScriptProperties(); if (String(P.getProperty('DEPLOY_PENDING') || '')) { P.setProperty('DEPLOY_STAMP', String(Date.now())); P.setProperty('DEPLOY_PENDING', ''); } } catch (e) {} }),   // a WhatsApp upload was waiting for this restart: the new version is live now -> new browser-cache stamp
+      // load the sheet right at start-up so the first visitor does not wait for it
            waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r),
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            rtMax: RT_MAX, rtRe: RT_MIME, rtUp: (t, q, b) => rtUpload(t, q, b).catch(errOut),

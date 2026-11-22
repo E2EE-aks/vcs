@@ -16,6 +16,7 @@ const crypto = require('crypto');
 
 module.exports = function makeWhatsApp(o) {
   const { env, warn, sign, withWb, enc, dec } = o;
+  const deployFiles = o.deploy;                              // (files, message) -> commit on GitHub (set by server.js); Render then deploys the website
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
   const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward', 'waBotGet', 'waBotSet', 'waBotPeople']);
@@ -412,7 +413,7 @@ module.exports = function makeWhatsApp(o) {
     return !!dup;
   };
   const botToday = () => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value])); return { date: p.year + '-' + p.month + '-' + p.day, y: Number(p.year), m: Number(p.month), d: Number(p.day) }; };
-  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n\n_Number bhejo: 1, 2 ya 3_';
+  const BOT_MENU = '👋 *Kya record karna hai?*\n\n1️⃣  Expense\n2️⃣  Attendance\n3️⃣  Bill PDF\n4️⃣  VCS (website update)\n\n_Number bhejo: 1, 2, 3 ya 4_';
   /* run fn as the account this number belongs to, with fresh sheet data (changes are saved).
      sec = 'att' | 'exp': that account must have that right (edit = true -> needs EDIT access, otherwise view is enough) */
   const botRun = (fn, acc, sec, edit) => withWb(() => {
@@ -465,8 +466,47 @@ module.exports = function makeWhatsApp(o) {
     return Buffer.from(out, 'latin1');
   }
 
+  /* option 4 (VCS): files sent in the chat are committed to GitHub in ONE commit; Render then redeploys the website */
+  const VCS_WAIT = 15000;                                               // seconds of quiet after the last file -> upload
+  async function botVcsFlush(s, jid, cur) {
+    if (botState.get(jid) !== cur || cur.step !== 'vcsFile' || cur.busy) return;
+    if (cur.timer) { clearTimeout(cur.timer); cur.timer = null; }
+    const files = cur.files || []; if (!files.length) return;
+    cur.busy = true;
+    const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
+    await say('⏳ ' + files.length + ' file GitHub pe upload ho rahi hai…');
+    try {
+      const r = await deployFiles(files.map(f => ({ path: f.path, buf: f.buf })), 'Update ' + files.map(f => f.path.split('/').pop()).slice(0, 6).join(', ') + ' (from WhatsApp)');
+      botState.delete(jid);
+      if (r.unchanged) return say('ℹ️ Ye file(s) GitHub par pehle se bilkul same hain — kuch badla nahi, isliye deploy nahi hoga.\n\n_Dobara kuch karna ho to *help* bhejo._');
+      return say('✅ *GitHub pe upload ho gaya*\n📄 ' + r.changed.map(x => x.path + (x.isNew ? ' (new)' : '')).join(', ') + (r.sha ? '\n🔖 Commit ' + r.sha : '')
+        + (r.skipped && r.skipped.length ? '\n➖ Same thi, chhodi: ' + r.skipped.join(', ') : '')
+        + '\n\n🚀 Render ab deploy karega — website 1-3 minute me live ho jayegi.\n\n_Dobara kuch karna ho to *help* bhejo._');
+    } catch (e) { botState.delete(jid); return say('❌ Upload nahi hua: ' + botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); }
+  }
+  async function botVcsFile(s, jid, cur, wm, low) {                      // one message while waiting for files
+    const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
+    if (['done', 'ok', 'upload'].includes(low)) { if (!(cur.files || []).length) return say('📎 Pehle file bhejo (Document ke roop me).'); return botVcsFlush(s, jid, cur); }
+    const k = wm && wm.message ? kindText(wm.message) : null;
+    if (!k || k.kind !== 'file') return say('📎 File ko *Document* ke roop me bhejo (📎 → Document).\n\n_(0 = cancel)_');
+    if ((k.size || 0) > 25 * 1048576) return say('❌ *' + k.name + '* 25 MB se badi hai.');
+    let name = String(k.name || '').replace(/\s*\(\d+\)(\.[^.\/]+)?$/, '$1');   // "app (1).js" -> "app.js"
+    const cap = String(k.text || '').trim(), path = /^[\w.\-\/]+\.\w+$/.test(cap) && !cap.startsWith('/') ? cap : name;   // caption like public/app.js = folder
+    if (!/^[\w.\-\/]+$/.test(path)) return say('❌ File ka naam sahi nahi (*' + path + '*). Naam me space ya khaas chinh na ho — ya caption me sahi path likho.');
+    let buf; try { buf = await L().downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage }); } catch (e) { return say('❌ File download nahi hui, dobara bhejo.'); }
+    if (!buf || !buf.length) return say('❌ File khali mili, dobara bhejo.');
+    if (/\.(js|gs|json)$/i.test(path)) {                                 // a broken script would break the live website: refuse it here
+      try { const txt = buf.toString('utf8'); if (/\.json$/i.test(path)) JSON.parse(txt); else new (require('vm').Script)(txt.replace(/^#!.*/, ''), { filename: path }); }
+      catch (e) { return say('❌ *' + path + '* me syntax error hai, upload nahi ki:\n' + botErr(e) + '\n\nSahi file dobara bhejo.'); }
+    }
+    cur.files = (cur.files || []).filter(f => f.path !== path); cur.files.push({ path, buf });
+    if (cur.timer) clearTimeout(cur.timer);
+    cur.timer = setTimeout(() => { botQ.set(jid, (botQ.get(jid) || Promise.resolve()).then(() => botVcsFlush(s, jid, cur)).catch(e => warn('WhatsApp bot', e && e.message))); }, VCS_WAIT);
+    return say('📎 *' + path + '* mil gayi (' + cur.files.length + ' file)\nAur file bhejo, ya *done* likho. Warna ' + (VCS_WAIT / 1000) + ' second me apne aap upload ho jayegi.');
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
-  async function botStep(s, jid, text, num) {
+  async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
     const say = async t => { await new Promise(r => setTimeout(r, 700)); return s.sock.sendMessage(to, { text: t }); };
     const t = String(text || '').trim(), low = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -475,12 +515,19 @@ module.exports = function makeWhatsApp(o) {
     const menu = () => { const c = { step: 'menu', at: Date.now() }; botState.set(jid, c); return ask(c, BOT_MENU); };
     if (BOT_HI.test(low)) return menu();
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
-    if (['0', 'cancel', 'stop'].includes(low)) { botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
+    if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
     const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
-    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance) ya *3* (Bill PDF) bhejo. Cancel: *0*') : say('🙏 Samajh nahi aaya.\n\n' + cur.prompt);
+    const again = () => cur.step === 'menu' ? say('🙏 Number *1* (Expense), *2* (Attendance), *3* (Bill PDF) ya *4* (VCS) bhejo. Cancel: *0*') : say('🙏 Samajh nahi aaya.\n\n' + cur.prompt);
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
+    if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (cur.step === 'menu') {
+      if (low === '4') {
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
+        cur.step = 'vcsFile'; cur.files = [];
+        return ask(cur, '🌐 *VCS — website update*\n\nFile ko *Document* ke roop me bhejo (📎 → Document). Ek ya kai file bhej sakte ho — sab ek hi baar me GitHub pe jayengi aur website live hogi.\n\n_Folder me daalni ho to file ke caption me path likho, jaise_ *public/app.js*\n\n_(0 = cancel)_');
+      }
       if (low === '1') {
         try { await botRun(() => true, acc, 'exp', true); } catch (e) { return stop(e, ''); }
         cur.step = 'expAmt'; return ask(cur, '💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = cancel)_');
@@ -492,8 +539,12 @@ module.exports = function makeWhatsApp(o) {
         return ask(cur, '🗓️ *' + (e.name || 'Attendance') + '*\n\n1️⃣  Present\n2️⃣  Absent\n\n_(0 = cancel)_');
       }
       if (low === '3') {
-        try { await botRun(() => true, acc, 'exp', false); } catch (e) { return stop(e, ''); }
-        cur.step = 'billPer'; return ask(cur, '🧾 *Bill PDF* — kaun si period?\n\n1️⃣  Aaj\n2️⃣  Is mahine\n3️⃣  Pichhla mahina\n\n_(0 = cancel)_');
+        const n0 = botToday(), MN0 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const since = (n0.y - 1) + '-' + String(n0.m).padStart(2, '0');            // last 12 months only (this month + the 11 before it)
+        let ms; try { ms = await botRun(() => { const inc = new Set(globalThis.readCategories_().filter(c => c.type === 'Income').map(c => c.name)); return [...new Set(globalThis.readExpenses_().filter(e => !inc.has(e.category) && /^\d{4}-\d{2}/.test(e.date)).map(e => e.date.slice(0, 7)))].filter(k => k > since).sort().reverse(); }, acc, 'exp', false); } catch (e) { return stop(e, ''); }
+        if (!ms.length) { botState.delete(jid); return say('🧾 Pichhle 1 saal me koi expense record nahi hai.\n\n_Dobara kuch karna ho to *help* bhejo._'); }
+        cur.months = ms; cur.step = 'billPer';
+        return ask(cur, '🧾 *Bill PDF* — kaun sa mahina?\n\n' + ms.map((k, i) => (i + 1) + '. ' + MN0[Number(k.slice(5, 7)) - 1] + ' ' + k.slice(0, 4)).join('\n') + '\n\n_(0 = cancel)_');
       }
       return again();
     }
@@ -514,12 +565,12 @@ module.exports = function makeWhatsApp(o) {
     if (cur.step === 'expAmt') {
       const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return say('Amount samajh nahi aaya. Aise bhejo: *150 chai*');
       const amount = Number(m[1].replace(',', '.')); if (!(amount > 0)) return say('Amount 0 se zyada hona chahiye.');
-      let ct; try { ct = await botRun(() => { const l = globalThis.readCategories_(); return { exp: l.filter(c => c.type !== 'Income').map(c => c.name), inc: l.filter(c => c.type === 'Income').map(c => c.name) }; }, acc, 'exp', true); } catch (e) { return stop(e, ''); }   // this user's own categories only
+      let ct; try { ct = await botRun(a => { const l = globalThis.readCategories_(); return { who: String(a.name || a.username || ''), exp: l.filter(c => c.type !== 'Income').map(c => c.name), inc: l.filter(c => c.type === 'Income').map(c => c.name) }; }, acc, 'exp', true); } catch (e) { return stop(e, ''); }   // this user's own categories only
       const cats = ct.exp.concat(ct.inc);
       if (!cats.length) { botState.delete(jid); return say('❌ Koi category nahi mili. Pehle app me category banao.'); }
       cur.amount = amount; cur.note = t.replace(m[0], '').replace(/\s+/g, ' ').trim(); cur.cats = cats; cur.inc = new Set(ct.inc); cur.step = 'expCat';
       const lines = (arr, off) => arr.map((c, i) => (off + i + 1) + '. ' + c).join('\n');
-      return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + '\n\n*Category chuno (number bhejo):*' + (ct.exp.length ? '\n\n*Expense*\n' + lines(ct.exp, 0) : '') + (ct.inc.length ? '\n\n*Income*\n' + lines(ct.inc, ct.exp.length) : '') + '\n\n_(0 = cancel)_');
+      return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + (ct.who ? '\n👤 ' + ct.who : '') + '\n\n*Category chuno (number bhejo):*' + (ct.exp.length ? '\n\n*Expense*\n' + lines(ct.exp, 0) : '') + (ct.inc.length ? '\n\n*Income*\n' + lines(ct.inc, ct.exp.length) : '') + '\n\n_(0 = cancel)_');
     }
     if (cur.step === 'expCat') {
       const c = cur.cats[parseInt(low, 10) - 1] || cur.cats.find(x => low && String(x).toLowerCase() === low) || cur.cats.find(x => low.length > 1 && String(x).toLowerCase().includes(low)); if (!c) return again();
@@ -530,11 +581,9 @@ module.exports = function makeWhatsApp(o) {
       return say('✅ *' + (cur.inc && cur.inc.has(c) ? 'Income' : 'Expense') + ' save ho gaya*\n💰 ₹' + cur.amount + '\n🏷️ ' + c + (cur.note ? '\n📝 ' + cur.note : '') + '\n📅 ' + n.date + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
     }
     if (cur.step === 'billPer') {
-      if (!['1', '2', '3'].includes(low)) return again();
+      const mk = /^\d+$/.test(low) ? (cur.months || [])[parseInt(low, 10) - 1] : ''; if (!mk) return again();          // only the months that were listed
       const n = botToday(), pad = x => String(x).padStart(2, '0'), MN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      let from, till, label;
-      if (low === '1') { from = till = n.date; label = pad(n.d) + '-' + pad(n.m) + '-' + n.y; }
-      else { let y = n.y, m = n.m; if (low === '3') { m -= 1; if (m < 1) { m = 12; y -= 1; } } from = y + '-' + pad(m) + '-01'; till = y + '-' + pad(m) + '-31'; label = MN[m - 1] + ' ' + y; }
+      const from = mk + '-01', till = mk + '-31', label = MN[Number(mk.slice(5, 7)) - 1] + ' ' + mk.slice(0, 4);
       let data;
       try {
         data = await botRun(a => {
@@ -562,9 +611,9 @@ module.exports = function makeWhatsApp(o) {
       botGet().then(c => {
         const num = c.on && c.nums.length ? botMatch(pnOf(s, jid), c.nums) : ''; if (!num) return;
         const k = kindText(wm.message), text = k && k.kind === 'text' ? (k.text || '') : '';
-        if (botDup(wm, text)) return;                                   // the same message again -> no second answer
+        if (botDup(wm, text || (k && k.kind !== 'text' ? '#' + String(wm.key.id || '') : ''))) return;                                   // the same message again -> no second answer
         const prev = botQ.get(jid) || Promise.resolve();                // one message at a time per chat
-        botQ.set(jid, prev.then(() => botStep(s, jid, text, num)).catch(e => warn('WhatsApp bot', e && e.message)));
+        botQ.set(jid, prev.then(() => botStep(s, jid, text, num, wm)).catch(e => warn('WhatsApp bot', e && e.message)));
       }).catch(e => warn('WhatsApp bot', e && e.message));
     } catch (e) { warn('WhatsApp bot', e && e.message); }
   }
@@ -742,7 +791,7 @@ module.exports = function makeWhatsApp(o) {
       const people = await withWb(() => {
         const set = globalThis.readSettings_().values, out = [];
         [globalThis.getAccount_('ADMIN', set)].concat(globalThis.readUsers_().filter(u => u.active)).forEach(a => {
-          try { globalThis.buildCtx_(a.id); globalThis.readEmployees_().forEach(e => out.push({ acc: a.id, accName: String(a.name || a.username || a.id), emp: e.id, empName: String(e.name || '') })); } catch (e) {}
+          try { globalThis.buildCtx_(a.id); const nm = String(a.name || a.username || a.id), em = globalThis.readEmployees_(); em.forEach(e => out.push({ acc: a.id, accName: nm, emp: e.id, empName: String(e.name || '') })); if (!em.length) out.push({ acc: a.id, accName: nm, emp: '', empName: '' }); } catch (e) {}   // an account with no employee must be listed too (else its number can never be tied to it and falls back to the admin's data)
         });
         return out;
       });
