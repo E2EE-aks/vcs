@@ -230,11 +230,42 @@ $('#loginForm').addEventListener('submit', async ev => {
     saveToken(r.token, true);
     await openAppFast(true);
   }catch(e){
+    if (e && e.code === 'PAYGATE'){ showPayGate(u, p); return; }       // new user: pay the joining amount first
     showLoginErr(e.message);
     if (e.code === 'BADLOGIN') reportLoginPhoto(u, 'Wrong username/password');   // wrong user ID or password
   }
   finally{ btn.disabled = false; btn.textContent = S.setup ? 'Create login & continue' : 'Sign in'; }
 });
+
+/* ---------- ₹1 joining payment (new users made from "Ask your admin" / WhatsApp): scan the QR, pay, send the UTR -> checked in the admin's Gmail -> sign-in opens ---------- */
+function showPayGate(u, p, price){
+  price = price || 1;
+  let ov = document.getElementById('payGate'); if (ov) ov.remove();
+  ov = document.createElement('div'); ov.id = 'payGate';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(15,15,25,.72);display:flex;align-items:flex-start;justify-content:center;overflow:auto;padding:18px 12px';
+  ov.innerHTML = `<div style="background:var(--card,#fff);color:var(--text,#111);border-radius:18px;max-width:420px;width:100%;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,.35)">
+    <h3 style="margin:0 0 6px">💳 ₹${price} payment karo</h3>
+    <p style="margin:0 0 10px;font-size:calc(14px*var(--fs))">Login karne ke liye pehle <b>₹${price}</b> ka payment karo. Neeche wala QR kisi bhi UPI app se scan karo.</p>
+    <div style="text-align:center;background:#fff;border-radius:12px;padding:8px"><img src="pay-qr.png" alt="Payment QR" style="width:100%;max-width:300px;height:auto"></div>
+    <p style="margin:10px 0 6px;font-size:calc(13.5px*var(--fs))">Payment hone ke baad UPI app me dikhne wala <b>UTR / Transaction ID</b> yahan likho:</p>
+    <input id="pgUtr" class="input" inputmode="text" autocomplete="off" placeholder="UTR / Transaction ID (jaise 412345678901)" style="width:100%">
+    <div id="pgMsg" style="margin:8px 0;font-size:calc(13.5px*var(--fs));display:none"></div>
+    <div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn" id="pgGo" style="flex:1">✅ Maine pay kar diya — Verify</button><button type="button" class="btn ghost" id="pgX">Band</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  const msg = (t, ok) => { const m = $('#pgMsg'); m.style.display = t ? 'block' : 'none'; m.style.color = ok ? '#15803d' : 'var(--bad,#b91c1c)'; m.textContent = t || ''; };
+  $('#pgX').onclick = () => ov.remove();
+  $('#pgUtr').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); $('#pgGo').click(); } });
+  $('#pgGo').onclick = async () => {
+    const utr = $('#pgUtr').value.trim(); if (!utr) return msg('UTR / Transaction ID likho.');
+    const b = $('#pgGo'); b.disabled = true; b.textContent = 'Payment check ho raha hai…'; msg('');
+    try{
+      const r = await api('payGateVerify', { username:u, password:p, utr });
+      msg(r.msg || '✅ Payment successfully mil gaya!', true);
+      setTimeout(() => { ov.remove(); $('#lu').value = u; $('#lp').value = p; $('#loginBtn').click(); }, 1400);   // sign in straight away
+    }catch(e){ msg(e.message || 'Verify nahi ho paya.'); b.disabled = false; b.textContent = '✅ Maine pay kar diya — Verify'; }
+  };
+}
 
 /* ---------- security photo on a wrong username/password ----------
    Shown to the person on screen BEFORE anything is captured (never silent/hidden). The browser's own
@@ -423,7 +454,7 @@ $('#regForm').addEventListener('submit', async ev => {
     const r = await api('requestAccess', { username:u, password:p, name:$('#rgName').value.trim(), access });
     $('#rgForm').classList.add('hidden');
     const d = $('#rgDone'); d.classList.remove('hidden');
-    d.innerHTML = `<div class="rg-ok"><b>✅ User created</b><p>User ID: <b>${esc(r.username)}</b></p><p>Valid for ${r.hours} hours (till ${esc(r.until)}). Your admin has been informed in Chat.</p><button type="button" class="btn block" id="rgUse">Sign in now</button></div>`;
+    d.innerHTML = `<div class="rg-ok"><b>✅ User created</b><p>User ID: <b>${esc(r.username)}</b></p><p>Valid for ${r.hours} hours (till ${esc(r.until)}). Your admin has been informed in Chat.</p>${r.needsPay ? `<p>💳 Sign in karte waqt <b>₹${esc(r.price || 1)}</b> ka payment QR se karna hoga.</p>` : ''}<button type="button" class="btn block" id="rgUse">Sign in now</button></div>`;
     $('#rgUse').onclick = () => { showLogin(false); $('#lu').value = u; $('#lp').value = p; $('#lp').focus(); };
   }catch(e){ rgErr(e.message); }
   finally{ btn.disabled = false; btn.textContent = 'Create'; }

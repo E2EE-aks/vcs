@@ -267,6 +267,7 @@ function route_(req) {
   if (a !== 'setup') {
     var uid = checkToken_(req.token);
     if (!uid) fail_('Session expired. Please log in again.', 'AUTH');
+    if (payGatePending_(uid)) fail_('Pehle ₹' + PAYG_PRICE_ + ' payment verify karo.', 'PAYGATE');
     buildCtx_(uid, req.asUser);
     touchSeen_(CTX.uid);                       // every request counts as "online" (chat presence)
     if (!CTX.viewing) expiredGate_(CTX.uid, a, req);   // 24 h trial over -> only login / reading / messaging an admin still work
@@ -575,6 +576,11 @@ function sysChatSend_(toId, text, fromId) {                // fromId: who the me
   rng.setNumberFormat('@'); sh.getRange(row, 2).setNumberFormat('0');
   rng.setValues([[Utilities.getUuid().replace(/-/g, '').slice(0, 12), t, fromId || SYS_ID, toId, text, nowStr_()]]);
 }
+// ---------- ₹1 joining payment for accounts made from the sign-in screen / WhatsApp ----------
+// PAYG_<id> = still to pay.  Such a user cannot sign in until the server finds the payment in the admin's Gmail (see payGateRoute in server.js).
+var PAYG_PRICE_ = 1;
+function payGatePending_(uid) { return !!uid && String(uid) !== 'ADMIN' && !!PropertiesService.getScriptProperties().getProperty('PAYG_' + uid); }
+
 function requestAccess_(req) {
   var lock = LockService.getScriptLock();
   lock.waitLock(20000);
@@ -607,13 +613,14 @@ function requestAccessRun_(req) {
   r2.setNumberFormat('@');
   r2.setValues([[nid, username, pw, 'user', name, '', 'Yes', JSON.stringify(normPerms_(perms, 'user')), 'No', nowStr_(), '', '', '', '', '']]);
   var until = Date.now() + TEMP_HOURS * 3600 * 1000;
+  PropertiesService.getScriptProperties().setProperty('PAYG_' + nid, String(Date.now()));        // ₹1 joining payment still to be verified
   PropertiesService.getScriptProperties().setProperty('ACCX_' + nid, String(until));   // 24 h, then only actions are blocked (login + messaging admin still work)
   cache.put('reqacc_n', String(n + 1), 3600);
   var untilTxt = Utilities.formatDate(new Date(until), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
   sysChatSend_('ADMIN', '🆕 New user added\n\nName: ' + name + '\nUser ID: ' + username + '\nPassword: ' + pw +
     '\nAccess: Chat' + (names.length ? ', ' + names.join(', ') : '') +
-    '\nValid for: ' + TEMP_HOURS + ' hours (till ' + untilTxt + '). After that actions are blocked until a plan is chosen; the user can still message you here.\n\nCreated from the sign-in screen (Ask your admin).');
-  return { ok: true, username: username, hours: TEMP_HOURS, until: untilTxt };
+    '\nValid for: ' + TEMP_HOURS + ' hours (till ' + untilTxt + '). After that actions are blocked until a plan is chosen; the user can still message you here.\n\n💳 Sign-in will open after the ₹' + PAYG_PRICE_ + ' joining payment is verified in your Gmail.\n\nCreated from the sign-in screen (Ask your admin).');
+  return { ok: true, username: username, hours: TEMP_HOURS, until: untilTxt, needsPay: true, price: PAYG_PRICE_ };
 }
 
 // ---------- TEAMS (who created whom) ----------
@@ -705,6 +712,10 @@ function login_(req) {
   if (!acc.active) {
     logLogin_(acc, uname, 'Blocked', 'Account disabled', info);
     fail_('This account is disabled. Please contact the admin.', 'DISABLED');
+  }
+  if (payGatePending_(acc.id)) {
+    logLogin_(acc, uname, 'Blocked', 'Joining payment pending', info);
+    fail_('Pehle ₹' + PAYG_PRICE_ + ' payment verify karo — QR scan karke pay karo aur UTR bhejo.', 'PAYGATE');
   }
   if (false && acc.needLoc) {
     // Only the DEVICE's own location counts (GPS / network). A guess from the IP address is never accepted - it can be hundreds of km off.
@@ -1204,6 +1215,7 @@ function saveUser_(req) {
     var pc = sh.getRange(cur.row, 12);
     pc.setNumberFormat('@');
     pc.setValue(payDue);
+    if (isAdm && payDue) PropertiesService.getScriptProperties().deleteProperty('PAYG_' + cur.id);   // admin gave a date by hand = joining payment accepted
     var ac = sh.getRange(cur.row, 13); ac.setNumberFormat('@'); ac.setValue(avatar);
     if (pw || !active) bumpVersion_(cur.id);          // new password / disabled -> signs that user out everywhere
     if (seeNew) setSee_(cur, seeNew, users);
@@ -2342,6 +2354,7 @@ function payRequest_(req) {                                // the user says "I h
 function payActivate_(uid, days) {                          // makes the account usable again; returns the new end time (0 = no expiry)
   var P = payProps_(), acc = getAccount_(uid, readSettings_().values);
   if (!acc) fail_('This user no longer exists.');
+  P.deleteProperty('PAYG_' + uid);
   var due = parseDue_(acc.payDue), cur = Math.max(accExpiry_(uid), tempExpiry_(uid), isNaN(due) ? 0 : due), until = 0;
   var pcell = function (v) { if (acc.row) { var c = getSheet_('USERS').getRange(acc.row, 12); c.setNumberFormat('@'); c.setValue(v); } };
   if (!days) { P.deleteProperty('ACCX_' + uid); P.deleteProperty('TMPX_' + uid); if (acc.payDue) pcell(''); return 0; }

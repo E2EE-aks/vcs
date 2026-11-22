@@ -467,6 +467,7 @@ module.exports = function makeWhatsApp(o) {
   const botRun = (fn, acc, sec, edit) => withWb(() => {
     const set = globalThis.readSettings_().values, a = globalThis.getAccount_(acc || 'ADMIN', set);
     if (!a || a.active === false) throw new Error('Is number ka account nahi mila ya band hai.');
+    if (globalThis.payGatePending_ && globalThis.payGatePending_(a.id)) throw new Error('Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' joining payment verify karo: website par Sign in karo, QR dikhega, pay karke UTR bhejo.');
     if (sec) { const lv = (a.perms || {})[sec]; if (!(lv === 'edit' || (!edit && lv === 'view'))) throw new Error('Is account ko ' + (sec === 'att' ? 'attendance' : sec === 'rack' ? 'rack mapping' : 'expense') + (edit ? ' edit karne' : ' dekhne') + ' ki permission nahi hai.'); }
     globalThis.buildCtx_(a.id);
     return fn(a);
@@ -838,7 +839,7 @@ module.exports = function makeWhatsApp(o) {
       botState.delete(jid);
       if (!me) return bad('Account ban gaya par link nahi hua. *help* bhej kar Login karo.');
       await unlBind(num, me.id, me.name);
-      return say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n\nAdmin ko bata diya gaya hai. Admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
+      return say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n\nAdmin ko bata diya gaya hai.\n\n💳 *Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' payment karo:* website par Sign in karo, QR dikhega — pay karke UTR daalo, payment verify hote hi login khul jayega. Uske baad admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
     }
   }
 

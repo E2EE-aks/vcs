@@ -254,6 +254,62 @@ function makeApp(store, env) {
   const YT = require('./yt-server')({ env, warn });
   let vcsMirror = null;                                                                     // set below: copies the app's alerts to WhatsApp
   const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn), mirror: (u, m) => { if (vcsMirror) vcsMirror(u, m); } });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
+  // ---------- ₹1 joining payment: checked automatically in the ADMIN's Gmail (read-only link made in the Mail tab) ----------
+  // The new user pays by QR and sends the UTR / transaction id. We search the admin's Gmail for that id and accept it only when the mail
+  // shows a credit of at least the price. One UTR counts once. Public actions, so they ask for the user's own user id + password.
+  const PAYGATE_ACTIONS = new Set(['payGateInfo', 'payGateVerify']);
+  const pgTry = new Map();
+  const pgDecode = d => Buffer.from(String(d || ''), 'base64url').toString('utf8');
+  function pgText(m) {                                              // all readable text of a mail (plain parts + html parts without tags)
+    const out = [String(m && m.snippet || '')];
+    (function walk(p) {
+      if (!p) return;
+      if (p.body && p.body.data && /^text\//.test(p.mimeType || '')) { const t = pgDecode(p.body.data); out.push(/html/.test(p.mimeType) ? t.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/&#8377;|&rupee;/g, '₹') : t); }
+      (p.parts || []).forEach(walk);
+    })(m && m.payload);
+    return out.join(' ').replace(/\s+/g, ' ');
+  }
+  function pgPaid(text, utr, price) {
+    if (!text.toUpperCase().replace(/[\s-]/g, '').includes(utr)) return false;                 // the mail must carry this UTR
+    if (!/credit|received|deposit|paid you|payment from|sent you|money in/i.test(text)) return false;   // and be a money-in mail, not a debit alert
+    const amts = []; let m; const re = /(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)|amount\s*[:\-]?\s*([\d,]+(?:\.\d+)?)/gi;
+    while ((m = re.exec(text))) amts.push(Number(String(m[1] || m[2]).replace(/,/g, '')));
+    return amts.some(a => a >= price);
+  }
+  async function payGateRoute(req) {
+    const G = globalThis, P = G.PropertiesService.getScriptProperties(), now = Date.now(), price = Number(G.PAYG_PRICE_) || 1;
+    const uname = String(req.username || '').trim().toLowerCase(), t = pgTry.get(uname) || { n: 0, at: now };
+    if (now - t.at > 600000) { t.n = 0; t.at = now; }
+    if (t.n >= 8) G.fail_('Bahut zyada koshish ho gayi. 10 minute baad dobara try karo.', 'LOCKED');
+    const acc = G.findByUsername_(uname, G.readSettings_().values);
+    if (!(acc && G.passMatch_(acc.password, req.password))) { t.n++; pgTry.set(uname, t); G.fail_('Incorrect username or password.', 'BADLOGIN'); }
+    const pending = G.payGatePending_(acc.id);
+    if (req.action === 'payGateInfo' || !pending) return { ok: true, pending, price, name: acc.name || acc.username };
+    const utr = String(req.utr || '').replace(/[\s-]/g, '').toUpperCase();
+    if (!/^[A-Z0-9]{8,30}$/.test(utr)) G.fail_('UTR / Transaction ID sahi likho (jaise 12 digit ka number jo UPI app me payment ke baad dikhta hai).', 'UTR');
+    let used = []; try { used = JSON.parse(P.getProperty('PAYG_UTRS') || '[]'); } catch (e) {}
+    if (used.includes(utr)) G.fail_('Ye UTR pehle hi use ho chuka hai. Apne khud ke payment ka UTR bhejo.', 'UTR');
+    const who = (acc.name || acc.username) + ' (' + acc.username + ')';
+    if (!mailRefreshOf('ADMIN')) {
+      try { G.sysChatSend_('ADMIN', '⚠️ ' + who + ' ne ₹' + price + ' pay kiya (UTR ' + utr + ') par auto-verify nahi ho sakta: Mail tab me apna Gmail connect karo. Haath se allow karne ke liye Logins me is user ko payment due date de do.'); } catch (e) {}
+      G.fail_('Admin ka Gmail abhi connect nahi hai, isliye payment auto-verify nahi ho paya. Admin ko bata diya gaya hai.', 'NOGMAIL');
+    }
+    let found = false;
+    const list = await gmail('ADMIN', 'messages?maxResults=6&q=' + encodeURIComponent('newer_than:3d "' + utr + '"'));
+    for (const m of (list.messages || [])) {
+      const full = await gmail('ADMIN', 'messages/' + m.id + '?format=full');
+      if (pgPaid(pgText(full), utr, price)) { found = true; break; }
+    }
+    if (!found) {
+      t.n++; pgTry.set(uname, t);
+      if (t.n === 3) { try { G.sysChatSend_('ADMIN', '⚠️ ' + who + ' ka ₹' + price + ' payment (UTR ' + utr + ') Gmail me nahi mil raha. Check karke Logins me is user ko payment due date de do to login khul jayega.'); } catch (e) {} }
+      G.fail_('Abhi ₹' + price + ' ka payment is UTR se nahi mila. Payment ke 1–2 minute baad dobara try karo, aur UTR dhyan se check karo.', 'NOTFOUND');
+    }
+    used.push(utr); P.setProperty('PAYG_UTRS', JSON.stringify(used.slice(-500)));
+    P.deleteProperty('PAYG_' + acc.id); pgTry.delete(uname);
+    try { G.sysChatSend_('ADMIN', '✅ ₹' + price + ' joining payment mil gaya\n\nUser: ' + who + '\nUTR: ' + utr + '\n\nAb ye user login kar sakta hai.'); } catch (e) {}
+    return { ok: true, pending: false, price, msg: '✅ Payment successfully mil gaya! Ab aap login kar sakte ho.' };
+  }
   // ---------- Gmail: a notification when a new unread mail arrives (the server looks every minute, only for users who have notifications on) ----------
   const mailSeen = new Map();                                  // uid -> Set of mail ids already known
   const mailFrom = f => { const m = /^\s*"?([^"<]*?)"?\s*<[^>]*>\s*$/.exec(String(f || '')); return (m && m[1].trim()) || String(f || '').replace(/[<>"]/g, '').trim() || 'New mail'; };
@@ -365,6 +421,7 @@ function makeApp(store, env) {
     if (!acc) bad('account removed');
     if (!acc.active) { globalThis.logLogin_(acc, acc.username, 'Blocked', 'Account disabled', info); globalThis.fail_('This account is disabled. Please contact the admin.', 'DISABLED'); }
     if (false && acc.needLoc && info.lat === '') { globalThis.logLogin_(acc, acc.username, 'Blocked', 'Location not shared', info); globalThis.fail_('Your admin requires location to sign in. Allow location access for this site and try again.', 'LOCREQ'); }
+    if (globalThis.payGatePending_(acc.id)) { globalThis.logLogin_(acc, acc.username, 'Blocked', 'Joining payment pending', info); globalThis.fail_('Pehle ₹' + globalThis.PAYG_PRICE_ + ' payment verify karo — password se Sign in karo, QR dikhega.', 'PAYGATE'); }
     rec.last = new Date().toISOString(); bioWrite(uid, list);
     if (acc.row) { const c = globalThis.getSheet_('USERS').getRange(acc.row, 11); c.setNumberFormat('@'); c.setValue(globalThis.nowStr_()); }
     globalThis.logLogin_(acc, acc.username, 'Success', 'Biometric', info);
@@ -1629,7 +1686,7 @@ function makeApp(store, env) {
     else live.step('cache', 'Sheet data from server memory', 200, 0, 'loaded ' + Math.round((Date.now() - wb.loadedAt) / 1000) + 's ago');
     rt.delay = 0; rt.mails = []; rt.cal = [];
     let req, res;
-    try { req = JSON.parse(body); res = DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : UPD_ACTIONS.has(req.action) ? await updRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
+    try { req = JSON.parse(body); res = PAYGATE_ACTIONS.has(req.action) ? await payGateRoute(req) : DEPLOY_ACTIONS.has(req.action) ? await deployRoute(req) : UPD_ACTIONS.has(req.action) ? await updRoute(req) : BIO_ACTIONS.has(req.action) ? bioRoute(req) : globalThis.route_(req); }
     catch (err) { res = { ok: false, error: err.message || String(err), code: err.code || 'ERR' }; }
     if (req && req.action === 'logout') revoked.add(req.token);
     try { await wb.flush(); } catch (e) { res = { ok: false, error: 'Could not save to the sheet: ' + e.message, code: 'ERR' }; }
