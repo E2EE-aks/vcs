@@ -62,6 +62,7 @@ module.exports = function makeWhatsApp(o) {
     let names; try { names = fs.readdirSync(d); } catch (e) { return ''; }
     names.forEach(n => {
       try {
+        if (/^session-/.test(n)) return;                       // per-contact encryption sessions are NOT saved: a restored old one makes the other phone show "Waiting for this message"; WhatsApp builds a fresh one automatically
         let c = fs.readFileSync(path.join(d, n), 'utf8');
         if (n === 'store.json') { if (!withStore) return; c = slimStore(c); if (!c) return; }
         files[n] = c;
@@ -111,7 +112,7 @@ module.exports = function makeWhatsApp(o) {
         const gz = dec(raw); if (!gz) return false;
         const files = JSON.parse(zlib.gunzipSync(Buffer.from(gz, 'base64')).toString('utf8'));
         fs.mkdirSync(udir(uid), { recursive: true });
-        Object.keys(files).forEach(n => { if (/[\\/]|\.\./.test(n)) return; fs.writeFileSync(path.join(udir(uid), n), files[n]); });
+        Object.keys(files).forEach(n => { if (/[\\/]|\.\./.test(n) || /^session-/.test(n)) return; fs.writeFileSync(path.join(udir(uid), n), files[n]); });
         return hasSaved(uid);
       } catch (e) { warn('WhatsApp restore', e && e.message); return false; }
       finally { s.restoring = null; }
@@ -407,7 +408,7 @@ module.exports = function makeWhatsApp(o) {
     return fn();
   });
   async function botStep(s, jid, text) {
-    const pn = pnOf(s, jid), to = pn || jid;                            // answer on the phone-number chat when we know it (same as the app's own send)
+    const to = jid;                                                     // answer in the very same chat the message came from
     const say = async t => { await new Promise(r => setTimeout(r, 700)); return s.sock.sendMessage(to, { text: t }); };
     const t = String(text || '').trim(), low = t.toLowerCase();
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) cur = null;
