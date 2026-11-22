@@ -1443,9 +1443,7 @@ function vDeployMain(){
         <label style="display:block;margin-top:10px;font-weight:600">🗜️ Or a ZIP of the folder <span class="muted" style="font-weight:400">(works on phone too — every file inside is uploaded with its sub-folders)</span></label>
         <input class="input" type="file" id="depZip" accept=".zip,application/zip,application/x-zip-compressed">
         <div class="muted" style="margin-top:6px;font-size:calc(12.5px*var(--fs))">The two options below apply to the folder and the ZIP. .git, node_modules and .DS_Store are skipped automatically.</div></div>
-      <label style="display:flex;gap:8px;align-items:flex-start;margin:10px 0;cursor:pointer"><input type="checkbox" id="depAuto" ${akcOn() ? 'checked' : ''} style="margin-top:3px"><span>After both Render deploys are live: <b>build the APK</b> from all app files (Version) and <b>upload it to Updates</b> automatically (everyone gets a notification)</span></label>
-      <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 6px 26px;cursor:pointer"><input type="checkbox" id="depInc" ${akcFlag('ks_apk_inc') ? 'checked' : ''} style="margin-top:3px"><span>Version number +1 on every auto build (1.0 → 1.1 → 1.2)</span></label>
-      <label style="display:flex;gap:8px;align-items:flex-start;margin:0 0 10px 26px;cursor:pointer"><input type="checkbox" id="depClean" ${akcFlag('ks_apk_clean') ? 'checked' : ''} style="margin-top:3px"><span>Delete the old builds of this app afterwards (keeps the new one; clones are not touched)</span></label>
+      <div class="muted" style="margin:10px 0;font-size:calc(12.5px*var(--fs))">ℹ️ After a deploy no APK is built and nothing is uploaded to Updates automatically. To make an APK use the Version tab; to publish one use the Updates tab.</div>
       <div class="actions"><button class="btn" onclick="depReview()">Review &amp; publish →</button></div>
       <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">No file-type or small-size limit (up to 25 MB per file, 60 MB per upload). A JS/JSON mistake only shows a warning — you can always bring the old version back from File history. <code>Code.gs</code> still has to be pasted into Apps Script by hand.</p></div>
     <div class="card" style="margin-bottom:16px"><h3>⬇️ Download website files</h3>
@@ -1595,7 +1593,7 @@ async function rdcFinish(){                                                     
 /* ---- after the LAST Render deploy is live: build the APK from ALL app files, then put that APK into Updates (survives a page reload) ---- */
 const AKC_KEY = 'ks_apk_chain';
 let akcRun = false;
-const akcOn = () => { try { return localStorage.getItem('ks_apk_auto') !== '0'; } catch(e){ return true; } };
+const akcOn = () => false;                                                        // switched OFF: after a deploy no APK is built and nothing is uploaded to Updates automatically
 const akcFlag = k => { try { return localStorage.getItem(k) !== '0'; } catch(e){ return true; } };            // ks_apk_inc (version +1) / ks_apk_clean (delete old builds): on by default
 const akcNextVer = v => { const p = String(v || '1.0').split('.').map(x => parseInt(x, 10) || 0); p[p.length - 1]++; return p.join('.'); };     // 1.0 -> 1.1, 2.3.1 -> 2.3.2
 const akcGet = () => { try { return JSON.parse(localStorage.getItem(AKC_KEY) || 'null'); } catch(e){ return null; } };
@@ -1620,6 +1618,8 @@ async function akcStart(){
   akcResume();
 }
 async function akcResume(){
+  try { localStorage.removeItem(AKC_KEY); } catch(e){}                                  // forget any half-finished auto build from before
+  return;
   if (akcRun || !S.token || !(S.me && S.me.primary)) return;
   if (!akcGet()) return;
   akcRun = true;
