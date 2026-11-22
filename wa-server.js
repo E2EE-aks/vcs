@@ -278,7 +278,7 @@ module.exports = function makeWhatsApp(o) {
     try {
       if (uid !== 'ADMIN' || !m || m.out || String(env.WA_MSG_ALERT || '1') === '0') return;
       alertQ = alertQ.then(async () => {
-        const to = (await licCfg()).to; if (!to) return;
+        const to = (o.alertTo ? await o.alertTo() : '') || (await licCfg()).to; if (!to) return;      // same number as the other VCS alerts (Deploy > WhatsApp alerts), not the LIC number
         const c = s.chats.get(jid) || {}, pn = pnOf(s, jid), num = c.group ? '' : (pn ? '+' + pn.split('@')[0] : numOf(jid));
         const who = c.name || c.pn || m.from || (c.group ? 'Group' : num || 'Unknown');
         const what = x => x.kind === 'text' ? (x.text || '') : ((x.label || x.kind || 'Message') + (x.text ? ' ' + x.text : ''));
@@ -893,7 +893,7 @@ module.exports = function makeWhatsApp(o) {
         }
         if (low !== '1' && low !== '2') return say(cur.prompt);
         cur.kind = low === '1' ? 'video' : 'audio'; cur.step = 'dlLink';
-        return ask(cur, (cur.kind === 'video' ? '🎬 *Video download*' : '🎵 *Audio download*') + '\n\nKis *YouTube link* se download karna hai? Link yahan bhejo:\n\n_0 = cancel_');
+        return ask(cur, (cur.kind === 'video' ? '🎬 *Video download*' : '🎵 *Audio download*') + '\n\nKya download karna hai? Ye bhejo:\n• *Song / video ka naam* (jaise _Tum Hi Ho Arijit Singh_)\n• YouTube link\n• Spotify song link\n\n_0 = cancel_');
       }
       if (cur.step === 'dlCk') {
         const doc = unwrap(wm && wm.message).documentMessage; let txt = '';
@@ -904,7 +904,8 @@ module.exports = function makeWhatsApp(o) {
         catch (e) { return say('❌ ' + botErr(e) + '\n\nDobara bhejo ya *0* = cancel.'); }
       }
       if (cur.step === 'dlLink') {
-        const u = DL.link(t); if (!u) return say('❌ Ye YouTube ka link nahi lag raha. Poora link bhejo (youtube.com / youtu.be):');
+        let u = ''; try { u = await DL.resolve(t); } catch (e) { return say('❌ ' + botErr(e)); }
+        if (!u) return say('❌ Samajh nahi aaya. *Song ka naam*, YouTube link ya Spotify song link bhejo:');
         cur.url = u; cur.step = 'dlQ'; const qs = DL.qualities(cur.kind), E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣'];
         return ask(cur, '⚙️ *Kis quality me chahiye?*\n\n' + qs.map((q, i) => E[i] + '  ' + DL.qLabel(cur.kind, q)).join('\n') + '\n\n_Number bhejo: 1–' + qs.length + '. Badi quality = badi file (limit ' + DL.maxMb + ' MB)._');
       }

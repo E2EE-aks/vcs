@@ -21,6 +21,25 @@ module.exports = function (o) {
     return /^https?:\/\//i.test(m[0]) ? m[0] : 'https://' + m[0];
   }
 
+  /* what the user typed -> something yt-dlp can download: a YouTube link, a Spotify SONG link (-> song + artist -> YouTube search),
+     or just a song name (-> YouTube search, first result).  Spotify itself cannot be downloaded (DRM); we only read the song's name from its public page. */
+  const unent = t => String(t).replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x27;/g, "'");
+  async function resolve(text) {
+    const t = String(text || '').trim(), yt = link(t); if (yt) return yt;
+    const sp = /open\.spotify\.com\/(?:intl-[a-z]+\/)?(track|album|playlist|artist)\/([A-Za-z0-9]+)/i.exec(t);
+    if (sp) {
+      if (sp[1].toLowerCase() !== 'track') throw new Error('Album / playlist ka link nahi chalega. Ek *song* ka Spotify link ya naam bhejo.');
+      let html = ''; try { const r = await fetch('https://open.spotify.com/track/' + sp[2], { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36', 'Accept-Language': 'en' }, signal: AbortSignal.timeout(12000) }); html = await r.text(); } catch (e) {}
+      const title = unent((/<title>([^<]*)<\/title>/i.exec(html) || [])[1] || ''), m = /^(.*?)\s+-\s+(?:song|single|track)[^|]*?\s+by\s+(.*?)\s*\|\s*Spotify/i.exec(title);
+      if (m) return 'ytsearch1:' + (m[1] + ' ' + m[2]).replace(/\s+/g, ' ').slice(0, 120);
+      const og = unent((/property="og:title"\s+content="([^"]*)"/i.exec(html) || [])[1] || ''); if (og) return 'ytsearch1:' + og.slice(0, 120);
+      throw new Error('Spotify link se song ka naam nahi mila. Song ka *naam* likhkar bhejo.');
+    }
+    if (/https?:\/\//i.test(t)) return '';
+    const name = t.replace(/\s+/g, ' ').trim(); if (name.length < 2 || name.length > 120) return '';
+    return 'ytsearch1:' + name;
+  }
+
   async function ensureBin() {
     if (env.YTDLP_BIN) return BIN;
     fs.mkdirSync(DIR, { recursive: true });
@@ -145,5 +164,5 @@ module.exports = function (o) {
   }
   function done(dir) { try { if (dir && dir.startsWith(DIR)) fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {} }
 
-  return { link, run, done, qualities, qLabel, setCookies, hasCookies, maxMb: MAX_MB, hasFfmpeg: !!ffmpeg };
+  return { link, resolve, run, done, qualities, qLabel, setCookies, hasCookies, maxMb: MAX_MB, hasFfmpeg: !!ffmpeg };
 };

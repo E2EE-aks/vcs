@@ -1351,7 +1351,7 @@ function depProgHtml(){
 }
 function vDeploy(){
   const t = DEP.tab || 'deploy';
-  return depTabs() + (t === 'version' || t === 'updates' ? '' : vcsWaCard() + waBotCard()) + (t === 'version' ? vVersion() : t === 'updates' ? vUpdates() : vDeployMain());
+  return depTabs() + (t === 'version' || t === 'updates' ? '' : vcsWaCard() + licWaCard() + waBotCard()) + (t === 'version' ? vVersion() : t === 'updates' ? vUpdates() : vDeployMain());
 }
 /* ---------- WhatsApp alerts for website updates + all VCS alerts (main admin only) ---------- */
 function vcsWaCard(){
@@ -4341,10 +4341,10 @@ function licWaCard(){
   if (!(isAdmin() && S.me && S.me.primary && !S.as)) return '';
   const c = S.licWa || { on:true, to:'9621755459' };
   if (!S.licWa && !S.licWaLoading){ S.licWaLoading = true; api('licWaGet').then(r => { S.licWa = r.cfg; S.licWaConn = !!r.connected; const e = $('#licWaBox'); if (e) e.outerHTML = licWaCard(); }).catch(() => {}).finally(() => { S.licWaLoading = false; }); }
-  return `<div class="card" id="licWaBox" style="margin-bottom:16px"><h3>📲 WhatsApp alert <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· premium due / expire / deactivate</span></h3>
+  return `<div class="card" id="licWaBox" style="margin-bottom:16px"><h3>📲 LIC alerts <span class="muted" style="font-weight:500;font-size:calc(12.5px*var(--fs))">· premium due / expire / plan complete / deactivate</span></h3>
     <label class="tog" style="margin-bottom:10px"><input type="checkbox" id="lwOn" ${c.on ? 'checked' : ''}> Send alerts</label>
     <div class="form-grid">
-      <div class="field"><label>Send to (WhatsApp number)</label><input class="input" id="lwTo" type="tel" inputmode="tel" value="${esc(c.to)}" placeholder="9876543210"></div>
+      <div class="field"><label>LIC alerts ka number (sirf LIC ke alert yahan jayenge)</label><input class="input" id="lwTo" type="tel" inputmode="tel" value="${esc(c.to)}" placeholder="9876543210"></div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn" onclick="licWaSave()">💾 Save</button><button class="btn ghost" onclick="licWaTest()">📨 Send test message</button></div>
     <p class="muted" style="margin-top:10px;font-size:calc(12.5px*var(--fs))">Alert hamesha automatic jata hai (koi time ya option set nahi karna): premium <b>7, 3, 1 din pehle aur due date par</b>, aur policy <b>mature / expire (completed) ya deactivate</b> hote hi turant. Sent from the WhatsApp you linked in the WhatsApp tab. It must stay connected.</p></div>`;

@@ -247,7 +247,7 @@ function makeApp(store, env) {
     const z = await srcZipGet();
     return { code: 200, headers: { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="' + z.name + '"', 'Content-Length': z.buf.length, 'Cache-Control': 'no-store' }, body: z.buf };
   }
-  const WA = require('./wa-server')({ env, warn, sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m), zip: () => srcZipGet(), zipLink: () => srcLink(), renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
+  const WA = require('./wa-server')({ env, warn, alertTo: () => vwTo(), sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m), zip: () => srcZipGet(), zipLink: () => srcLink(), renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
 
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });
