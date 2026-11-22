@@ -691,7 +691,7 @@ module.exports = function makeWhatsApp(o) {
         botState.delete(jid); await say('⏳ *Source code ZIP* bana raha hoon…');
         try {
           const z = await srcZip(), mb = (z.buf.length / 1048576).toFixed(1);
-          return s.sock.sendMessage(to, { document: z.buf, fileName: z.name, mimetype: 'application/zip', caption: '📦 *VCS Source Code*\n🗂️ ' + z.name + ' (' + mb + ' MB)\n\n_File par tap karo — download ho jayegi. Dobara kuch karna ho to *help* bhejo._' });
+          return s.sock.sendMessage(to, { document: z.buf, fileName: z.name, mimetype: 'application/zip', caption: '📦 *VCS Source Code* (' + mb + ' MB)\n\n_Upar wali ZIP file (card) par tap karo — download ho jayegi. Dobara kuch karna ho to *help* bhejo._' });
         } catch (e) { return say('❌ Source code nahi mila: ' + botErr(e)); }
       }
       if (key === 'exp') {
@@ -1216,6 +1216,20 @@ module.exports = function makeWhatsApp(o) {
     await r.sock.sendMessage(jid, { text: String(text || '').slice(0, 4000) });
     return true;
   }
+  /* AUTO-CONNECT: after a deploy / restart the main admin's WhatsApp comes back BY ITSELF (nobody has to open the website).
+     The saved login is restored from the sheet backup and connected; if it drops or a try fails, it is tried again every minute.
+     It stays off only after a real \"Logout\" (that deletes the login) - then a new QR scan is needed. */
+  async function autoResume(uid) {
+    const s = st(uid);
+    if (s.status === 'open' || s.status === 'starting' || s.status === 'qr' || s.sock || s.restoring) return;
+    try { L(); } catch (e) { return; }                                        // WhatsApp packages not installed
+    if (!hasSaved(uid)) await restore(uid);
+    if (!hasSaved(uid)) return;                                               // never linked / logged out -> needs a QR scan
+    s.tries = 0; s.err = '';
+    await open(uid);
+  }
+  { const go = () => autoResume('ADMIN').catch(e => warn('WhatsApp auto-connect', e && e.message));
+    setTimeout(go, 4000).unref(); setInterval(go, 60 * 1000).unref(); }
   function isOpen(uid) { const s = users.get(uid); return !!(s && s.status === 'open' && s.sock); }
 
   /* every few minutes: copy changed login keys to the sheet; on a deploy (SIGTERM) do a last copy before the process ends */
