@@ -228,7 +228,7 @@ function makeApp(store, env) {
   const TG = require('./tg-server')({ env, enc, dec, sign, warn, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m) });   // notify = phone notification for a new Telegram message
 
   // ---------- WhatsApp (per-user account linked by QR code; see wa-server.js) ----------
-  const WA = require('./wa-server')({ env, warn, sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m) });   // notify = phone notification for a new WhatsApp message
+  const WA = require('./wa-server')({ env, warn, sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m), renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
 
   // ---------- Music tab: search + trending (see sp-server.js) ----------
   const SP = require('./sp-server')({ env, warn });

@@ -469,21 +469,77 @@ module.exports = function makeWhatsApp(o) {
 
   /* option 4 (VCS): files sent in the chat are committed to GitHub in ONE commit; Render then redeploys the website */
   const VCS_WAIT = 15000;                                               // seconds of quiet after the last file -> upload
+  /* progress message for an upload: ONE message that is edited at every step   ⏳ = waiting   ✅ = done   ❌ = failed
+     Render replaces the running server when the deploy goes live, so the last step ("Live") is sent by the NEW server after it starts: the state is kept in WA_DEPLOY_PEND until then. */
+  const DEP_PEND = 'WA_DEPLOY_PEND', BOOT = crypto.randomBytes(5).toString('hex');
+  const rdList = typeof o.renderDeploys === 'function' ? o.renderDeploys : null;     // () -> Render's list of deploys, or null when RENDER_API_KEY / RENDER_SERVICE_ID are not set
+  const RD_BAD = new Set(['build_failed', 'update_failed', 'pre_deploy_failed', 'canceled']);
+  const istHM = () => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+  const depIc = x => x === 'ok' ? '✅' : x === 'fail' ? '❌' : '⏳';
+  function depText(st) {
+    const bad = [st.gh, st.rd, st.web].includes('fail'), all = st.gh === 'ok' && st.rd === 'ok' && st.web === 'ok';
+    return depIc(st.gh) + ' *GitHub Upload:* ' + (st.gh === 'ok' ? 'Done' : st.gh === 'fail' ? 'Failed' : 'Uploading…') + '\n'
+      + depIc(st.rd) + ' *Render Deploy:* ' + (st.rd === 'ok' ? 'Live' : st.rd === 'fail' ? 'Failed' : (st.rdTxt || 'Waiting…')) + '\n'
+      + depIc(st.file) + ' *File updated:* ' + ((st.files || []).join(', ') || '-') + (st.file === 'ok' ? ' — Done' : '') + '\n'
+      + depIc(st.web) + ' *Website:* ' + (st.web === 'ok' ? 'Live 🌐' : st.web === 'fail' ? 'Failed' : 'Waiting…')
+      + (all ? '\n\n🚀 *All Done! Website is Live* 🎊 (`' + (st.at || istHM()) + ' IST`)' : bad ? '\n\n❌ *Kuch fail ho gaya* — Deploy tab me log dekho.' : '');
+  }
+  async function depShow(s, jid, st, h) {                                 // first call sends the message, later calls edit it (if WhatsApp refuses the edit, a new message is sent)
+    const text = depText(st); if (h.last === text) return; h.last = text;
+    if (h.key) { try { await s.sock.sendMessage(jid, { text, edit: h.key }); return; } catch (e) { h.key = null; } }
+    const m = await s.sock.sendMessage(jid, { text }); if (m && m.key) h.key = m.key;
+  }
+  const depSave = p => withWb(() => { PROPS().setProperty(DEP_PEND, p ? JSON.stringify(p) : ''); }).catch(() => {});
+  async function depWatch(s, jid, h, p) {                                  // follow the Render deploy of this commit until it is live / failed
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    if (!rdList) return false;
+    while (Date.now() - p.t0 < 20 * 60000) {
+      let l = null; try { l = await rdList(); } catch (e) {}
+      const d = (Array.isArray(l) ? l : []).map(x => x.deploy || x).find(x => x && x.commit && p.sha && String(x.commit.id || '').startsWith(p.sha));
+      if (d) {
+        if (d.status === 'live' || d.status === 'deactivated') { p.st.rd = 'ok'; p.st.web = 'ok'; p.st.at = istHM(); }
+        else if (RD_BAD.has(d.status)) { p.st.rd = 'fail'; p.st.web = 'fail'; }
+        else p.st.rdTxt = d.status === 'build_in_progress' ? 'Build ho raha hai…' : d.status === 'update_in_progress' ? 'Live ho raha hai…' : 'Shuru ho raha hai…';
+      } else p.st.rdTxt = 'Render shuru hone ka wait…';
+      try { await depShow(s, jid, p.st, h); } catch (e) {}
+      if (p.st.rd !== 'wait') { await depSave(null); return true; }
+      await sleep(10000);
+    }
+    p.st.rdTxt = 'Der lag rahi hai, Render check karo…'; try { await depShow(s, jid, p.st, h); } catch (e) {}
+    return true;
+  }
+  async function depResume(s) {                                            // a NEW server just started: if an upload was waiting for its deploy, finish the message
+    let p = null; try { const raw = await withWb(() => PROPS().getProperty(DEP_PEND) || ''); p = raw ? JSON.parse(raw) : null; } catch (e) {}
+    if (!p || !p.jid || p.boot === BOOT) return;
+    if (Date.now() - p.t0 > 30 * 60000) return depSave(null);
+    p.boot = BOOT; await depSave(p);
+    const h = { key: p.key || null };
+    try {
+      if (!(await depWatch(s, p.jid, h, p))) { p.st.rd = 'ok'; p.st.web = 'ok'; p.st.at = istHM(); await depShow(s, p.jid, p.st, h); await depSave(null); }   // no Render API: a server that is running again after the upload = the new version is live
+    } catch (e) { warn('WhatsApp deploy status', e && e.message); }
+  }
   async function botVcsFlush(s, jid, cur) {
     if (botState.get(jid) !== cur || cur.step !== 'vcsFile' || cur.busy) return;
     if (cur.timer) { clearTimeout(cur.timer); cur.timer = null; }
     const files = cur.files || []; if (!files.length) return;
     cur.busy = true;
     const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
-    await say('⏳ ' + files.length + ' file GitHub pe upload ho rahi hai…');
+    const names = files.map(f => f.path.split('/').pop()), st = { gh: 'wait', rd: 'wait', file: 'wait', web: 'wait', files: names }, h = {};
+    await depShow(s, jid, st, h);
     try {
-      const r = await deployFiles(files.map(f => ({ path: f.path, buf: f.buf })), 'Update ' + files.map(f => f.path.split('/').pop()).slice(0, 6).join(', ') + ' (from WhatsApp)');
+      const r = await deployFiles(files.map(f => ({ path: f.path, buf: f.buf })), 'Update ' + names.slice(0, 6).join(', ') + ' (from WhatsApp)');
       botState.delete(jid);
       if (r.unchanged) return say('ℹ️ Ye file(s) GitHub par pehle se bilkul same hain — kuch badla nahi, isliye deploy nahi hoga.\n\n_Dobara kuch karna ho to *help* bhejo._');
-      return say('✅ *GitHub pe upload ho gaya*\n📄 ' + r.changed.map(x => x.path + (x.isNew ? ' (new)' : '')).join(', ') + (r.sha ? '\n🔖 Commit ' + r.sha : '')
-        + (r.skipped && r.skipped.length ? '\n➖ Same thi, chhodi: ' + r.skipped.join(', ') : '')
-        + '\n\n🚀 Render ab deploy karega — website 1-3 minute me live ho jayegi.\n\n_Dobara kuch karna ho to *help* bhejo._');
-    } catch (e) { botState.delete(jid); return say('❌ Upload nahi hua: ' + botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); }
+      st.gh = 'ok'; st.file = 'ok'; st.files = r.changed.map(x => x.path + (x.isNew ? ' (new)' : '')); st.rdTxt = 'Deploy ho raha hai…';
+      await depShow(s, jid, st, h);
+      const p = { jid, key: h.key || null, sha: r.sha || '', t0: Date.now(), boot: BOOT, st };
+      await depSave(p);
+      depWatch(s, jid, h, p).catch(e => warn('WhatsApp deploy status', e && e.message));   // runs on in the background (this server is replaced when the deploy is live)
+    } catch (e) {
+      botState.delete(jid); st.gh = 'fail'; st.rd = 'fail'; st.file = 'fail'; st.web = 'fail';
+      await depShow(s, jid, st, h).catch(() => {});
+      return say('❌ Upload nahi hua: ' + botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._');
+    }
   }
   async function botVcsFile(s, jid, cur, wm, low) {                      // one message while waiting for files
     const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
@@ -692,6 +748,7 @@ module.exports = function makeWhatsApp(o) {
         const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
         setTimeout(() => { if (s.gen === gen && s.status === 'open') { resolveLids(s).then(() => saveSoon(uid, s)); } }, 6000);
         /* people who do not have your number saved see your WhatsApp *profile name* — keep it "VCS" (change with env WA_PROFILE_NAME; set it to "-" to leave the name alone) */
+        if (uid === 'ADMIN') setTimeout(() => { if (s.gen === gen && s.status === 'open') depResume(s).catch(e => warn('WhatsApp deploy status', e && e.message)); }, 8000);   // finish the "upload -> live" message after a deploy
         const wantName = String(env.WA_PROFILE_NAME == null ? 'VCS' : env.WA_PROFILE_NAME).trim();
         if (uid === 'ADMIN' && wantName && wantName !== '-' && typeof sock.updateProfileName === 'function' && s.name !== wantName) {
           setTimeout(() => { if (s.gen === gen && s.status === 'open') sock.updateProfileName(wantName).then(() => { s.name = wantName; }).catch(e => warn('WhatsApp profile name', e && e.message)); }, 4000);
