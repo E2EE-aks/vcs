@@ -8,7 +8,7 @@
   try { NAV_GRP.ytdl = 'Workspace'; } catch(e){}
 
   var VQ = ['360p', '480p', '720p', '1080p'], AQ = ['64 kbps', '128 kbps', '192 kbps', '320 kbps'];
-  var G = { url: '', kind: 'video', qi: 1, job: '', state: '', msg: '', name: '', size: 0, err: '', busy: false, max: 90 }, POLL = null;
+  var G = { url: '', kind: 'video', qi: 1, job: '', state: '', msg: '', name: '', size: 0, err: '', busy: false, max: 90, pct: 0 }, POLL = null;
   try { var sv = JSON.parse(localStorage.getItem('ks_ytdl_v1') || '{}'); if (sv.kind) G.kind = sv.kind === 'audio' ? 'audio' : 'video'; if (sv.qi >= 0 && sv.qi < 4) G.qi = sv.qi; } catch(e){}
 
   function esc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); }
@@ -27,7 +27,8 @@
     var opts = qs.map(function(q, i){ return '<option value="' + i + '"' + (i === G.qi ? ' selected' : '') + '>' + q + '</option>'; }).join('');
     var st = '';
     if (G.err) st = '<div class="muted" style="color:#c62828;margin-top:10px;white-space:pre-wrap">❌ ' + esc(G.err) + '</div>';
-    else if (G.state === 'queue' || G.state === 'run') st = '<div class="muted" style="margin-top:10px">⏳ ' + esc(G.msg || 'Download ho raha hai…') + '<br><small>Is screen se hat sakte ho, download chalta rahega (tab me wapas aakar dekho).</small></div>';
+    else if (G.state === 'queue' || G.state === 'run') st = '<div class="muted" style="margin-top:10px">⏳ ' + esc(G.msg || 'Download ho raha hai…') +
+      (G.state === 'run' ? '<div style="margin-top:8px;height:12px;border-radius:6px;background:rgba(128,128,128,.25);overflow:hidden"><div style="height:100%;width:' + G.pct + '%;background:#2e7d32;transition:width .5s"></div></div><div style="margin-top:4px;font-weight:600;font-size:15px">' + G.pct + '%</div>' : '') + '<br><small>Is screen se hat sakte ho, download chalta rahega (tab me wapas aakar dekho).</small></div>';
     else if (G.state === 'done') st = '<div style="margin-top:10px;color:#2e7d32">✅ <b>' + esc(G.name) + '</b> (' + mb(G.size) + ')<div style="margin-top:8px"><button class="btn" id="ytdlSave">⬇️ Phone me save karo</button></div></div>';
     r.innerHTML = '<div class="card"><h3 style="margin:0 0 6px">YT Download</h3>' +
       '<div class="muted" style="margin-bottom:10px">YouTube ka link daalo. Video ya MP3 chuno, quality chuno, aur Download dabao. Limit ' + G.max + ' MB.</div>' +
@@ -47,7 +48,7 @@
     G.err = ''; G.state = ''; G.busy = true; draw();
     try {
       var j = await call('ytDlStart', { url: G.url.trim(), kind: G.kind, qi: G.qi });
-      G.job = j.id; G.state = 'queue'; G.msg = 'Line me hai…'; G.busy = false; draw(); poll();
+      G.job = j.id; G.pct = 0; G.state = 'queue'; G.msg = 'Line me hai…'; G.busy = false; draw(); poll();
     } catch(e){ G.busy = false; G.err = e.message; draw(); }
   }
   function poll(){
@@ -56,13 +57,13 @@
       if (!G.job || (G.state !== 'queue' && G.state !== 'run')){ clearInterval(POLL); return; }
       try {
         var j = await call('ytDlStatus', { id: G.job });
-        G.state = j.state; G.msg = j.msg || '';
+        G.state = j.state; G.msg = j.msg || ''; if (j.pct > G.pct) G.pct = j.pct;
         if (j.state === 'queue' && j.ahead) G.msg = 'Line me hai (aage ' + j.ahead + ' download)…';
-        if (j.state === 'done'){ G.name = j.name; G.size = j.size; clearInterval(POLL); }
+        if (j.state === 'done'){ G.pct = 100; G.name = j.name; G.size = j.size; clearInterval(POLL); }
         if (j.state === 'error'){ G.err = j.msg || 'Download nahi hua.'; G.state = ''; G.job = ''; clearInterval(POLL); }
         if (S.view === 'ytdl') draw();
       } catch(e){ if (e.code === 'YTDL'){ G.err = e.message; G.state = ''; G.job = ''; clearInterval(POLL); if (S.view === 'ytdl') draw(); } }
-    }, 3000);
+    }, 2000);
   }
   async function fetchFile(){
     try {

@@ -52,7 +52,7 @@ module.exports = function makeYouTube(o) {
     jobs.set(id, j); waiting++;
     chain = chain.then(async () => {
       waiting--; j.state = 'run'; j.msg = 'Download ho raha hai… (1-3 minute lag sakte hain)';
-      try { const r = await dl().run(kind, q, url); Object.assign(j, { state: 'done', msg: '', file: r.file, name: r.name, size: r.size, dir: r.dir }); }
+      try { const r = await dl().run(kind, q, url, p => { j.pct = p; }); Object.assign(j, { state: 'done', pct: 100, msg: '', file: r.file, name: r.name, size: r.size, dir: r.dir }); }
       catch (e) { Object.assign(j, { state: 'error', msg: String((e && e.message) || e).slice(0, 300) }); }
       j.at = Date.now(); const tm = setTimeout(() => drop(id), KEEP); if (tm.unref) tm.unref();
     }).catch(() => {});
@@ -70,7 +70,7 @@ module.exports = function makeYouTube(o) {
     }
     const j = jobs.get(String(req.id || ''));
     if (!j || j.uid !== uid) return { ok: false, error: 'Ye download ab nahi mila (15 minute baad hat jaata hai). Dobara start karo.', code: 'YTDL' };
-    if (j.state !== 'done') return { ok: true, state: j.state, msg: j.msg, ahead: j.state === 'queue' ? waiting : 0 };
+    if (j.state !== 'done') return { ok: true, state: j.state, msg: j.msg, pct: j.pct || 0, ahead: j.state === 'queue' ? waiting : 0 };
     const exp = Date.now() + 120000, k = exp + '.' + o.sign(j.id + '|' + exp);
     return { ok: true, state: 'done', name: j.name, size: j.size, ticket: k };
   }

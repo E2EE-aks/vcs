@@ -55,6 +55,7 @@ module.exports = function (o) {
     if (client) a.push('--extractor-args', 'youtube:player_client=' + client);
     if (jsOk) a.push('--js-runtimes', 'node:' + process.execPath);          // YouTube's signature puzzle needs a JavaScript engine - Node is already here
     if (env.DL_PROXY) a.push('--proxy', env.DL_PROXY);
+    a.push('--newline', '--progress', '--progress-template', 'download:KSP %(progress.filename)s %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s');   // one line per update -> % bar
     a.push('--retries', '2', url);
     return a;
   }
@@ -90,22 +91,34 @@ module.exports = function (o) {
   }
   const hasCookies = async () => !!(await cookies());
 
-  function once(bin, kind, q, url, work, client, hasCk) {              // one yt-dlp run -> its output, or an Error (e.raw = what yt-dlp complained about)
+  /* progress: yt-dlp prints "KSP <file> <done> <total> <estimate>" lines.  A video needs 2 downloads (video + audio) -> each counts half; the last few % are the joining / MP3 step. */
+  function progressor(kind, cb) {
+    let cur = '', stage = -1, best = 0; const stages = kind === 'video' && ffmpeg ? 2 : 1;
+    return line => {
+      const m = /^KSP (\S+) (\S+) (\S+) (\S+)\s*$/.exec(line); if (!m || !cb) return false;
+      if (m[1] !== cur) { cur = m[1]; stage = Math.min(stage + 1, stages - 1); }
+      const d = Number(m[2]), t = Number(m[3]) || Number(m[4]);
+      if (d >= 0 && t > 0) { const f = Math.min(1, d / t), pct = Math.floor(((stage + f) / stages) * 95); if (pct > best) { best = pct; try { cb(pct); } catch (e) {} } }
+      return true;
+    };
+  }
+  function once(bin, kind, q, url, work, client, hasCk, onPct) {       // one yt-dlp run -> its output, or an Error (e.raw = what yt-dlp complained about)
     return new Promise((res, rej) => {
       const p = cp.spawn(bin, args(kind, q, url, work, client, hasCk), { stdio: ['ignore', 'pipe', 'pipe'] });
-      let so = '', se = '';
+      const prog = progressor(kind, onPct); let so = '', se = '', buf = '';
       const kill = setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) {} rej(new Error('Download bahut der laga raha tha, band kar diya.')); }, 12 * 60000);
-      p.stdout.on('data', d => { so += d; }); p.stderr.on('data', d => { se += d; if (se.length > 20000) se = se.slice(-20000); });
+      p.stdout.on('data', d => { buf += d; const L = buf.split('\n'); buf = L.pop(); L.forEach(l => { if (!prog(l)) so += l + '\n'; }); });
+      p.stderr.on('data', d => { String(d).split('\n').forEach(l => prog(l)); se += d; if (se.length > 20000) se = se.slice(-20000); });
       p.on('error', e => { clearTimeout(kill); rej(e); });
       p.on('close', code => {
-        clearTimeout(kill); if (code === 0) return res(so);
+        clearTimeout(kill); if (buf && !prog(buf)) so += buf; if (code === 0) return res(so);
         const raw = se.split('\n').filter(x => /ERROR/i.test(x)).pop() || se, e = new Error(nice(raw, hasCk)); e.raw = raw; rej(e);
       });
     });
   }
 
   /* -> { file, name, size, dir }.  The caller sends the file and then calls done(dir). */
-  async function run(kind, q, url) {
+  async function run(kind, q, url, onPct) {
     if (busy) throw new Error('Ek download pehle se chal raha hai. Thodi der baad try karo.');
     busy = true;
     let work = '';
@@ -119,8 +132,8 @@ module.exports = function (o) {
       let out = '', last = null;
       for (let i = 0; i < clients.length && !out; i++) {
         try {
-          try { out = await once(bin, kind, q, url, work, clients[i], !!ck); }
-          catch (e) { if (jsOk && /no such option.*js-runtimes|unrecognized arguments.*js-runtimes/i.test(e.raw || '')) { jsOk = false; out = await once(bin, kind, q, url, work, clients[i], !!ck); } else throw e; }
+          try { out = await once(bin, kind, q, url, work, clients[i], !!ck, onPct); }
+          catch (e) { if (jsOk && /no such option.*js-runtimes|unrecognized arguments.*js-runtimes/i.test(e.raw || '')) { jsOk = false; out = await once(bin, kind, q, url, work, clients[i], !!ck, onPct); } else throw e; }
         } catch (e) { if (!retry(e.raw)) throw e; if (!last || /not a bot|Sign in to confirm/i.test(e.raw || '')) last = e; }   // a bot check / client problem is worth another client; keep the bot-check text as the reason
       }
       if (!out) throw last || new Error('Download fail ho gaya.');

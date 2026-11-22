@@ -911,10 +911,17 @@ module.exports = function makeWhatsApp(o) {
       if (cur.step === 'dlQ') {
         const qs = DL.qualities(cur.kind), q = qs[Number(low) - 1]; if (!/^\d$/.test(low) || !q) return say(cur.prompt);
         const kind = cur.kind, url = cur.url; botState.delete(jid);
-        await say('⏳ *' + (kind === 'video' ? 'Video' : 'Audio') + ' download ho raha hai* (' + DL.qLabel(kind, q) + ')…\nKuch minute lag sakte hain, file isi chat me aayegi.');
+        const head = '⏳ *' + (kind === 'video' ? 'Video' : 'Audio') + ' download ho raha hai* (' + DL.qLabel(kind, q) + ')…\nKuch minute lag sakte hain, file isi chat me aayegi.';
+        const bar = p => '\n\n' + '█'.repeat(Math.round(p / 10)) + '░'.repeat(10 - Math.round(p / 10)) + '  *' + p + '%*';
+        const pm = await say(head + bar(0)); let shown = 0, lastAt = 0, editing = false;
+        const onPct = p => {                                              // live % : the same message is edited (no new message each time)
+          const now = Date.now(); if (!pm || !pm.key || editing || p < shown + 5 && p < 95 || now - lastAt < 4000) return;
+          editing = true; shown = p; lastAt = now;
+          s.sock.sendMessage(to, { text: head + bar(p), edit: pm.key }).catch(() => {}).then(() => { editing = false; });
+        };
         let r = null;
         try {
-          r = await DL.run(kind, q, url);
+          r = await DL.run(kind, q, url, onPct);
           const mb = (r.size / 1048576).toFixed(1), title = r.name.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
           if (kind === 'audio') await s.sock.sendMessage(to, { audio: { url: r.file }, mimetype: /\.mp3$/i.test(r.file) ? 'audio/mpeg' : 'audio/mp4', fileName: r.name });
           else if (r.size <= 50 * 1048576) await s.sock.sendMessage(to, { video: { url: r.file }, mimetype: 'video/mp4', caption: '🎬 ' + title + '\n' + DL.qLabel(kind, q) + ' · ' + mb + ' MB' });
