@@ -868,7 +868,7 @@ module.exports = function makeWhatsApp(o) {
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
       if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
-      if (acc0 === 'ADMIN' && DL) opts.push(['dl', 'YouTube Video / Audio download']);
+      if (DL) opts.push(['dl', 'YouTube Video / Audio download']);          // every bot user; only the cookies step (3) is admin-only
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
@@ -887,7 +887,7 @@ module.exports = function makeWhatsApp(o) {
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (/^dl/.test(cur.step || '') && DL) {                              // YouTube download: 1) video / audio  2) link  3) quality  4) the file comes in this chat
       if (cur.step === 'dlKind') {
-        if (low === '3') {
+        if (low === '3' && acc === 'ADMIN') {
           cur.step = 'dlCk';
           return ask(cur, '🍪 *YouTube cookies*\n\nAgar bot-check ka error aa raha hai to yahan apni *cookies.txt* file bhejo (📎 → Document), ya uska text paste kar do.\n\n⚠️ Apne asli Google account ki jagah ek *alag / naya* account use karo.\n\nSirf *youtube.com* ki cookies export karo (Netscape format).\n\n_0 = cancel_');
         }
@@ -928,9 +928,8 @@ module.exports = function makeWhatsApp(o) {
     if (cur.step === 'menu') {
       const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
       if (key === 'dl') {
-        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         cur.step = 'dlKind';
-        return ask(cur, '📥 *YouTube Download*\n\nKya chahiye?\n\n1️⃣  Video\n2️⃣  Audio\n3️⃣  Cookies set karo (bot-check error aaye tab)\n\n_Number bhejo: 1, 2 ya 3  ·  0 = cancel_');
+        return ask(cur, '📥 *YouTube Download*\n\nKya chahiye?\n\n1️⃣  Video\n2️⃣  Audio\n' + (acc === 'ADMIN' ? '3️⃣  Cookies set karo (bot-check error aaye tab)\n\n_Number bhejo: 1, 2 ya 3' : '\n_Number bhejo: 1 ya 2') + '  ·  0 = cancel_');
       }
       if (key === 'vcs') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
