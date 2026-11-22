@@ -789,6 +789,12 @@ module.exports = function makeWhatsApp(o) {
     const n = botNorm({ on: c.on, nums: c.nums, bind: b });
     await withWb(() => { PROPS().setProperty('WA_BOT_CFG', JSON.stringify(n)); }); botCfg = n;
   }
+  async function unlSendQr(s, to) {                                    // the ₹ joining-payment QR, as a picture in the same WhatsApp chat
+    try {
+      const price = globalThis.PAYG_PRICE_ || 1, img = fs.readFileSync(path.join(__dirname, 'pay-qr.png'));
+      await s.sock.sendMessage(to, { image: img, caption: '💳 *₹' + price + ' joining payment*\n\nIs QR ko kisi bhi UPI app se scan karke *₹' + price + '* pay karo.\n\nPhir website par apne User ID / password se *Sign in* karo, *UTR / Transaction ID* daalo — payment verify hote hi login khul jayega.' });
+    } catch (e) { warn('WhatsApp pay QR', e && e.message); }
+  }
   async function unlStep(s, jid, low, t, num, cur, say) {
     if (BOT_HI.test(low)) { botState.set(jid, { step: 'unMenu', at: Date.now() }); return say('👋 *Welcome!*\n\nAap naye user ho — number abhi kisi account se linked nahi hai.\n\n1️⃣  Login\n2️⃣  Create account\n\n_Number bhejo: 1 ya 2_'); }
     if (!cur || !/^un/.test(cur.step)) return;                          // not in a chat and not "help" -> stay silent
@@ -810,7 +816,7 @@ module.exports = function makeWhatsApp(o) {
           const a = globalThis.findByUsername_(cur.user, globalThis.readSettings_().values);
           return a ? { id: a.id, name: a.name || a.username || cur.user } : null;
         });
-      } catch (e) { botState.delete(jid); return bad(botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); }
+      } catch (e) { botState.delete(jid); await bad(botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); if (e && e.code === 'PAYGATE') return unlSendQr(s, jid); return; }
       botState.delete(jid);
       if (!me) return bad('Account nahi mila.\n\n_Dobara koshish ke liye *help* bhejo._');
       if (me.id === 'ADMIN') return bad('Main admin account WhatsApp se link nahi ho sakta. Admin ka number app ke Deploy tab se add karo.');
@@ -839,7 +845,8 @@ module.exports = function makeWhatsApp(o) {
       botState.delete(jid);
       if (!me) return bad('Account ban gaya par link nahi hua. *help* bhej kar Login karo.');
       await unlBind(num, me.id, me.name);
-      return say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n\nAdmin ko bata diya gaya hai.\n\n💳 *Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' payment karo:* website par Sign in karo, QR dikhega — pay karke UTR daalo, payment verify hote hi login khul jayega. Uske baad admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
+      await say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n\nAdmin ko bata diya gaya hai.\n\n💳 *Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' payment karo:* website par Sign in karo, QR dikhega — pay karke UTR daalo, payment verify hote hi login khul jayega. Uske baad admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
+      return unlSendQr(s, jid);
     }
   }
 
