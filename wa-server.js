@@ -370,8 +370,11 @@ module.exports = function makeWhatsApp(o) {
     if (!orig.sec) { edWhy = 'is purane message ki key nahi mili'; return null; }
     if (!sem.encPayload || !sem.encIv) { edWhy = 'edit ka data khali'; return null; }
     const secret = Buffer.from(orig.sec, 'base64'), iv = Buffer.from(sem.encIv), ct = Buffer.from(sem.encPayload), me = (s.sock && s.sock.user) || {}, mine = uniq([nj(me.id), nj(me.lid)]), k = wm.key || {}, ok = orig.key || {};
-    const pnj = nj(pnOf(s, jid)), authors = orig.out ? mine : uniq([nj(ok.participant), nj(ok.remoteJid), nj(tk.participant), nj(tk.remoteJid), nj(jid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(ok.participantAlt), nj(ok.remoteJidAlt), pnj]);
-    const mods = k.fromMe ? mine : uniq([nj(k.participant), nj(k.remoteJid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(jid), pnj]);
+    const pnj = nj(pnOf(s, jid)), lidj = []; if (pnj) s.lid.forEach((v, kk) => { if (nj(v) === pnj) lidj.push(nj(kk)); }); if (isLid(jid)) lidj.push(nj(jid));
+    /* every way the sender can be written (phone-number form AND the new LID form): the secret was made with one of them */
+    const every = uniq([nj(ok.participant), nj(ok.remoteJid), nj(tk.participant), nj(tk.remoteJid), nj(jid), nj(k.participant), nj(k.remoteJid), nj(k.participantAlt), nj(k.remoteJidAlt), nj(ok.participantAlt), nj(ok.remoteJidAlt), pnj, ...lidj]).filter(x => /@(s\.whatsapp\.net|lid)$/.test(x));
+    const authors = orig.out ? uniq([...mine, ...every]) : uniq([...every, ...mine]);
+    const mods = k.fromMe ? uniq([...mine, ...every]) : uniq([...every, ...mine]);
     const k0 = crypto.createHmac('sha256', Buffer.alloc(32)).update(secret).digest();
     for (const uc of ['Message Edit', 'Msg Edit', 'Edit', 'MessageEdit', 'Message edit', 'Event Edit']) for (const a of authors) for (const b of mods) {
       try {
@@ -384,7 +387,8 @@ module.exports = function makeWhatsApp(o) {
         }
       } catch (e) { /* wrong guess - try the next one */ }
     }
-    edWhy = 'key match nahi hui'; return null;
+    edWhy = 'key match nahi hui (type ' + sem.secretEncType + ', ' + authors.length + 'x' + mods.length + ' try)'; warn('WhatsApp edit keys tried', authors.join(' | ') + ' // ' + mods.join(' | '));
+    return null;
   }
   function editSecret(uid, s, jid, wm, sem) {
     const tk = sem.targetMessageKey || {};
