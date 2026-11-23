@@ -1275,7 +1275,13 @@ module.exports = function makeWhatsApp(o) {
       return { ok: true, status: s.status, qr: s.status === 'qr' ? s.qr : '', error: s.status === 'idle' && !s.wantOn ? s.err : '' };
     }
     if (a === 'waLogout') { await stop(uid, true); return { ok: true }; }
-    if (a === 'licWaGet') { if (uid !== 'ADMIN') fail('Only the main admin can use this.'); return { ok: true, cfg: await licCfg(), connected: !!(s.status === 'open' && s.sock) }; }
+    if (a === 'licWaGet') {
+      if (uid !== 'ADMIN') fail('Only the main admin can use this.');
+      // active users the admin can link (the main admin's own LIC list is always included, so it is not listed)
+      let users = [];
+      try { users = await withWb(() => globalThis.readUsers_().filter(u => u.active).map(u => ({ id: String(u.id), name: u.name || u.username || String(u.id) }))); } catch (e) { warn('licWaGet users', e && e.message); }
+      return { ok: true, cfg: await licCfg(), users, connected: !!(s.status === 'open' && s.sock) };
+    }
     if (a === 'licWaSet') {
       if (uid !== 'ADMIN') fail('Only the main admin can change this.');
       const to = String(req.to || '').replace(/[^\d+]/g, ''); toJid(to);                                    // checks the number looks right
