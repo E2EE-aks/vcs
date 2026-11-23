@@ -249,8 +249,6 @@ function makeApp(store, env) {
   }
   const WA = require('./wa-server')({ env, warn, alertTo: () => vwTo(), sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m), zip: () => srcZipGet(), zipLink: () => srcLink(), renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
 
-  // ---------- Music tab: search + trending (see sp-server.js) ----------
-  const SP = require('./sp-server')({ env, warn });
   const YT = require('./yt-server')({ env, warn, sign, dl: () => WA.dl() });
   let vcsMirror = null;                                                                     // set below: copies the app's alerts to WhatsApp
   const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn), mirror: (u, m) => { if (vcsMirror) vcsMirror(u, m); } });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
@@ -1748,11 +1746,6 @@ function makeApp(store, env) {
     if (!r || !WA.actions.has(r.action)) return null;
     return Promise.resolve().then(() => WA.route(r)).catch(errOut);
   };
-  const fastSp = body => {                             // Music search never waits behind sheet saves
-    let r; try { r = JSON.parse(body); } catch (e) { return null; }
-    if (!r || !SP.actions.has(r.action)) return null;
-    return Promise.resolve().then(() => SP.route(r)).catch(errOut);
-  };
   const fastYt = body => {
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
     if (!r || !YT.actions.has(r.action)) return null;
@@ -1795,7 +1788,7 @@ function makeApp(store, env) {
   };
   const handle0 = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastSp(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastStock(body) || fastVw(body) || fastRtc(body) || fastTr(body) || fastRingtone(body));
+    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastStock(body) || fastVw(body) || fastRtc(body) || fastTr(body) || fastRingtone(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);
