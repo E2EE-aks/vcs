@@ -13,7 +13,8 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
   let loaded = false;
 
   const usSyms = new Set();                                        // plain tickers (NVDA, AAPL...) that Yahoo only knows WITHOUT the .NS suffix
-  const toY = s => (/[.^=-]/.test(s) || usSyms.has(s)) ? s : s + '.NS';
+  const CRYPTO = /^[A-Z0-9]{2,10}-(USD|USDT|EUR|GBP|INR|BTC)$/;
+  const toY = s => (/[.^=]/.test(s) || CRYPTO.test(s) || usSyms.has(s)) ? s : s + '.NS';
   const inr = n => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const ist = d => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d || new Date());
   const part = (p, t) => (p.find(x => x.type === t) || {}).value || '';
@@ -125,13 +126,123 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
     if (j.status === 'error' || !(+j.close > 0)) throw new Error(String(j.message || 'bad').slice(0, 60));
     return { p: +j.close, prev: +j.previous_close || undefined, t: +j.timestamp || 0 };
   }
+  // ---- Upstox (free "Analytics Token", valid 1 year, read-only, no static IP) - only active when env UPSTOX_TOKEN is set ----
+  const upKeys = new Map();                                                       // NSE symbol -> instrument_key (or '' = not found), cached
+  const nseName = sym => { const b = String(sym).replace(/\.NS$/, ''); return (/[.^=]/.test(b) || CRYPTO.test(b) || usSyms.has(sym) || !/^[A-Z0-9&-]{1,20}$/.test(b)) ? '' : b; };
+  async function upKey(b) {
+    const hit = upKeys.get(b); if (hit && hit.at > Date.now()) return hit.k;
+    const r = await fetch('https://api.upstox.com/v2/instruments/search?query=' + encodeURIComponent(b) + '&exchanges=NSE&segments=EQ&records=10', { headers: { accept: 'application/json', authorization: 'Bearer ' + process.env.UPSTOX_TOKEN }, signal: TMO(8000) });
+    if (r.status === 401 || r.status === 403) throw new Error('Upstox token invalid / expired');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(), row = (j.data || []).find(x => x.segment === 'NSE_EQ' && String(x.trading_symbol).toUpperCase() === b);
+    const k = row ? row.instrument_key : '';
+    upKeys.set(b, { k, at: Date.now() + (k ? 7 * 864e5 : 6 * 36e5) });             // found: keep 7 days; not found (e.g. a US stock): ask again after 6 h
+    return k;
+  }
+  const upHit = new Map();
+  async function srcUpstox(sym, fresh) {
+    if (!process.env.UPSTOX_TOKEN) throw new Error('n/a');
+    const b = nseName(sym); if (!b) throw new Error('n/a');
+    const h = upHit.get(b); if (h && !fresh && Date.now() - h.at < 8000) return h.v;
+    const k = await upKey(b); if (!k) throw new Error('n/a');
+    const r = await fetch('https://api.upstox.com/v3/market-quote/ltp?instrument_key=' + encodeURIComponent(k), { headers: { accept: 'application/json', authorization: 'Bearer ' + process.env.UPSTOX_TOKEN }, signal: TMO(8000) });
+    if (r.status === 401 || r.status === 403) throw new Error('Upstox token invalid / expired');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json(), vals = Object.values(j.data || {}), d = vals.find(x => x && x.instrument_token === k) || vals[0];
+    if (!d || !(+d.last_price > 0)) throw new Error('no price');
+    const v = { p: +d.last_price, prev: +d.cp || undefined, t: Math.floor(Date.now() / 1000) };
+    upHit.set(b, { at: Date.now(), v });
+    return v;
+  }
+
+  // ---- Angel One SmartAPI - only active when env ANGEL_API_KEY + ANGEL_CLIENT + ANGEL_PIN + ANGEL_TOTP_SECRET are set.
+  //      It logs in by itself (TOTP code is generated here), so nobody has to log in every day. ----
+  const crypto = require('crypto');
+  const b32 = s => { const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'; let bits = '', out = []; String(s).toUpperCase().replace(/[^A-Z2-7]/g, '').split('').forEach(c => { bits += A.indexOf(c).toString(2).padStart(5, '0'); }); for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.slice(i, i + 8), 2)); return Buffer.from(out); };
+  const totp = secret => {
+    const ctr = Buffer.alloc(8); ctr.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+    const h = crypto.createHmac('sha1', b32(secret)).update(ctr).digest(), o = h[h.length - 1] & 15;
+    return String(((h.readUInt32BE(o) & 0x7fffffff) % 1000000)).padStart(6, '0');
+  };
+  const angelOn = () => !!(process.env.ANGEL_API_KEY && process.env.ANGEL_CLIENT && process.env.ANGEL_PIN && process.env.ANGEL_TOTP_SECRET);
+  const angelH = jwt => Object.assign({ 'Content-Type': 'application/json', Accept: 'application/json', 'X-UserType': 'USER', 'X-SourceID': 'WEB', 'X-ClientLocalIP': '127.0.0.1', 'X-ClientPublicIP': '127.0.0.1', 'X-MACAddress': '00:00:00:00:00:00', 'X-PrivateKey': process.env.ANGEL_API_KEY }, jwt ? { Authorization: 'Bearer ' + jwt } : {});
+  const ANGEL = 'https://apiconnect.angelone.in';
+  let angelJwt = { v: '', at: 0 }, angelLogin = null, angelDownTill = 0;
+  async function angelAuth() {
+    if (angelJwt.v && Date.now() - angelJwt.at < 5 * 3600 * 1000) return angelJwt.v;           // re-login every 5 h
+    if (angelLogin) return angelLogin;
+    angelLogin = (async () => {
+      const r = await fetch(ANGEL + '/rest/auth/angelbroking/user/v1/loginByPassword', { method: 'POST', headers: angelH(''), body: JSON.stringify({ clientcode: process.env.ANGEL_CLIENT, password: process.env.ANGEL_PIN, totp: totp(process.env.ANGEL_TOTP_SECRET) }), signal: TMO(10000) });
+      const j = await r.json().catch(() => ({}));
+      if (!j.status || !j.data || !j.data.jwtToken) { angelDownTill = Date.now() + 10 * 60 * 1000; throw new Error(String(j.message || 'Angel login failed').slice(0, 40)); }
+      angelJwt = { v: j.data.jwtToken, at: Date.now() }; return angelJwt.v;
+    })().finally(() => { angelLogin = null; });
+    return angelLogin;
+  }
+  const angelTok = new Map();                                                     // NSE symbol -> symbol token ('' = not found)
+  async function angelToken(b, jwt) {
+    const hit = angelTok.get(b); if (hit && hit.at > Date.now()) return hit.k;
+    const r = await fetch(ANGEL + '/rest/secure/angelbroking/order/v1/searchScrip', { method: 'POST', headers: angelH(jwt), body: JSON.stringify({ exchange: 'NSE', searchscrip: b }), signal: TMO(8000) });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401 || r.status === 403) { angelJwt.at = 0; throw new Error('Angel session expired'); }
+    const row = (Array.isArray(j.data) ? j.data : []).find(x => String(x.tradingsymbol).toUpperCase() === b + '-EQ');
+    const k = row ? String(row.symboltoken) : '';
+    angelTok.set(b, { k, at: Date.now() + (k ? 7 * 864e5 : 6 * 36e5) });
+    return k;
+  }
+  const angelHit = new Map();
+  async function srcAngel(sym, fresh) {
+    if (!angelOn() || Date.now() < angelDownTill) throw new Error('n/a');
+    const b = nseName(sym); if (!b) throw new Error('n/a');
+    const h = angelHit.get(b); if (h && !fresh && Date.now() - h.at < 8000) return h.v;
+    const jwt = await angelAuth(), k = await angelToken(b, jwt); if (!k) throw new Error('n/a');
+    const r = await fetch(ANGEL + '/rest/secure/angelbroking/market/v1/quote/', { method: 'POST', headers: angelH(jwt), body: JSON.stringify({ mode: 'FULL', exchangeTokens: { NSE: [k] } }), signal: TMO(8000) });
+    if (r.status === 401 || r.status === 403) { angelJwt.at = 0; throw new Error('Angel session expired'); }
+    const j = await r.json().catch(() => ({})), d = j && j.data && Array.isArray(j.data.fetched) ? j.data.fetched[0] : null;
+    if (!d || !(+d.ltp > 0)) throw new Error('no price');
+    const v = { p: +d.ltp, prev: +d.close || undefined, t: Math.floor(Date.now() / 1000) };
+    angelHit.set(b, { at: Date.now(), v });
+    return v;
+  }
+  // ---- Google Finance page (no key, no account). A 3rd opinion next to Yahoo / NSE and a real backup when Yahoo fails.
+  //      Reads the public quote page; if Google changes the page or blocks this server it just goes quiet for 10 minutes. ----
+  const gfNum = x => parseFloat(String(x).replace(/[^0-9.]/g, ''));
+  const gfCode = new Map(), gfHit = new Map(); let gfDownTill = 0;                    // gfCode: symbol -> 'TATASTEEL:NSE' / 'NVDA:NASDAQ' once found
+  async function gfPage(code) {
+    const r = await fetch('https://www.google.com/finance/quote/' + encodeURIComponent(code) + '?hl=en', { headers: { 'user-agent': UA, 'accept-language': 'en-US,en;q=0.9', cookie: 'CONSENT=YES+cb' }, signal: TMO(8000) });
+    if (r.status === 429 || /\/sorry\/|consent\.google/.test(r.url || '')) { gfDownTill = Date.now() + 10 * 60 * 1000; throw new Error('n/a'); }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const h = await r.text();
+    const m = h.match(/data-last-price="([\d.,]+)"/) || h.match(/class="YMlKec fxKbKc">[^\d<]*([\d.,]+)</);
+    if (!m || !(gfNum(m[1]) > 0)) throw new Error('no price');
+    const pm = h.match(/data-previous-close="([\d.,]+)"/) || h.match(/Previous close<\/div>[\s\S]{0,500}?class="P6K39c">[^\d<]*([\d.,]+)</);
+    return { p: gfNum(m[1]), prev: pm ? gfNum(pm[1]) : undefined };
+  }
+  async function srcGoogle(sym, fresh) {
+    if (Date.now() < gfDownTill) throw new Error('n/a');
+    const b = String(sym).replace(/\.NS$/, '');
+    if (/[.^=]/.test(b) || CRYPTO.test(b) || !/^[A-Z0-9&-]{1,20}$/.test(b)) throw new Error('n/a');
+    const h = gfHit.get(b); if (h && !fresh && Date.now() - h.at < 8000) return h.v;
+    const known = gfCode.get(b);
+    const tries = known ? [known] : (usSyms.has(b) ? [b + ':NASDAQ', b + ':NYSE', b + ':NYSEARCA'] : [b + ':NSE', b + ':NASDAQ', b + ':NYSE', b + ':NYSEARCA']);
+    let err;
+    for (const c of tries) {
+      try { const v = await gfPage(c); gfCode.set(b, c); gfHit.set(b, { at: Date.now(), v }); return v; }
+      catch (e) { err = e; if (/n\/a/.test(String(e && e.message))) throw e; if (known) break; }
+    }
+    throw err || new Error('no price');
+  }
+
+  const brokerWarn = {};
   async function quote(sym, full) {
-    const list = [['yahoo', srcYahoo], ['nse', srcNse]]; if (full) list.push(['twelvedata', srcTd]);
+    const list = [['yahoo', srcYahoo], ['nse', srcNse], ['google', srcGoogle]]; if (process.env.UPSTOX_TOKEN) list.push(['upstox', srcUpstox]); if (angelOn()) list.push(['angel', srcAngel]); if (full) list.push(['twelvedata', srcTd]);
     const res = await Promise.allSettled(list.map(x => x[1](sym, full))), ok = [], by = {}, all = {}, errs = {};
     res.forEach((r, i) => { if (r.status === 'fulfilled' && r.value && r.value.p > 0) { ok.push(Object.assign({ n: list[i][0] }, r.value)); by[list[i][0]] = r.value.p; all[list[i][0]] = r.value; }
       else errs[list[i][0]] = r.status === 'rejected' ? String((r.reason && r.reason.message) || r.reason).slice(0, 40) : 'no price'; });
+    ['upstox', 'angel'].forEach(k => { if (errs[k] && errs[k] !== 'n/a' && errs[k] !== 'no price' && Date.now() - (brokerWarn[k] || 0) > 3600000) { brokerWarn[k] = Date.now(); warn('Stocks ' + k + ' source failed', errs[k]); } });   // visible in server logs (the screen no longer shows source errors)
     if (!ok.length) throw new Error('no source');
-    const pick = ok.length >= 3 ? ok.slice().sort((a, b) => a.p - b.p)[1] : ok.length === 2 ? ((ok[1].t || 0) > (ok[0].t || 0) ? ok[1] : ok[0]) : ok[0];
+    const broker = ok.find(x => x.n === 'upstox') || ok.find(x => x.n === 'angel');                  // broker feed = real-time exchange price: use it first
+    const pick = broker || (ok.length >= 3 ? ok.slice().sort((a, b) => a.p - b.p)[1] : ok.length === 2 ? ((ok[1].t || 0) > (ok[0].t || 0) ? ok[1] : ok[0]) : ok[0]);
     const lo = Math.min.apply(null, ok.map(x => x.p)), hi = Math.max.apply(null, ok.map(x => x.p));
     const prev = pick.prev || (ok.find(x => x.prev) || {}).prev;
     return { p: pick.p, prev, t: pick.t || 0, at: Date.now(), src: pick.n, n: ok.length, spread: pick.p ? (hi - lo) / pick.p * 100 : 0, by, all, errs };
@@ -174,7 +285,7 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
     if (a.length > 300) a.splice(0, a.length - 300);
   }
 
-  const SRCNAME = { yahoo: 'Yahoo Finance', nse: 'NSE India', twelvedata: 'Twelve Data' };
+  const SRCNAME = { yahoo: 'Yahoo Finance', nse: 'NSE India', google: 'Google Finance', upstox: 'Upstox', angel: 'Angel One', twelvedata: 'Twelve Data' };
   const hms = t => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(t * 1000));
   // q = the alerting source's reading (q.p, q.prev, q.t) + q.src (its name) + q.all (every source's reading) for the comparison block
   function message(sym, ref, q, pct) {
