@@ -451,7 +451,7 @@ module.exports = function makeWhatsApp(o) {
     return (botCfg = botNorm(j));
   }
   const BOT_TTL = 10 * 60 * 1000;
-  let DL = null; try { DL = require('./dl-server')({ env, warn, store: { get: () => withWb(() => PROPS().getProperty('YT_COOKIES') || ''), set: v => withWb(() => { PROPS().setProperty('YT_COOKIES', v); }) } }); } catch (e) { warn('YouTube downloader', e && e.message); }
+  let DL = null; try { DL = require('./dl-server')({ env, warn, store: { get: () => withWb(() => PROPS().getProperty('YT_COOKIES') || ''), set: v => withWb(() => { PROPS().setProperty('YT_COOKIES', v); }) }, storeIg: { get: () => withWb(() => PROPS().getProperty('IG_COOKIES') || ''), set: v => withWb(() => { PROPS().setProperty('IG_COOKIES', v); }) } }); } catch (e) { warn('YouTube downloader', e && e.message); }
   const botState = new Map(), botQ = new Map(), botSeen = new Map();
   const botMatch = (pn, list) => { const d = digits(pn); if (!d) return ''; return list.find(c => d === c || d === CC + c || d.endsWith(c)) || ''; };   // -> the saved number that matches, or ''
   const botDup = (wm, text) => {                                       // WhatsApp can hand us the same message twice: answer it only once
@@ -875,11 +875,12 @@ module.exports = function makeWhatsApp(o) {
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
       if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
-      if (DL) opts.push(['dl', 'YouTube Video / Audio download']);          // every bot user; only the cookies step (3) is admin-only
+      if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
+      if (DL) opts.push(['ig', 'Instagram Reel download']);               // every bot user; only the cookies step (3) is admin-only          // every bot user; only the cookies step (3) is admin-only
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
-      const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
+      const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
       return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
     { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
@@ -892,6 +893,43 @@ module.exports = function makeWhatsApp(o) {
     const again = () => undefined;                                     // wrong number in the menu: stay quiet   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
+    if (/^ig/.test(cur.step || '') && DL) {                              // Instagram Reel: 1) link  2) the video comes in this chat  (3 = admin: Instagram cookies)
+      if (cur.step === 'igMenu') {
+        if (low === '3' && acc === 'ADMIN') { cur.step = 'igCk'; return ask(cur, '🍪 *Instagram cookies*\n\nAgar Instagram login maange to yahan apni *cookies.txt* file bhejo (📎 → Document), ya uska text paste kar do.\n\n⚠️ Asli account ki jagah ek *alag / naya* account use karo.\n\nSirf *instagram.com* ki cookies export karo (Netscape format).\n\n_0 = cancel_'); }
+        if (low !== '1') return say(cur.prompt);
+        cur.step = 'igLink'; return ask(cur, '📸 *Instagram Reel download*\n\nReel / video post ka *link* bhejo (jaise _instagram.com/reel/xxxx_).\n\n_0 = cancel_');
+      }
+      if (cur.step === 'igCk') {
+        const doc = unwrap(wm && wm.message).documentMessage; let txt = '';
+        if (doc) { try { txt = (await L().downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage })).toString('utf8'); } catch (e) { return say('❌ File download nahi hui, dobara bhejo.'); } }
+        else if (String(text || '').length > 200) txt = String(text);
+        else return say(cur.prompt);
+        try { const n = await DL.setIgCookies(txt); botState.delete(jid); return say('✅ *Instagram cookies save ho gayi* (' + n + ' cookies)\n\nAb *help* → Instagram Reel download se try karo.\n\n_Safety ke liye cookies wala message chat se delete kar do._'); }
+        catch (e) { return say('❌ ' + botErr(e) + '\n\nDobara bhejo ya *0* = cancel.'); }
+      }
+      if (cur.step === 'igLink') {
+        const url = DL.igLink(t); if (!url) return say('❌ Ye Instagram Reel / post ka link nahi lag raha. Dobara bhejo:');
+        botState.delete(jid);
+        const head = '⏳ *Reel download ho rahi hai*…\nFile isi chat me aayegi.';
+        const bar = p => '\n\n' + '█'.repeat(Math.round(p / 10)) + '░'.repeat(10 - Math.round(p / 10)) + '  *' + p + '%*';
+        const pm = await say(head + bar(0)); let shown = 0, lastAt = 0, editing = false;
+        const onPct = p => {
+          const now = Date.now(); if (!pm || !pm.key || editing || p < shown + 5 && p < 95 || now - lastAt < 4000) return;
+          editing = true; shown = p; lastAt = now;
+          s.sock.sendMessage(to, { text: head + bar(p), edit: pm.key }).catch(() => {}).then(() => { editing = false; });
+        };
+        let r = null;
+        try {
+          r = await DL.runIg(url, onPct);
+          const mb = (r.size / 1048576).toFixed(1);
+          if (r.size <= 50 * 1048576) await s.sock.sendMessage(to, { video: { url: r.file }, mimetype: 'video/mp4', caption: '📸 Instagram Reel · ' + mb + ' MB' });
+          else await s.sock.sendMessage(to, { document: { url: r.file }, mimetype: 'video/mp4', fileName: r.name, caption: '📸 Instagram Reel · ' + mb + ' MB' });
+          return say('✅ *Reel mil gayi* (' + mb + ' MB)\n\n_Dobara kuch karna ho to *help* bhejo._');
+        } catch (e) { return say('❌ Download nahi hua: ' + botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); }
+        finally { if (r) DL.done(r.dir); }
+      }
+      return;
+    }
     if (/^dl/.test(cur.step || '') && DL) {                              // YouTube download: 1) video / audio  2) link  3) quality  4) the file comes in this chat
       if (cur.step === 'dlKind') {
         if (low === '3' && acc === 'ADMIN') {
@@ -942,6 +980,10 @@ module.exports = function makeWhatsApp(o) {
     }
     if (cur.step === 'menu') {
       const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
+      if (key === 'ig') {
+        cur.step = 'igMenu';
+        return ask(cur, '📸 *Instagram Reel Download*\n\nKya chahiye?\n\n1️⃣  Reel / video download\n' + (acc === 'ADMIN' ? '3️⃣  Cookies set karo (login maange tab)\n\n_Number bhejo: 1 ya 3' : '\n_Number bhejo: 1') + '  ·  0 = cancel_');
+      }
       if (key === 'dl') {
         cur.step = 'dlKind';
         return ask(cur, '📥 *YouTube Download*\n\nKya chahiye?\n\n1️⃣  Video\n2️⃣  Audio\n' + (acc === 'ADMIN' ? '3️⃣  Cookies set karo (bot-check error aaye tab)\n\n_Number bhejo: 1, 2 ya 3' : '\n_Number bhejo: 1 ya 2') + '  ·  0 = cancel_');

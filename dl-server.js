@@ -162,7 +162,69 @@ module.exports = function (o) {
     } catch (e) { if (work) done(work); throw e; }
     finally { busy = false; }
   }
+
+  /* ---------- Instagram Reel / post video (same engine; Instagram often wants login cookies -> admin can send an Instagram cookies.txt) ---------- */
+  const IG_COOK = path.join(DIR, 'cookies-ig.txt'); let igCk = null;
+  function igLink(text) {                                              // the first Instagram reel / post / tv link in a message -> clean https link (no tracking query), or ''
+    const m = String(text || '').match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/(?:[\w.]+\/)?(?:reels?|p|tv)\/[\w-]{5,}/i);
+    if (!m) return '';
+    return (/^https?:\/\//i.test(m[0]) ? m[0] : 'https://' + m[0]).replace(/^http:/i, 'https:');
+  }
+  async function igCookies() {
+    if (igCk !== null) return igCk;
+    let t = ''; try { const b = o.storeIg && await o.storeIg.get(); if (b) t = zlib.gunzipSync(Buffer.from(b, 'base64')).toString('utf8'); } catch (e) { warn('Instagram cookies read', e && e.message); }
+    if (!t && String(env.IG_COOKIES || '').trim()) t = String(env.IG_COOKIES).replace(/\\n/g, '\n');
+    return (igCk = t);
+  }
+  async function setIgCookies(text) {
+    const t = String(text || '').replace(/\r\n?/g, '\n').trim() + '\n';
+    const rows = t.split('\n').filter(l => l.split('\t').length >= 7 && !l.startsWith('# '));
+    if (rows.length < 3 || !/instagram\.com/i.test(t)) throw new Error('Ye cookies.txt (Netscape format) nahi lag rahi, ya usme instagram.com ki cookies nahi hain.');
+    const b = zlib.gzipSync(Buffer.from(t, 'utf8')).toString('base64');
+    if (b.length > 45000) throw new Error('Cookies file bahut badi hai. Sirf instagram.com ki cookies export karo.');
+    if (!o.storeIg) throw new Error('Cookies save karne ki jagah nahi mili.');
+    await o.storeIg.set(b); igCk = t; return rows.length;
+  }
+  const igNice = (msg, hasCk) => {
+    msg = String(msg || '');
+    if (/login required|rate-limit|empty media response|requested content is not available|Restricted Video|checkpoint|sign in/i.test(msg)) return hasCk
+      ? 'Instagram ne cookies ke saath bhi roka (cookies expire ho gayi ya reel private hai). Admin se nayi Instagram cookies.txt dalwao (menu → Instagram → *3*).'
+      : 'Instagram is reel ke liye login maang raha hai. Admin menu → Instagram Reel download → *3* se Instagram cookies.txt bhejo. (Private account ki reel nahi chalegi.)';
+    if (/larger than max-filesize|File is larger/i.test(msg)) return 'File ' + MAX_MB + ' MB se badi hai.';
+    if (/no video|There is no video|Unsupported URL/i.test(msg)) return 'Is link me video nahi mila. Reel / video post ka link bhejo.';
+    if (/not available|unavailable|removed|404/i.test(msg)) return 'Ye reel available nahi hai (hata di gayi ya private hai).';
+    return msg.replace(/\s+/g, ' ').slice(0, 140) || 'Download fail ho gaya.';
+  };
+  function igOnce(bin, url, work, hasCk, onPct) {
+    return new Promise((res, rej) => {
+      const a = ['--no-playlist', '--no-warnings', '--no-simulate', '--restrict-filenames', '--max-filesize', MAX_MB + 'M', '-o', path.join(work, '%(id)s.%(ext)s'), '--print', 'after_move:filepath'];
+      if (ffmpeg) a.push('-f', 'bv*+ba/b', '--merge-output-format', 'mp4', '--ffmpeg-location', ffmpeg); else a.push('-f', 'b[ext=mp4]/b');
+      if (hasCk) a.push('--cookies', IG_COOK);
+      if (env.DL_PROXY) a.push('--proxy', env.DL_PROXY);
+      a.push('--newline', '--progress', '--progress-template', 'download:KSP %(progress.filename)s %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s', '--retries', '2', url);
+      const p = cp.spawn(bin, a, { stdio: ['ignore', 'pipe', 'pipe'] }), prog = progressor('video', onPct); let so = '', se = '', buf = '';
+      const kill = setTimeout(() => { try { p.kill('SIGKILL'); } catch (e) {} rej(new Error('Download bahut der laga raha tha, band kar diya.')); }, 8 * 60000);
+      p.stdout.on('data', d => { buf += d; const L = buf.split('\n'); buf = L.pop(); L.forEach(l => { if (!prog(l)) so += l + '\n'; }); });
+      p.stderr.on('data', d => { String(d).split('\n').forEach(l => prog(l)); se += d; if (se.length > 20000) se = se.slice(-20000); });
+      p.on('error', e => { clearTimeout(kill); rej(e); });
+      p.on('close', code => { clearTimeout(kill); if (buf && !prog(buf)) so += buf; if (code === 0) return res(so); rej(new Error(igNice(se.split('\n').filter(x => /ERROR/i.test(x)).pop() || se, hasCk))); });
+    });
+  }
+  async function runIg(url, onPct) {                                   // -> { file, name, size, dir }; caller sends it, then done(dir)
+    if (busy) throw new Error('Ek download pehle se chal raha hai. Thodi der baad try karo.');
+    busy = true; let work = '';
+    try {
+      const bin = await ensureBin(), ck = await igCookies();
+      fs.mkdirSync(DIR, { recursive: true }); work = fs.mkdtempSync(path.join(DIR, 'j-'));
+      if (ck) fs.writeFileSync(IG_COOK, ck);
+      const out = await igOnce(bin, url, work, !!ck, onPct);
+      const file = out.split('\n').map(x => x.trim()).filter(Boolean).pop();
+      if (!file || !fs.existsSync(file)) throw new Error('Download hua par file nahi mili.');
+      return { file, name: path.basename(file), size: fs.statSync(file).size, dir: work };
+    } catch (e) { if (work) done(work); throw e; }
+    finally { busy = false; }
+  }
   function done(dir) { try { if (dir && dir.startsWith(DIR)) fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {} }
 
-  return { link, resolve, run, done, qualities, qLabel, setCookies, hasCookies, maxMb: MAX_MB, hasFfmpeg: !!ffmpeg };
+  return { link, resolve, run, done, igLink, runIg, setIgCookies, qualities, qLabel, setCookies, hasCookies, maxMb: MAX_MB, hasFfmpeg: !!ffmpeg };
 };
