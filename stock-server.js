@@ -12,7 +12,8 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
   const cfgs = new Map(), refs = new Map(), px = {}, sentDay = new Map(), hist = new Map(), ccache = new Map();
   let loaded = false;
 
-  const toY = s => /[.^]/.test(s) ? s : s + '.NS';
+  const usSyms = new Set();                                        // plain tickers (NVDA, AAPL...) that Yahoo only knows WITHOUT the .NS suffix
+  const toY = s => (/[.^=-]/.test(s) || usSyms.has(s)) ? s : s + '.NS';
   const inr = n => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const ist = d => new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(d || new Date());
   const part = (p, t) => (p.find(x => x.type === t) || {}).value || '';
@@ -48,15 +49,28 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
   const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
   const TMO = ms => AbortSignal.timeout(ms);
   async function yahooChart(sym, iv, rg) {
-    let err;
-    for (const h of ['query1', 'query2']) {
-      try {
-        const r = await fetch('https://' + h + '.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(toY(sym)) + '?interval=' + iv + '&range=' + rg, { headers: { 'user-agent': UA }, signal: TMO(8000) });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return (await r.json()).chart.result[0];
-      } catch (e) { err = e; }
+    const once = async y => {
+      let err;
+      for (const h of ['query1', 'query2']) {
+        try {
+          const r = await fetch('https://' + h + '.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(y) + '?interval=' + iv + '&range=' + rg, { headers: { 'user-agent': UA }, signal: TMO(8000) });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          const res = (await r.json()).chart.result[0];
+          if (!res) throw new Error('no data');
+          return res;
+        } catch (e) { err = e; }
+      }
+      throw err;
+    };
+    const y = toY(sym);
+    try { return await once(y); }
+    catch (e) {
+      // "NVDA.NS" does not exist -> it is a US (or other) ticker: try it as typed
+      if (y !== sym && /HTTP 404|no data/.test(String(e && e.message))) {
+        const r = await once(sym); usSyms.add(sym); return r;
+      }
+      throw e;
     }
-    throw err;
   }
   async function srcYahoo(sym) {
     const m = (await yahooChart(sym, '1m', '1d')).meta;
@@ -77,8 +91,18 @@ module.exports = function ({ warn, withWb, WA, PUSH }) {
     const m = /^(\d{2})-(\w{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2})$/.exec(String(x || '')); if (!m || !(m[2] in MON)) return 0;
     return Math.round((Date.UTC(+m[3], MON[m[2]], +m[1], +m[4], +m[5], +m[6]) - 19800000) / 1000);
   }
+  let nseDownTill = 0;
   async function srcNse(sym, fresh) {
-    if (!/^[A-Z0-9&-]{1,20}$/.test(sym) || /^(BTC|ETH)-/.test(sym)) throw new Error('n/a');   // NSE equities only (not .BO, ^index, =X, crypto)
+    if (Date.now() < nseDownTill) throw new Error('n/a');                  // NSE is blocking this server right now: Yahoo alone is used
+    try { return await srcNse0(sym, fresh); }
+    catch (e) {
+      const m = String((e && e.message) || e);
+      if (/fetch failed|timeout|aborted|HTTP 40[13]|ECONN|ENOTFOUND/i.test(m)) { nseDownTill = Date.now() + 10 * 60 * 1000; throw new Error('n/a'); }
+      throw e;
+    }
+  }
+  async function srcNse0(sym, fresh) {
+    if (usSyms.has(sym) || !/^[A-Z0-9&-]{1,20}$/.test(sym) || /^(BTC|ETH)-/.test(sym)) throw new Error('n/a');   // NSE equities only (not .BO, ^index, =X, crypto)
     if ((nseBad.get(sym) || 0) > Date.now()) throw new Error('n/a');
     const hit = nseHit.get(sym); if (hit && !fresh && Date.now() - hit.at < 20000) return hit.v;       // be gentle with NSE: one call per symbol per 20 s
     const ck = await nseCookie();

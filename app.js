@@ -4320,7 +4320,7 @@ function licListHtml(){
         <div class="lic-grid lic-prem-box">
           ${f('Premium amount', licAmt(x.amount))}
           ${f('Premium mode', esc(LIC_FREQ[x.freq] || 'One-time'))}
-          ${f('Pay per year', licYearly(x) ? `${esc(licYearlyTxt(x))} <span class="lic-sub">${LIC_PER_YEAR[x.freq]} × ${esc(licAmt(x.amount))}</span>` : esc(licYearlyTxt(x)))}
+          ${f('Pay per year', licYearly(x) ? `${esc(licYearlyTxt(x))} <span class="lic-sub">${LIC_PER_YEAR[x.freq]} × ${licAmt(x.amount)}</span>` : esc(licYearlyTxt(x)))}
           ${f('Next renewal', rn.due ? `${licDateFmt(rn.due)} <span class="lic-rn ${rn.cls}" data-lic-id="${id}">${esc(rn.text)}</span>` : dash)}
         </div>
         ${more ? `<div class="lic-sec">More details</div><div class="lic-more">${more}</div>` : ''}
@@ -4384,8 +4384,8 @@ function vLic(){
         <span class="lic-rn lic-pill ${rn.cls}" data-lic-id="${esc(x.id)}">${esc(rn.text)}</span></div>`).join('')}</div>` : '';
   return `${licWaCard()}${remindCard}<div class="grid kpis" style="margin-bottom:16px">
       <div class="card kpi s"><div class="lbl">Total Policies</div><div class="val">${total}</div><div class="hint">customers</div></div>
-      <div class="card kpi p"><div class="lbl">Total Sum Assured</div><div class="val" style="font-size:calc(20px*var(--fs))">${esc(licAmt(totalAmt))}</div></div>
-      <div class="card kpi p"><div class="lbl">To pay in 1 year</div><div class="val lic-prem" style="font-size:calc(20px*var(--fs))">${esc(licAmt(yearAmt))}</div><div class="hint">${yearN} running polic${yearN === 1 ? 'y' : 'ies'} · monthly ×12, quarterly ×4, half-yearly ×2, yearly ×1</div></div>
+      <div class="card kpi p"><div class="lbl">Total Sum Assured</div><div class="val" style="font-size:calc(20px*var(--fs))">${licAmt(totalAmt)}</div></div>
+      <div class="card kpi p"><div class="lbl">To pay in 1 year</div><div class="val lic-prem" style="font-size:calc(20px*var(--fs))">${licAmt(yearAmt)}</div><div class="hint">${yearN} running polic${yearN === 1 ? 'y' : 'ies'} · monthly ×12, quarterly ×4, half-yearly ×2, yearly ×1</div></div>
       <div class="card kpi m"><div class="lbl">Renewal due ≤ 7 days</div><div class="val">${renew7}</div><div class="hint">pay soon</div></div>
       <div class="card kpi w"><div class="lbl">Renewal due ≤ 30 days</div><div class="val">${renew30}</div><div class="hint">upcoming</div></div>
       <div class="card kpi w"><div class="lbl">Maturing ≤ 30 days</div><div class="val">${maturing}</div></div>
