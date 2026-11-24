@@ -1,5 +1,5 @@
 /* KS · AI tab (All Options › AI): enter your own API key and chat with AI.
-   Supports Claude (Anthropic), ChatGPT (OpenAI) and Gemini (Google).
+   Supports Claude via Sign-in (Puter, no API key), or your own key for Claude (Anthropic), ChatGPT (OpenAI) and Gemini (Google).
    The API key is saved ONLY on this phone/browser (localStorage). It is never sent to the KS server or Google Sheet —
    the browser talks straight to the AI company. */
 (function(){
@@ -10,29 +10,64 @@
 
   var KEY = 'ks_ai_v1', HIST = 'ks_ai_hist_v1';
   var PROV = {
+    puter:     { n:'Claude — Sign in (no API key)', model:'claude-sonnet-4-5', hint:'', login:true },
     anthropic: { n:'Claude (Anthropic)', model:'claude-sonnet-5-5', hint:'Key starts with sk-ant-… (console.anthropic.com)' },
     openai:    { n:'ChatGPT (OpenAI)',   model:'gpt-4o-mini',       hint:'Key starts with sk-… (platform.openai.com)' },
     gemini:    { n:'Gemini (Google)',    model:'gemini-3.8-flash',  hint:'Key starts with AIza… (aistudio.google.com)' }
   };
-  var C = { provider:'anthropic', key:'', model:'', system:'' };   // settings (this device only)
+  var C = { provider:'puter', key:'', model:'', system:'' };   // settings (this device only)
   var M = [];                                                     // chat: [{role:'user'|'assistant', text}]
   var st = { busy:false, edit:false, err:'', ctl:null, timedOut:false, models:[], mBusy:false };
   try { var s0 = JSON.parse(localStorage.getItem(KEY) || '{}'); if (s0 && typeof s0 === 'object') for (var k in C) if (typeof s0[k] === 'string') C[k] = s0[k]; } catch(e){}
   try { M = JSON.parse(localStorage.getItem(HIST) || '[]') || []; } catch(e){ M = []; }
-  if (!PROV[C.provider]) C.provider = 'anthropic';
+  if (!PROV[C.provider]) C.provider = 'puter';
   st.edit = !C.key;
 
   function saveCfg(){ try { localStorage.setItem(KEY, JSON.stringify(C)); } catch(e){} }
   function saveHist(){ try { localStorage.setItem(HIST, JSON.stringify(M.slice(-40))); } catch(e){} }
   function esc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]; }); }
   function mask(k){ return k.length > 10 ? k.slice(0, 6) + '••••••' + k.slice(-4) : '••••••'; }
+  var PUTER_MODELS = ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5', 'claude-sonnet-4'];
+  /* ---------- "Sign in" route: Puter.js (user logs in with a free Puter account, no API key; usage is billed to THEIR Puter account) ---------- */
+  var puterP = null;
+  function loadPuter(){
+    if (window.puter) return Promise.resolve(window.puter);
+    if (puterP) return puterP;
+    puterP = new Promise(function(res, rej){
+      var s = document.createElement('script'); s.src = 'https://js.puter.com/v2/';
+      s.onload = function(){ window.puter ? res(window.puter) : rej(new Error('Puter did not load.')); };
+      s.onerror = function(){ puterP = null; rej(new Error('Could not load Puter login. Check your internet connection.')); };
+      document.head.appendChild(s);
+    });
+    return puterP;
+  }
+  function puterSignIn(){
+    if (st.busy) return; st.busy = true; st.err = ''; draw();
+    loadPuter().then(function(pu){ return pu.auth.signIn(); }).then(function(){
+      C.provider = 'puter'; C.key = 'puter-login'; saveCfg(); st.edit = false;
+      try { toast('Signed in ✓'); } catch(x){}
+    }).catch(function(e){ st.err = 'Sign-in failed: ' + ((e && (e.message || e.msg)) || 'cancelled or popup blocked'); })
+      .then(function(){ st.busy = false; draw(); });
+  }
+  function puterSignOut(){
+    try { window.puter && window.puter.auth.signOut(); } catch(e){}
+    C.key = ''; saveCfg(); st.edit = true; st.err = ''; draw();
+  }
+  function puterText(r){
+    if (typeof r === 'string') return r;
+    if (!r) return '';
+    var m = r.message || r;
+    if (typeof m === 'string') return m;
+    if (Array.isArray(m.content)) return m.content.map(function(b){ return b && (b.text || '') ; }).join('');
+    return typeof m.content === 'string' ? m.content : (typeof r.text === 'string' ? r.text : '');
+  }
   var OLD = { gemini: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-lite'] };   // retired ids -> use the current default
   function model(){
     var m = (C.model || '').trim();
     if (!m || (OLD[C.provider] && OLD[C.provider].indexOf(m) > -1)) return PROV[C.provider].model;
     return m;
   }
-  function guess(k){ k = String(k || '').trim(); return /^sk-ant-/.test(k) ? 'anthropic' : /^AIza/.test(k) ? 'gemini' : /^sk-/.test(k) ? 'openai' : ''; }
+  function guess(k){ k = String(k || '').trim(); if (!k) return ''; return /^sk-ant-/.test(k) ? 'anthropic' : /^AIza/.test(k) ? 'gemini' : /^sk-/.test(k) ? 'openai' : ''; }
 
   var css = document.createElement('style');
   css.textContent = [
@@ -60,6 +95,24 @@
     var p = C.provider, key = C.key.trim(), mdl = model(), sys = (C.system || '').trim();
     var hist = M.filter(function(m){ return m.role === 'user' || m.role === 'assistant'; }).slice(-30);
     st.ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    if (p === 'puter'){
+      var pm = hist.map(function(m){ return { role:m.role, content:m.text }; });
+      if (sys) pm.unshift({ role:'system', content:sys });
+      return loadPuter().then(function(pu){
+        return Promise.race([
+          pu.ai.chat(pm, { model: mdl }),
+          new Promise(function(_, rej){ setTimeout(function(){ rej(new Error('No reply in 60 seconds. Try again or pick another model.')); }, 60000); })
+        ]);
+      }).then(function(r){
+        var out = puterText(r);
+        if (!out) throw new Error('The AI sent an empty reply.');
+        return out;
+      }, function(e){
+        var m = e && (e.message || (e.error && e.error.message) || e.msg) || 'Request failed';
+        if (/auth|sign.?in|401|token/i.test(String(m))) m = 'Please sign in again. — ' + m;
+        throw new Error(m);
+      });
+    }
     var opt = { method:'POST', signal: st.ctl ? st.ctl.signal : undefined }, url, body;
 
     if (p === 'anthropic'){
@@ -103,6 +156,7 @@
 
   function listModels(){
     var p = C.provider, key = C.key.trim(), url, h = {};
+    if (p === 'puter'){ st.models = PUTER_MODELS.slice(); st.err = ''; return draw(); }
     if (!key || st.mBusy) return;
     if (p === 'anthropic'){ url = 'https://api.anthropic.com/v1/models?limit=100'; h = { 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' }; }
     else if (p === 'openai'){ url = 'https://api.openai.com/v1/models'; h = { 'authorization':'Bearer ' + key }; }
@@ -124,7 +178,7 @@
     if (st.busy) return;
     var ta = $('#aiIn'); if (!ta) return;
     var text = ta.value.trim(); if (!text) return;
-    if (!C.key.trim()){ st.edit = true; st.err = 'First enter your API key.'; draw(); return; }
+    if (!C.key.trim() || (C.provider === 'puter' && C.key !== 'puter-login')){ st.edit = true; st.err = C.provider === 'puter' ? 'First sign in.' : 'First enter your API key.'; draw(); return; }
     M.push({ role:'user', text:text }); saveHist();
     ta.value = ''; st.busy = true; st.err = ''; log(true);
     ask().then(function(out){ M.push({ role:'assistant', text:out }); saveHist(); })
@@ -147,7 +201,7 @@
     }).join('');
   }
   function logHtml(busy){
-    if (!M.length && !busy) return '<div class="ai-empty">🤖 Ask anything — the answer comes from your own AI API key.</div>';
+    if (!M.length && !busy) return '<div class="ai-empty">🤖 Ask anything — sign in (or add your own API key) and chat with AI.</div>';
     return M.map(function(m){
       var c = m.role === 'user' ? 'u' : (m.role === 'error' ? 'e' : 'a');
       return '<div class="ai-m ' + c + '">' + (m.role === 'error' ? '⚠ ' + esc(m.text) : fmt(m.text)) + '</div>';
@@ -167,15 +221,16 @@
         (st.err ? '<div class="err" style="margin:8px 0">' + esc(st.err) + '</div>' : '') +
         '<div class="ai-field"><label for="aiProv">AI provider</label><select class="select" id="aiProv" style="width:100%">' +
           Object.keys(PROV).map(function(k){ return '<option value="' + k + '"' + (k === C.provider ? ' selected' : '') + '>' + PROV[k].n + '</option>'; }).join('') + '</select></div>' +
-        '<div class="ai-field"><label for="aiKey">API key</label><input class="input" id="aiKey" type="text" name="ks-ai-key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" style="-webkit-text-security:disc" autocapitalize="off" spellcheck="false" placeholder="Paste your API key here" value="' + esc(C.key) + '"><div class="muted" style="font-size:12px;margin-top:4px">' + esc(p.hint) + '</div></div>' +
+        (p.login ? '<div class="ai-field"><button type="button" class="btn" id="aiPuter" style="width:100%"' + (st.busy ? ' disabled' : '') + '>' + (st.busy ? 'Opening login…' : '🔐 Sign in to use Claude') + '</button><div class="muted" style="font-size:12px;margin-top:6px">A Puter login window opens. Create a free account or sign in — no API key needed.</div></div>' : '') +
+        (p.login ? '' : '<div class="ai-field"><label for="aiKey">API key</label><input class="input" id="aiKey" type="text" name="ks-ai-key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" style="-webkit-text-security:disc" autocapitalize="off" spellcheck="false" placeholder="Paste your API key here" value="' + esc(C.key) + '"><div class="muted" style="font-size:12px;margin-top:4px">' + esc(p.hint) + '</div></div>') +
         '<div class="ai-field"><label for="aiModel">Model <span class="muted">(empty = ' + esc(p.model) + ')</span></label><input class="input" id="aiModel" autocomplete="off" autocapitalize="off" placeholder="' + esc(p.model) + '" value="' + esc(C.model) + '"></div>' +
         '<div class="ai-field"><label for="aiSys">Instructions for the AI <span class="muted">(optional)</span></label><textarea class="input" id="aiSys" rows="2" placeholder="e.g. Reply in Hinglish, keep answers short.">' + esc(C.system) + '</textarea></div>' +
-        '<div class="ai-row" style="margin-top:12px"><button type="button" class="btn" id="aiSave">Save key</button>' +
-          (C.key ? '<button type="button" class="btn ghost" id="aiCancel">Cancel</button><button type="button" class="btn ghost" id="aiDel">Remove key</button>' : '') + '</div>' +
-        '<div class="ai-note">🔒 The key is saved only on this device and goes straight to ' + esc(p.n) + ' — it is not stored on the KS server or in Google Sheet. API usage is charged to your own account.</div></div>';
+        '<div class="ai-row" style="margin-top:12px">' + (p.login ? '' : '<button type="button" class="btn" id="aiSave">Save key</button>') + (p.login ? '<button type="button" class="btn" id="aiSaveOpt">Save</button>' : '') +
+          (C.key ? '<button type="button" class="btn ghost" id="aiCancel">Cancel</button><button type="button" class="btn ghost" id="aiDel">' + (p.login ? 'Sign out' : 'Remove key') + '</button>' : '') + '</div>' +
+        (p.login ? '<div class="ai-note">🔐 Login is handled by Puter (puter.com), not by this app — your password never reaches KS. Claude usage is charged to your own Puter account (a free account has a limited allowance). This is not an official Anthropic login.</div></div>' : '<div class="ai-note">🔒 The key is saved only on this device and goes straight to ' + esc(p.n) + ' — it is not stored on the KS server or in Google Sheet. API usage is charged to your own account.</div></div>');
     } else {
-      cfg = '<div class="card ai-card"><div class="ai-row" style="justify-content:space-between"><div style="min-width:0"><b>' + esc(p.n) + '</b><div class="muted" style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis">' + esc(model()) + ' · key ' + esc(mask(C.key.trim())) + '</div></div>' +
-        '<div class="ai-row"><button type="button" class="btn ghost sm" id="aiModels">' + (st.mBusy ? '…' : '🔍 Models') + '</button><button type="button" class="btn ghost sm" id="aiEdit">⚙️ Key / model</button><button type="button" class="btn ghost sm" id="aiClear">🗑 Clear chat</button></div></div></div>';
+      cfg = '<div class="card ai-card"><div class="ai-row" style="justify-content:space-between"><div style="min-width:0"><b>' + esc(p.n) + '</b><div class="muted" style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis">' + esc(model()) + (p.login ? ' · signed in via Puter' : ' · key ' + esc(mask(C.key.trim()))) + '</div></div>' +
+        '<div class="ai-row"><button type="button" class="btn ghost sm" id="aiModels">' + (st.mBusy ? '…' : '🔍 Models') + '</button><button type="button" class="btn ghost sm" id="aiEdit">⚙️ ' + (p.login ? 'Account / model' : 'Key / model') + '</button><button type="button" class="btn ghost sm" id="aiClear">🗑 Clear chat</button></div></div></div>';
     }
     if (!(st.edit || !C.key)){
       if (st.err) cfg += '<div class="err" style="margin:0 0 10px">' + esc(st.err) + '</div>';
@@ -194,11 +249,14 @@
       var t = e.target.closest('button'); if (!t) return;
       if (t.dataset && t.dataset.m){ C.model = t.dataset.m; saveCfg(); st.models = []; st.err = ''; try { toast('Model: ' + C.model); } catch(x){} return draw(); }
       if (t.id === 'aiModels') return listModels();
+      if (t.id === 'aiPuter') return puterSignIn();
+      if (t.id === 'aiSaveOpt'){ C.model = ($('#aiModel').value || '').trim(); C.system = ($('#aiSys').value || '').trim(); saveCfg(); st.edit = !C.key; st.err = C.key ? '' : 'Sign in first.'; return draw(); }
       if (t.id === 'aiSend') return send();
       if (t.id === 'aiEdit'){ st.edit = true; st.err = ''; return draw(); }
       if (t.id === 'aiCancel'){ st.edit = false; st.err = ''; return draw(); }
       if (t.id === 'aiClear'){ M = []; saveHist(); return log(); }
       if (t.id === 'aiDel'){
+        if (C.provider === 'puter'){ if (!confirm('Sign out of Claude (Puter) on this device?')) return; return puterSignOut(); }
         if (!confirm('Remove the saved API key from this device?')) return;
         C.key = ''; saveCfg(); st.edit = true; st.err = ''; return draw();
       }
