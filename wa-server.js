@@ -614,7 +614,7 @@ module.exports = function makeWhatsApp(o) {
     const bad = [st.gh, st.rd, st.web, st.wa].includes('fail'), all = st.gh === 'ok' && st.rd === 'ok' && st.web === 'ok' && st.wa === 'ok';
     return depIc(st.gh) + ' *GitHub Upload:* ' + (st.gh === 'ok' ? 'Done' : st.gh === 'fail' ? 'Failed' : 'Uploading…') + '\n'
       + depIc(st.rd) + ' *Render Deploy:* ' + (st.rd === 'ok' ? 'Live' : st.rd === 'fail' ? 'Failed' : (st.rdTxt || 'Waiting…')) + '\n'
-      + depIc(st.file) + ' *File updated:* ' + ((st.files || []).join(', ') || '-') + (st.file === 'ok' ? ' — Done' : '') + '\n'
+      + depIc(st.file) + ' *File updated:* ' + ((st.files || []).length > 8 ? st.files.slice(0, 8).join(', ') + ' +' + (st.files.length - 8) + ' aur' : (st.files || []).join(', ') || '-') + (st.file === 'ok' ? ' — Done' : '') + '\n'
       + depIc(st.web) + ' *Website:* ' + (st.web === 'ok' ? 'Live 🌐' : st.web === 'fail' ? 'Failed' : 'Waiting…') + '\n'
       + depIc(st.wa) + ' *WhatsApp Server:* ' + (st.wa === 'ok' ? 'Live' : st.wa === 'fail' ? 'Live nahi hai' : 'Waiting…')
       + (all ? '\n\n🚀 *All Done! Website is Live* 🎊 (`' + (st.at || istHM()) + ' IST`)' : bad ? '\n\n❌ *Kuch fail ho gaya* — Deploy tab me log dekho.' : '');
@@ -662,7 +662,7 @@ module.exports = function makeWhatsApp(o) {
     const names = files.map(f => f.path.split('/').pop()), st = { gh: 'wait', rd: 'wait', file: 'wait', web: 'wait', wa: 'wait', files: names }, h = {};
     await depShow(s, jid, st, h);
     try {
-      const r = await deployFiles(files.map(f => ({ path: f.path, buf: f.buf })), 'Update ' + names.slice(0, 6).join(', ') + ' (from WhatsApp)');
+      const r = await deployFiles(files.map(f => ({ path: f.path, buf: f.buf })), 'Update ' + names.slice(0, 6).join(', ') + (names.length > 6 ? ' +' + (names.length - 6) + ' more' : '') + ' (from WhatsApp)', { many: files.length > 20 });
       botState.delete(jid);
       if (r.unchanged) return say('ℹ️ Ye file(s) GitHub par pehle se bilkul same hain — kuch badla nahi, isliye deploy nahi hoga.\n\n_Dobara kuch karna ho to *help* bhejo._');
       st.gh = 'ok'; st.file = 'ok'; st.files = r.changed.map(x => x.path + (x.isNew ? ' (new)' : '')); st.rdTxt = 'Deploy ho raha hai…';
@@ -858,6 +858,55 @@ module.exports = function makeWhatsApp(o) {
     }
   }
 
+  /* option "VCS ZIP": the ZIP sent in the chat is opened here and every file inside goes to GitHub in ONE commit (same upload + Render deploy + status message as option 4) */
+  function zipRead(buf) {
+    let e = -1; for (let i = buf.length - 22; i >= Math.max(0, buf.length - 70000); i--) { if (buf.readUInt32LE(i) === 0x06054b50) { e = i; break; } }
+    if (e < 0) throw new Error('ye sahi ZIP file nahi hai');
+    const n = buf.readUInt16LE(e + 10); let p = buf.readUInt32LE(e + 16); const out = []; let total = 0;
+    for (let k = 0; k < n; k++) {
+      if (buf.readUInt32LE(p) !== 0x02014b50) break;
+      const flag = buf.readUInt16LE(p + 8), method = buf.readUInt16LE(p + 10), csz = buf.readUInt32LE(p + 20), usz = buf.readUInt32LE(p + 24), nl = buf.readUInt16LE(p + 28), el = buf.readUInt16LE(p + 30), cl = buf.readUInt16LE(p + 32), lo = buf.readUInt32LE(p + 42);
+      const name = buf.toString('utf8', p + 46, p + 46 + nl).replace(/\\/g, '/'); p += 46 + nl + el + cl;
+      if (name.endsWith('/')) continue;
+      if (flag & 1) throw new Error('ZIP par password laga hai');
+      if (usz > 25 * 1048576) throw new Error('"' + name + '" 25 MB se badi hai');
+      total += usz; if (total > 60 * 1048576) throw new Error('ZIP ke andar ki files bahut badi hain (max 60 MB)');
+      const ds = lo + 30 + buf.readUInt16LE(lo + 26) + buf.readUInt16LE(lo + 28), raw = buf.subarray(ds, ds + csz);
+      let data;
+      if (method === 0) data = Buffer.from(raw);
+      else if (method === 8) data = zlib.inflateRawSync(raw, { maxOutputLength: 25 * 1048576 + 1 });
+      else throw new Error('"' + name + '": ZIP compression support nahi');
+      out.push({ path: name, buf: data });
+    }
+    if (!out.length) throw new Error('ZIP khali hai');
+    return out;
+  }
+  async function botVzip(s, jid, cur, wm, low) {
+    const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
+    const k = wm && wm.message ? kindText(wm.message) : null;
+    if (!k || k.kind !== 'file') return say('🗜️ ZIP file ko *Document* ke roop me bhejo (📎 → Document).\n\n_(0 = cancel)_');
+    if (!/\.zip$/i.test(String(k.name || ''))) return say('❌ *' + (k.name || 'file') + '* ZIP nahi hai. Sirf *.zip* file bhejo.');
+    if ((k.size || 0) > 25 * 1048576) return say('❌ ZIP 25 MB se badi hai.');
+    let buf; try { buf = await L().downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage }); } catch (e) { return say('❌ ZIP download nahi hui, dobara bhejo.'); }
+    if (!buf || !buf.length) return say('❌ ZIP khali mili, dobara bhejo.');
+    let list; try { list = zipRead(buf); } catch (e) { return say('❌ ZIP nahi khuli: ' + botErr(e) + '\n\nDobara bhejo.'); }
+    list = list.filter(f => { const seg = f.path.split('/'); return !(seg[0] === '__MACOSX' || seg.some(x => x === '.git' || x === 'node_modules') || /^(\.DS_Store|Thumbs\.db)$/i.test(seg[seg.length - 1])); });
+    const top = new Set(list.map(f => f.path.split('/')[0]));            // one single top folder (GitHub "repo-main/" zip): drop it
+    if (top.size === 1 && list.every(f => f.path.includes('/'))) list = list.map(f => ({ path: f.path.split('/').slice(1).join('/'), buf: f.buf }));
+    if (!list.length) return say('❌ ZIP me koi file nahi mili.');
+    if (list.length > 300) return say('❌ ZIP me ' + list.length + ' file hain — max 300.');
+    const bad = list.find(f => !/^[\w.\-\/]+$/.test(f.path));
+    if (bad) return say('❌ ZIP ke andar ka naam sahi nahi (*' + bad.path + '*). Naam me space ya khaas chinh na ho.');
+    for (const f of list) {
+      if (!/\.(js|gs|json)$/i.test(f.path)) continue;                    // a broken script would break the live website: refuse the whole ZIP
+      try { const txt = f.buf.toString('utf8'); if (/\.json$/i.test(f.path)) JSON.parse(txt); else new (require('vm').Script)(txt.replace(/^#!.*/, ''), { filename: f.path }); }
+      catch (e) { return say('❌ *' + f.path + '* me syntax error hai, ZIP upload nahi hui:\n' + botErr(e) + '\n\nSahi ZIP dobara bhejo.'); }
+    }
+    await say('🗜️ ZIP khul gayi — *' + list.length + ' file*. GitHub pe bhej raha hoon…');
+    cur.step = 'vcsFile'; cur.files = list;
+    return botVcsFlush(s, jid, cur);
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -873,6 +922,7 @@ module.exports = function makeWhatsApp(o) {
       if (pm.att === 'edit') opts.push(['att', 'Attendance']);
       if (ok('exp')) opts.push(['bill', 'Bill PDF']);
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
+      if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vzip', 'VCS ZIP (website update — ZIP file upload)']);
       if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
@@ -893,6 +943,7 @@ module.exports = function makeWhatsApp(o) {
     const again = () => undefined;                                     // wrong number in the menu: stay quiet   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
+    if (cur.step === 'vzipFile') return botVzip(s, jid, cur, wm, low);
     if (/^ig/.test(cur.step || '') && DL) {                              // Instagram Reel: 1) link  2) the video comes in this chat  (3 = admin: Instagram cookies)
       if (cur.step === 'igMenu') {
         if (low === '3' && acc === 'ADMIN') { cur.step = 'igCk'; return ask(cur, '🍪 *Instagram cookies*\n\nAgar Instagram login maange to yahan apni *cookies.txt* file bhejo (📎 → Document), ya uska text paste kar do.\n\n⚠️ Asli account ki jagah ek *alag / naya* account use karo.\n\nSirf *instagram.com* ki cookies export karo (Netscape format).\n\n_0 = cancel_'); }
@@ -993,6 +1044,12 @@ module.exports = function makeWhatsApp(o) {
         if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
         cur.step = 'vcsFile'; cur.files = [];
         return ask(cur, '🌐 *VCS — website update*\n\nFile ko *Document* ke roop me bhejo (📎 → Document). Ek ya kai file bhej sakte ho — sab ek hi baar me GitHub pe jayengi aur website live hogi.\n\n_Folder me daalni ho to file ke caption me path likho, jaise_ *public/app.js*\n\n_(0 = cancel)_');
+      }
+      if (key === 'vzip') {
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
+        cur.step = 'vzipFile'; cur.files = [];
+        return ask(cur, '🗜️ *VCS ZIP — website update*\n\nWebsite ki *ZIP file* ko *Document* ke roop me bhejo (📎 → Document).\n\nZIP ke andar ki sab files ek hi baar me GitHub pe jayengi (jo badli hui hain wahi update hongi) aur website live hogi. GitHub wala folder-zip bhi chalega (upar ka folder apne aap hat jayega).\n\n_(0 = cancel)_');
       }
       if (key === 'src') {                                              // admin only: send the whole website source as a ZIP document (tap it in WhatsApp = it downloads to the phone)
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');

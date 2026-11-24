@@ -1,0 +1,576 @@
+name: Build APK
+
+# Started from the app: Version tab > Build APK.  Builds an Android app (Capacitor) from the files you ticked,
+# then publishes it as a GitHub release "apk-<run number>" with the .apk attached.
+run-name: ${{ inputs.app_name }} ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      files:
+        description: Comma separated list of repository files to put in the app
+        required: true
+      app_name:
+        description: App name
+        required: true
+        default: KS
+      app_id:
+        description: Package id (com.yourname.app)
+        required: true
+        default: com.ks.app
+      version:
+        description: Version
+        required: true
+        default: '1.0'
+      apk:
+        description: Optional - path of an uploaded .apk in the repo to re-package with a new name and package id (used by Cloner)
+        required: false
+        default: ''
+      zip:
+        description: Optional - path of an uploaded .zip in the repo to use as the app instead of the file list (used by Cloner)
+        required: false
+        default: ''
+      live:
+        description: "true = the app loads the latest files from your server every time (no new APK needed for normal updates). false = files are packed inside the APK."
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: ${{ inputs.apk == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      FILES: ${{ inputs.files }}
+      APP_NAME: ${{ inputs.app_name }}
+      APP_ID: ${{ inputs.app_id }}
+      APP_VER: ${{ inputs.version }}
+      ZIP: ${{ inputs.zip }}
+      LIVE: ${{ inputs.live }}
+      RUN_NO: ${{ github.run_number }}
+      GSJ: ${{ secrets.GOOGLE_SERVICES_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Collect the app files (server files are never put in the app)
+        run: |
+          mkdir -p www
+          if [ -n "$ZIP" ]; then
+            case "$ZIP" in /*|*..*) echo "Bad zip path"; exit 1 ;; esac
+            [ -f "$ZIP" ] || { echo "Missing zip: $ZIP"; exit 1; }
+            rm -rf /tmp/src && mkdir -p /tmp/src && unzip -q -o "$ZIP" -d /tmp/src
+            rm -rf /tmp/src/__MACOSX
+            SRC=/tmp/src
+            while [ "$(ls -A "$SRC" | wc -l)" = "1" ] && [ -d "$SRC/$(ls -A "$SRC")" ]; do SRC="$SRC/$(ls -A "$SRC")"; done
+            cp -r "$SRC"/. www/
+            rm -rf www/.git www/.github www/node_modules
+            find www -type f \( -name 'server.js' -o -name 'Code.gs' -o -name 'gas-shim.js' -o -name 'google-store.js' -o -name 'live-monitor.js' -o -name 'fcm.js' -o -name 'package.json' -o -name 'package-lock.json' -o -name '*-server.js' -o -name '*.yml' -o -name '*.md' -o -name '*.java' -o -name 'google-services.json' \) -delete
+          else
+          IFS=',' read -ra LIST <<< "$FILES"
+          for f in "${LIST[@]}"; do
+            f="$(echo "$f" | xargs)"
+            case "$f" in
+              ""|/*|*..*|.*) continue ;;
+              server.js|Code.gs|gas-shim.js|google-store.js|live-monitor.js|fcm.js|package.json|package-lock.json|*-server.js|github/*|*.yml|*.md) continue ;;
+            esac
+            [ -f "$f" ] || { echo "Missing file: $f"; exit 1; }
+            mkdir -p "www/$(dirname "$f")"
+            cp "$f" "www/$f"
+          done
+          fi
+          for f in native-push.js ringtone.ogg; do [ -f "$f" ] && cp "$f" "www/$f" || true; done
+          [ -f www/index.html ] || { echo "index.html must be part of the app"; exit 1; }
+          if [ -n "$GSJ" ]; then echo "window.KS_FCM = true;" > www/ks-native.js; else echo "window.KS_FCM = false;" > www/ks-native.js; fi
+          grep -q 'ks-native.js' www/index.html || sed -i '0,/<head>/s//<head>\n<script src="ks-native.js"><\/script>/' www/index.html
+          ls -la www | head -60
+
+      - name: Create the Android project
+        run: |
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/push-notifications@6 @capacitor/local-notifications@6
+          LIVE_URL=""
+          if [ "$LIVE" != "false" ] && [ -z "$ZIP" ] && [ -f www/app.js ]; then
+            API="$(grep -m1 -oP "const API_URL = '\K[^']+" www/app.js || true)"
+            if [ -n "$API" ]; then LIVE_URL="${API%/}/app/"; fi
+          fi
+          export LIVE_URL
+          echo "Live update URL: ${LIVE_URL:-none (files are packed inside the APK)}"
+          if [ -n "$LIVE_URL" ]; then
+            cat > www/offline.html <<OFF
+          <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Offline</title></head>
+          <body style="font-family:system-ui;margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:#0b1220;color:#e5e7eb;text-align:center;padding:24px">
+          <div style="font-size:46px">📡</div><b style="font-size:19px">Internet nahi mil raha</b>
+          <span style="color:#94a3b8">Connection check karke dobara try karo.</span>
+          <button onclick="location.replace('$LIVE_URL')" style="padding:12px 26px;border:0;border-radius:12px;background:#4f46e5;color:#fff;font-size:16px">Retry</button></body></html>
+          OFF
+          fi
+          node -e "const c = { appId: process.env.APP_ID, appName: process.env.APP_NAME, webDir: 'www', server: { androidScheme: 'https' }, android: { allowMixedContent: false }, plugins: { PushNotifications: { presentationOptions: ['badge','sound','alert'] } } }; if (process.env.LIVE_URL) { c.server.url = process.env.LIVE_URL; c.server.errorPath = 'offline.html'; } require('fs').writeFileSync('capacitor.config.json', JSON.stringify(c, null, 2))"
+          npx cap add android
+          npx cap sync android
+
+      - name: In-app Browser (AdGuard DNS) - native plugin
+        run: |
+          set -e
+          [ -f KsBrowserPlugin.java ] && [ -f KsBrowserActivity.java ] || { echo "::warning::KsBrowser*.java files missing - Browser tab will open links in a normal tab"; exit 0; }
+          JAVA_DIR=android/app/src/main/java
+          mkdir -p $JAVA_DIR/ks/browser
+          cp KsBrowserPlugin.java KsBrowserActivity.java $JAVA_DIR/ks/browser/
+          MA="$(find $JAVA_DIR -name MainActivity.java | head -1)"
+          PKG="$(grep -m1 '^package ' "$MA" | sed 's/package \(.*\);/\1/')"
+          cat > "$MA" <<EOF
+          package $PKG;
+          import android.os.Bundle;
+          import com.getcapacitor.BridgeActivity;
+          import ks.browser.KsBrowserPlugin;
+          public class MainActivity extends BridgeActivity {
+            @Override public void onCreate(Bundle savedInstanceState) {
+              registerPlugin(KsBrowserPlugin.class);
+              super.onCreate(savedInstanceState);
+            }
+          }
+          EOF
+          M=android/app/src/main/AndroidManifest.xml
+          ACT='    <activity android:name="ks.browser.KsBrowserActivity" android:hardwareAccelerated="true" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:windowSoftInputMode="adjustResize" android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout|uiMode" />'
+          sed -i "s#</application>#$ACT\n    </application>#" $M
+          grep -n "KsBrowserActivity" $M
+
+      - name: Share to this app (Android share menu -> Links)
+        run: |
+          set -e
+          M=android/app/src/main/AndroidManifest.xml
+          python3 - <<'PY'
+          import re, glob
+          m = open('android/app/src/main/AndroidManifest.xml', encoding='utf-8').read()
+          if 'android.intent.action.SEND' not in m:
+              f = '<intent-filter><action android:name="android.intent.action.SEND" /><category android:name="android.intent.category.DEFAULT" /><data android:mimeType="text/plain" /></intent-filter>'
+              m = m.replace('</activity>', f + '\n        </activity>', 1)
+              open('android/app/src/main/AndroidManifest.xml', 'w', encoding='utf-8').write(m)
+          m = open('android/app/src/main/AndroidManifest.xml', encoding='utf-8').read()
+          if 'REQUEST_INSTALL_PACKAGES' not in m:
+              m = m.replace('<application', '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application', 1)
+              open('android/app/src/main/AndroidManifest.xml', 'w', encoding='utf-8').write(m)
+          ma = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)[0]
+          j = open(ma, encoding='utf-8').read()
+          if 'ksShare(' not in j:
+              j = re.sub(r'(package [^;]+;)', r'\1\nimport android.content.Intent;\nimport android.os.Handler;\nimport android.os.Looper;\nimport org.json.JSONObject;', j, 1)
+              meth = """
+            private void ksShare(Intent i) {
+              try {
+                if (i == null || !Intent.ACTION_SEND.equals(i.getAction())) return;
+                String t = i.getStringExtra(Intent.EXTRA_TEXT);
+                if (t == null || t.length() == 0) return;
+                String s = i.getStringExtra(Intent.EXTRA_SUBJECT);
+                if (s == null) s = "";
+                final String js = "window.ksShareIn&&window.ksShareIn(" + JSONObject.quote(t) + "," + JSONObject.quote(s) + ")";
+                final Handler h = new Handler(Looper.getMainLooper());
+                int[] delays = {300, 1500, 4000, 8000};
+                for (int k = 0; k < delays.length; k++) {
+                  h.postDelayed(new Runnable() {
+                    public void run() {
+                      try { if (bridge != null && bridge.getWebView() != null) bridge.getWebView().evaluateJavascript(js, null); } catch (Exception e) {}
+                    }
+                  }, delays[k]);
+                }
+              } catch (Exception e) {}
+            }
+            @Override
+            protected void onNewIntent(Intent intent) {
+              super.onNewIntent(intent);
+              ksShare(intent);
+            }
+            public static class KsDlBridge {
+              static final java.util.HashSet<Long> APK_IDS = new java.util.HashSet<Long>();
+              private final android.content.Context c;
+              KsDlBridge(android.content.Context c) { this.c = c; }
+              @android.webkit.JavascriptInterface
+              public String info() {
+                try {
+                  android.content.pm.PackageInfo p = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
+                  return p.versionName + "|" + p.lastUpdateTime;
+                } catch (Exception e) {
+                  return "";
+                }
+              }
+              @android.webkit.JavascriptInterface
+              public String download(String url, String name, String mime) {
+                try {
+                  if (url == null || !url.startsWith("http")) return "bad link";
+                  String safe = (name == null || name.length() == 0) ? "download" : name.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  android.app.DownloadManager.Request r = new android.app.DownloadManager.Request(android.net.Uri.parse(url));
+                  if (mime != null && mime.length() > 0) r.setMimeType(mime);
+                  r.setTitle(safe);
+                  r.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                  r.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, safe);
+                  long id = ((android.app.DownloadManager) c.getSystemService(android.content.Context.DOWNLOAD_SERVICE)).enqueue(r);
+                  if (safe.toLowerCase().endsWith(".apk")) APK_IDS.add(Long.valueOf(id));
+                  return "ok";
+                } catch (Exception e) {
+                  return "err " + e.getMessage();
+                }
+              }
+              @android.webkit.JavascriptInterface
+              public String save(String name, String mime, String b64) {
+                try {
+                  byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                  String safe = (name == null || name.length() == 0) ? "download" : name.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  if (mime == null || mime.length() == 0) mime = "application/octet-stream";
+                  java.io.OutputStream o;
+                  if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, safe);
+                    v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime);
+                    v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS);
+                    android.net.Uri u = c.getContentResolver().insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                    o = c.getContentResolver().openOutputStream(u);
+                  } else {
+                    java.io.File d = c.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS);
+                    d.mkdirs();
+                    o = new java.io.FileOutputStream(new java.io.File(d, safe));
+                  }
+                  o.write(data);
+                  o.close();
+                  return "ok";
+                } catch (Exception e) {
+                  return "err " + e.getMessage();
+                }
+              }
+              @android.webkit.JavascriptInterface
+              public String saveImg(String name, String mime, String b64, String album) {
+                try {
+                  byte[] data = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+                  String safe = (name == null || name.length() == 0) ? "page.png" : name.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  if (mime == null || mime.length() == 0) mime = "image/png";
+                  String alb = (album == null || album.length() == 0) ? "PDF Pages" : album.replaceAll("[^a-zA-Z0-9._ -]", "_");
+                  java.io.OutputStream o;
+                  if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    android.content.ContentValues v = new android.content.ContentValues();
+                    v.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, safe);
+                    v.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime);
+                    v.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_PICTURES + "/" + alb);
+                    android.net.Uri u = c.getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+                    o = c.getContentResolver().openOutputStream(u);
+                    o.write(data);
+                    o.close();
+                  } else {
+                    java.io.File d = new java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), alb);
+                    d.mkdirs();
+                    java.io.File f = new java.io.File(d, safe);
+                    o = new java.io.FileOutputStream(f);
+                    o.write(data);
+                    o.close();
+                    android.media.MediaScannerConnection.scanFile(c, new String[]{ f.getAbsolutePath() }, new String[]{ mime }, null);
+                  }
+                  return "ok";
+                } catch (Exception e) {
+                  return "err " + e.getMessage();
+                }
+              }
+            }
+            private void ksDl() {
+              try {
+                android.webkit.WebView w = bridge.getWebView();
+                w.addJavascriptInterface(new KsDlBridge(this), "KsDl");
+                android.content.BroadcastReceiver rc = new android.content.BroadcastReceiver() {
+                  public void onReceive(android.content.Context ctx, Intent in) {
+                    try {
+                      long id = in.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                      if (!KsDlBridge.APK_IDS.remove(Long.valueOf(id))) return;
+                      android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE);
+                      android.net.Uri u = dm.getUriForDownloadedFile(id);
+                      if (u == null) return;
+                      Intent ins = new Intent(Intent.ACTION_VIEW);
+                      ins.setDataAndType(u, "application/vnd.android.package-archive");
+                      ins.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                      startActivity(ins);
+                    } catch (Exception e) {}
+                  }
+                };
+                android.content.IntentFilter fl = new android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+                if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(rc, fl, 2); else registerReceiver(rc, fl);
+                w.setDownloadListener(new android.webkit.DownloadListener() {
+                  public void onDownloadStart(String url, String ua, String cd, String mime, long len) {
+                    try {
+                      if (url == null || !url.startsWith("http")) return;
+                      android.app.DownloadManager.Request r = new android.app.DownloadManager.Request(android.net.Uri.parse(url));
+                      r.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                      r.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, android.webkit.URLUtil.guessFileName(url, cd, mime));
+                      ((android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE)).enqueue(r);
+                      android.widget.Toast.makeText(MainActivity.this, "Downloading… see Downloads", android.widget.Toast.LENGTH_SHORT).show();
+                    } catch (Exception e) {}
+                  }
+                });
+              } catch (Exception e) {}
+            }
+          """
+              if 'super.onCreate(savedInstanceState);' in j:
+                  j = j.replace('super.onCreate(savedInstanceState);', 'super.onCreate(savedInstanceState);\n    ksShare(getIntent());\n    ksDl();', 1)
+              else:
+                  meth += """
+            @Override
+            public void onCreate(android.os.Bundle savedInstanceState) {
+              super.onCreate(savedInstanceState);
+              ksShare(getIntent());
+              ksDl();
+            }
+          """
+              j = re.sub(r'(class MainActivity extends BridgeActivity\s*\{)', r'\1' + meth.replace('\\', '\\\\'), j, 1)
+              open(ma, 'w', encoding='utf-8').write(j)
+          print(open(ma, encoding='utf-8').read())
+          PY
+          grep -n "action.SEND" $M
+
+      - name: Your own call ringtone when the app is closed - native plugin
+        run: |
+          set -e
+          [ -f KsRingPlugin.java ] || { echo "::warning::KsRingPlugin.java missing - your uploaded ringtone will only play while the app is open"; exit 0; }
+          JAVA_DIR=android/app/src/main/java
+          mkdir -p $JAVA_DIR/ks/ring
+          cp KsRingPlugin.java $JAVA_DIR/ks/ring/
+          python3 - <<'PY'
+          import glob
+          ma = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)[0]
+          j = open(ma, encoding='utf-8').read()
+          if 'KsRingPlugin' not in j:
+              j = j.replace('super.onCreate(savedInstanceState);', 'registerPlugin(ks.ring.KsRingPlugin.class);\n    super.onCreate(savedInstanceState);', 1)
+              open(ma, 'w', encoding='utf-8').write(j)
+          print(j[:1500])
+          PY
+          grep -c "KsRingPlugin" android/app/src/main/java/*/*/*/MainActivity.java || true
+
+      - name: Geo-fence attendance (office 1000 m) - native plugin
+        run: |
+          set -e
+          [ -f KsGeoPlugin.java ] || { echo "::warning::KsGeoPlugin.java missing - geo-fence attendance will only work while the app is open"; exit 0; }
+          JAVA_DIR=android/app/src/main/java
+          mkdir -p $JAVA_DIR/ks/geo
+          cp KsGeoPlugin.java $JAVA_DIR/ks/geo/
+          python3 - <<'PY'
+          import glob
+          ma = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)[0]
+          j = open(ma, encoding='utf-8').read()
+          if 'KsGeoPlugin' not in j:
+              j = j.replace('super.onCreate(savedInstanceState);', 'registerPlugin(ks.geo.KsGeoPlugin.class);\n    super.onCreate(savedInstanceState);', 1)
+              open(ma, 'w', encoding='utf-8').write(j)
+          print(j[:1500])
+          PY
+          M=android/app/src/main/AndroidManifest.xml
+          grep -q "android.permission.ACCESS_BACKGROUND_LOCATION" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.ACCESS_BACKGROUND_LOCATION\" />\n</manifest>#" $M
+          grep -q "ks.geo.KsGeoPlugin\$GeoReceiver" $M || sed -i "s#</application>#    <receiver android:name=\"ks.geo.KsGeoPlugin\$GeoReceiver\" android:exported=\"false\" />\n    <receiver android:name=\"ks.geo.KsGeoPlugin\$BootReceiver\" android:exported=\"true\"><intent-filter><action android:name=\"android.intent.action.BOOT_COMPLETED\" /></intent-filter></receiver>\n    </application>#" $M
+          grep -n "KsGeoPlugin\|BACKGROUND_LOCATION" $M android/app/src/main/java/*/*/*/MainActivity.java
+
+      - name: Firebase (notifications when the app is closed)
+        run: |
+          if [ -n "$GSJ" ]; then
+            printf '%s' "$GSJ" > android/app/google-services.json
+            # Clones use a different package id than the one registered in Firebase: add a matching client entry so the build does not fail
+            if ! grep -q "\"package_name\": *\"$APP_ID\"" android/app/google-services.json; then
+              node -e "const fs=require('fs');const p='android/app/google-services.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));const c=JSON.parse(JSON.stringify(j.client[0]));c.client_info.android_client_info.package_name=process.env.APP_ID;j.client.push(c);fs.writeFileSync(p,JSON.stringify(j,null,2));"
+            fi
+            echo "Firebase config added"
+          else
+            echo "::warning::Secret GOOGLE_SERVICES_JSON is not set - the app is built WITHOUT notifications while it is closed."
+          fi
+
+      - name: App icon, notification icon, permissions, version
+        run: |
+          set -e
+          M=android/app/src/main/AndroidManifest.xml
+          RES=android/app/src/main/res
+          # permissions
+          for p in POST_NOTIFICATIONS VIBRATE CAMERA ACCESS_FINE_LOCATION ACCESS_COARSE_LOCATION RECORD_AUDIO MODIFY_AUDIO_SETTINGS BLUETOOTH_CONNECT INTERNET SCHEDULE_EXACT_ALARM USE_EXACT_ALARM RECEIVE_BOOT_COMPLETED; do
+            grep -q "android.permission.$p" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
+          done
+          # mic/camera hardware declared optional (so Play/Android never filters the app) - needed for WebView getUserMedia
+          for f in microphone camera; do
+            grep -q "android.hardware.$f\"" $M || sed -i "s#</manifest>#    <uses-feature android:name=\\\"android.hardware.$f\\\" android:required=\\\"false\\\" />\n</manifest>#" $M
+          done
+          grep -n "RECORD_AUDIO\|hardware.microphone" $M
+          # real ringtone for incoming calls (notification channel 'calls_v2' uses res/raw/ks_ringtone)
+          if [ -f ringtone.ogg ]; then mkdir -p $RES/raw && cp ringtone.ogg $RES/raw/ks_ringtone.ogg; else echo "::warning::ringtone.ogg missing - calls will only beep"; fi
+          # notification channel + small icon used by Firebase when the app is closed
+          META='    <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="messages" />'
+          if [ -f badge-72.png ]; then
+            mkdir -p $RES/drawable
+            cp badge-72.png $RES/drawable/ic_stat_notify.png
+            META="$META\n    <meta-data android:name=\"com.google.firebase.messaging.default_notification_icon\" android:resource=\"@drawable/ic_stat_notify\" />"
+          fi
+          sed -i "s#</application>#$META\n    </application>#" $M
+          # launcher icon from icon-512.png
+          if [ -f icon-512.png ]; then
+            command -v convert >/dev/null || sudo apt-get install -y imagemagick >/dev/null
+            rm -rf $RES/mipmap-anydpi-v26
+            for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+              n="${d%%:*}"; s="${d##*:}"
+              mkdir -p $RES/mipmap-$n
+              convert icon-512.png -resize ${s}x${s} $RES/mipmap-$n/ic_launcher.png
+              cp $RES/mipmap-$n/ic_launcher.png $RES/mipmap-$n/ic_launcher_round.png
+              rm -f $RES/mipmap-$n/ic_launcher_foreground.png
+            done
+          fi
+          # version
+          sed -i "s/versionCode [0-9]*/versionCode $RUN_NO/; s/versionName \".*\"/versionName \"$APP_VER\"/" android/app/build.gradle
+          grep -n "versionCode\|versionName" android/app/build.gradle
+
+      - name: Fixed signing key (every new APK installs OVER the old one)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KS_B64: ${{ secrets.SIGNING_KEYSTORE }}
+        run: |
+          # Android only updates an app when the new APK has the SAME signing key. A fresh runner makes a new random key every time
+          # ("App not installed as package conflicts with an existing package"). So the key is made ONCE, kept on the app-updates branch, and reused.
+          mkdir -p ~/.android
+          # best option: a fixed key kept in the repository secret SIGNING_KEYSTORE (base64). Same key on every build = every APK installs over the old one.
+          if [ -n "$KS_B64" ]; then
+            printf '%s' "$KS_B64" | tr -d ' \n\r' | base64 -d > "$RUNNER_TEMP/secret.keystore" 2>/dev/null
+            if keytool -list -keystore "$RUNNER_TEMP/secret.keystore" -storepass android >/dev/null 2>&1; then cp "$RUNNER_TEMP/secret.keystore" ~/.android/debug.keystore; echo "Using the signing key from the SIGNING_KEYSTORE secret"; exit 0; fi
+            echo "::warning::SIGNING_KEYSTORE secret is set but is not a valid key - using the saved key instead"
+          fi
+          P=signing/debug.keystore; B=app-updates; T="$RUNNER_TEMP/ks.keystore"
+          get() { rm -f "$T"; gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/$P?ref=$B" > "$T" 2>/dev/null && [ -s "$T" ] && keytool -list -keystore "$T" -storepass android >/dev/null 2>&1 && cp "$T" ~/.android/debug.keystore; }
+          if get; then echo "Using the saved signing key"; exit 0; fi
+          rm -f ~/.android/debug.keystore
+          keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$B" >/dev/null 2>&1 || gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$B" -f sha="$GITHUB_SHA" >/dev/null 2>&1 || true
+          if gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="Add app signing key" -f branch="$B" -f content="$(base64 -w0 ~/.android/debug.keystore)" >/dev/null 2>&1; then
+            echo "Saved a new signing key (first build with a fixed key)"
+          else
+            sleep 6
+            if get; then echo "Using the key saved by another build"; else echo "::warning::Could not save the signing key - this APK is signed with a one-time key"; fi
+          fi
+
+      - name: Show the signing key fingerprint (same value on every build = updates install over the old app)
+        run: |
+          keytool -list -v -keystore ~/.android/debug.keystore -storepass android 2>/dev/null | grep -E "SHA256|SHA-256" | head -1 || true
+
+      - name: Build the APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Publish the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SAFE="$(echo "$APP_NAME" | tr -c 'A-Za-z0-9._-' '_')"
+          OUT="${SAFE}-${APP_VER}.apk"
+          cp android/app/build/outputs/apk/debug/app-debug.apk "$OUT"
+          gh release create "apk-${RUN_NO}" "$OUT" --title "$APP_NAME $APP_VER" --notes "Android app built from ${GITHUB_SHA::7}" --target "$GITHUB_SHA"
+
+  # Cloner with an uploaded .apk: unpack it, give it a new package id + name, rebuild and sign it again
+  repack:
+    if: ${{ inputs.apk != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      APK: ${{ inputs.apk }}
+      APP_NAME: ${{ inputs.app_name }}
+      APP_ID: ${{ inputs.app_id }}
+      APP_VER: ${{ inputs.version }}
+      RUN_NO: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Fixed signing key (every new APK installs OVER the old one)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KS_B64: ${{ secrets.SIGNING_KEYSTORE }}
+        run: |
+          # Android only updates an app when the new APK has the SAME signing key. A fresh runner makes a new random key every time
+          # ("App not installed as package conflicts with an existing package"). So the key is made ONCE, kept on the app-updates branch, and reused.
+          mkdir -p ~/.android
+          # best option: a fixed key kept in the repository secret SIGNING_KEYSTORE (base64). Same key on every build = every APK installs over the old one.
+          if [ -n "$KS_B64" ]; then
+            printf '%s' "$KS_B64" | tr -d ' \n\r' | base64 -d > "$RUNNER_TEMP/secret.keystore" 2>/dev/null
+            if keytool -list -keystore "$RUNNER_TEMP/secret.keystore" -storepass android >/dev/null 2>&1; then cp "$RUNNER_TEMP/secret.keystore" ~/.android/debug.keystore; echo "Using the signing key from the SIGNING_KEYSTORE secret"; exit 0; fi
+            echo "::warning::SIGNING_KEYSTORE secret is set but is not a valid key - using the saved key instead"
+          fi
+          P=signing/debug.keystore; B=app-updates; T="$RUNNER_TEMP/ks.keystore"
+          get() { rm -f "$T"; gh api -H "Accept: application/vnd.github.raw" "repos/$GITHUB_REPOSITORY/contents/$P?ref=$B" > "$T" 2>/dev/null && [ -s "$T" ] && keytool -list -keystore "$T" -storepass android >/dev/null 2>&1 && cp "$T" ~/.android/debug.keystore; }
+          if get; then echo "Using the saved signing key"; exit 0; fi
+          rm -f ~/.android/debug.keystore
+          keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$B" >/dev/null 2>&1 || gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$B" -f sha="$GITHUB_SHA" >/dev/null 2>&1 || true
+          if gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$P" -f message="Add app signing key" -f branch="$B" -f content="$(base64 -w0 ~/.android/debug.keystore)" >/dev/null 2>&1; then
+            echo "Saved a new signing key (first build with a fixed key)"
+          else
+            sleep 6
+            if get; then echo "Using the key saved by another build"; else echo "::warning::Could not save the signing key - this APK is signed with a one-time key"; fi
+          fi
+
+      - name: Re-package the APK (new name + package id)
+        run: |
+          set -e
+          trap 'echo "::error::Clone failed at: $BASH_COMMAND"' ERR
+          echo "APK: $APK ($(stat -c%s "$APK" 2>/dev/null || echo missing) bytes)"
+          case "$APK" in /*|*..*) echo "Bad apk path"; exit 1 ;; esac
+          [ -f "$APK" ] || { echo "Missing apk: $APK"; exit 1; }
+          curl -sSL -o apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar
+          java -jar apktool.jar d -f -o dec "$APK" 2>&1 | tail -40; [ -f dec/AndroidManifest.xml ] || { echo "::error::apktool could not open this APK (split/bundle, protected or obfuscated app)"; exit 1; }
+          python3 - <<'PY'
+          import os, re, glob
+          D = 'dec'
+          new, name, ver = os.environ['APP_ID'], os.environ['APP_NAME'], os.environ['APP_VER']
+          mp = D + '/AndroidManifest.xml'
+          m = open(mp, encoding='utf-8').read()
+          old = re.search(r'<manifest\b[^>]*?\spackage="([^"]+)"', m).group(1)
+          TOK = '@@OLD@@'
+          def fix_tag(t):                       # class names stay in the OLD package (the code is not renamed)
+              def nm(x):
+                  v = x.group(2)
+                  if v.startswith('.'): v = TOK + v
+                  elif v.startswith(old + '.'): v = TOK + v[len(old):]
+                  elif '.' not in v: v = TOK + '.' + v
+                  return x.group(1) + '="' + v + '"'
+              return re.sub(r'(android:(?:name|targetActivity))="([^"]*)"', nm, t.group(0))
+          m = re.sub(r'<(?:activity|activity-alias|service|receiver|provider)\b[^>]*>', fix_tag, m)
+          m = m.replace(old, new).replace(TOK, old)       # package, provider authorities, permission names -> new id
+          def lab(t):
+              return re.sub(r'android:label="(?!@)[^"]*"', 'android:label="' + name.replace('&', '&amp;') + '"', t.group(0))
+          m = re.sub(r'<(?:application|activity)\b[^>]*>', lab, m)
+          open(mp, 'w', encoding='utf-8').write(m)
+          esc = lambda s: s.replace('&', '&amp;').replace('<', '&lt;')
+          for p in glob.glob(D + '/res/values*/strings.xml'):
+              s = open(p, encoding='utf-8').read()
+              for k, v in (('app_name', name), ('title_activity_main', name), ('package_name', new), ('custom_url_scheme', new)):
+                  s = re.sub(r'(<string name="' + k + r'"[^>]*>)[^<]*(</string>)', lambda x: x.group(1) + esc(v) + x.group(2), s)
+              open(p, 'w', encoding='utf-8').write(s)
+          yp = D + '/apktool.yml'
+          y = open(yp, encoding='utf-8').read()
+          y = re.sub(r"versionCode: .*", "versionCode: '" + os.environ['RUN_NO'] + "'", y)
+          y = re.sub(r"versionName: .*", "versionName: '" + ver + "'", y)
+          open(yp, 'w', encoding='utf-8').write(y)
+          print('package', old, '->', new)
+          PY
+          java -jar apktool.jar b -o unsigned.apk dec 2>&1 | tail -40; [ -f unsigned.apk ] || { echo "::error::apktool could not rebuild this APK (protected / obfuscated apps usually cannot be repacked)"; exit 1; }
+          BT="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$BT/zipalign" -f -p 4 unsigned.apk aligned.apk
+          [ -s ~/.android/debug.keystore ] || keytool -genkeypair -keystore ~/.android/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          "$BT/apksigner" sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out signed.apk aligned.apk
+          "$BT/apksigner" verify signed.apk && echo "signed OK"
+
+      - name: Publish the APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SAFE="$(echo "$APP_NAME" | tr -c 'A-Za-z0-9._-' '_')"
+          OUT="${SAFE}-${APP_VER}.apk"
+          cp signed.apk "$OUT"
+          gh release create "apk-${RUN_NO}" "$OUT" --title "$APP_NAME $APP_VER" --notes "Cloned APK ${APP_ID}" --target "$GITHUB_SHA"

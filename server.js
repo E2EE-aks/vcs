@@ -247,7 +247,7 @@ function makeApp(store, env) {
     const z = await srcZipGet();
     return { code: 200, headers: { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="' + z.name + '"', 'Content-Length': z.buf.length, 'Cache-Control': 'no-store' }, body: z.buf };
   }
-  const WA = require('./wa-server')({ env, warn, alertTo: () => vwTo(), sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m) => globalThis.WA_DEPLOY_(f, m), zip: () => srcZipGet(), zipLink: () => srcLink(), renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
+  const WA = require('./wa-server')({ env, warn, alertTo: () => vwTo(), sign, enc, dec, withWb: fn => withWb(fn), notify: (uid, m) => PUSH.send(uid, m), deploy: (f, m, op) => globalThis.WA_DEPLOY_(f, m, op), zip: () => srcZipGet(), zipLink: () => srcLink(), renderDeploys: async () => (RD.key && RD.svc) ? rdApi('GET', '/services/' + encodeURIComponent(RD.svc) + '/deploys?limit=8') : null });   // notify = phone notification for a new WhatsApp message
 
   const YT = require('./yt-server')({ env, warn, sign, dl: () => WA.dl() });
   let vcsMirror = null;                                                                     // set below: copies the app's alerts to WhatsApp
@@ -831,9 +831,9 @@ function makeApp(store, env) {
     return { sha: String(nc.sha).slice(0, 7), url: nc.html_url, changed: changed.map(f => ({ path: f.path, isNew: !cur.has(f.path) })), skipped, repo, branch };
   }
   // used by the WhatsApp helper (menu 4 = VCS): the main admin's number sends files, they go to GitHub in ONE commit, Render redeploys.  The browser cache stamp is refreshed when the new version starts (see start-up below).
-  globalThis.WA_DEPLOY_ = async (files, message) => {
+  globalThis.WA_DEPLOY_ = async (files, message, opts) => {
     if (!(GH.repo && GH.token)) throw new Error('GitHub connect nahi hai (Render me GITHUB_TOKEN aur GITHUB_REPO daalo).');
-    if (!Array.isArray(files) || !files.length || files.length > 20) throw new Error('1 se 20 file bhejo.');
+    if (!Array.isArray(files) || !files.length || files.length > ((opts && opts.many) ? DEP_FILES : 20)) throw new Error((opts && opts.many) ? '1 se ' + DEP_FILES + ' file bhejo.' : '1 se 20 file bhejo.');
     let total = 0; const seen = new Set(), bufs = [];
     for (const f of files) {
       if (!f || !depPathOk(f.path)) throw new Error('"' + (f && f.path) + '" sahi file path nahi hai.');
