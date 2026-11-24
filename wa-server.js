@@ -907,6 +907,82 @@ module.exports = function makeWhatsApp(o) {
     return botVcsFlush(s, jid, cur);
   }
 
+  /* ---------- incoming message -> alert number -> "reply?" ----------
+     When anybody who is NOT one of the bot numbers writes to the linked WhatsApp (9621755459), an alert goes to the alert number (Deploy > WhatsApp alerts, 9670692422):
+       who wrote + the message, and the question "Reply karna hai?".   *Reply* to that alert with  1 = Haan  /  2 = Nahi.
+       1 -> the bot asks for the text; the next message typed in that chat is sent from the linked WhatsApp to that person.
+     Switch off: env WA_RELAY=0, or the "VCS alerts" switch in Deploy > WhatsApp alerts. Needs the alert number to be one of the bot numbers (it is the chat where the menu works). */
+  const RLY_KEY = 'WA_RELAY';
+  async function rlyLoad() {
+    let j = {}; try { j = JSON.parse(await withWb(() => PROPS().getProperty(RLY_KEY) || '') || '{}'); } catch (e) {}
+    return { map: j.map && typeof j.map === 'object' ? j.map : {}, last: j.last || '' };
+  }
+  const rlySave = a => withWb(() => {
+    const ks = Object.keys(a.map); ks.slice(0, Math.max(0, ks.length - 40)).forEach(k => { delete a.map[k]; });
+    PROPS().setProperty(RLY_KEY, JSON.stringify(a)); return true;
+  });
+  let rlyQ = Promise.resolve();
+  function relayIn(uid, s, wm, jid, bc) {
+    try {
+      if (uid !== 'ADMIN' || String(env.WA_RELAY || '1') === '0') return;
+      const k = kindText(wm.message); if (!k) return;
+      if (/^(protocol|reaction)/.test(k.kind || '')) return;
+      rlyQ = rlyQ.then(async () => {
+        let cfg = {}; try { cfg = JSON.parse(await withWb(() => PROPS().getProperty('VCS_WA_CFG') || '') || '{}'); } catch (e) {}
+        if (cfg.on === false || cfg.on === 'false') return;
+        const to = String(cfg.to || '').replace(/[^\d+]/g, '') || (o.alertTo ? await o.alertTo() : '') || (await licCfg()).to; if (!to) return;
+        const pn = pnOf(s, jid); if (pn && botMatch(pn, [digits(to)])) return;            // the alert number itself: never relay
+        if (!bc || !bc.on || !botMatch(digits(to), bc.nums || [])) return;                 // the reply is typed in the alert number's bot chat, so that number must be a bot number
+        const c = s.chats.get(jid) || {}, num = pn ? '+' + pn.split('@')[0] : numOf(jid);
+        const who = c.name || c.pn || wm.pushName || num || 'Unknown';
+        const body = k.kind === 'text' ? (k.text || '') : ((k.label || k.kind || 'Message') + (k.text ? '\n' + k.text : ''));
+        const hm = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+        const text = '📩 *Naya message aaya*\n\n👤 *' + who + '*' + (num ? '\n📞 ' + num : '') + '\n🕒 ' + hm + ' IST\n\n💬 ' + (body.slice(0, 1500) || '—') +
+          '\n\n*Reply karna hai?*\n1️⃣ *Haan* — is message ko Reply karke *1* bhejo, phir apna message type karo\n2️⃣ *Nahi* — Reply karke *2* bhejo';
+        for (let i = 0; i < 4; i++) {
+          try {
+            await new Promise(r => setTimeout(r, i ? 1500 : 800));
+            const mid = await sendText(uid, to, text);
+            if (typeof mid === 'string') { const a = await rlyLoad(); a.map[mid] = { jid, name: who, num }; a.last = mid; await rlySave(a); }
+            return;
+          } catch (e) { if (i === 3) throw e; }
+        }
+      }).catch(e => warn('WhatsApp reply alert', e && e.message));
+    } catch (e) { warn('WhatsApp reply alert', e && e.message); }
+  }
+  async function relayHandle(s, jid, low, t, num, wm, say, cur) {       // true = handled here
+    const bd = ((await botGet()).bind || {})[num] || {};
+    if ((bd.acc || 'ADMIN') !== 'ADMIN') return false;
+    if (cur && cur.step === 'relayText') {                               // the text to send
+      if (['0', 'cancel', 'stop'].includes(low)) { botState.delete(jid); await say('❎ Reply cancel ho gaya.'); return true; }
+      const k = wm && wm.message ? kindText(wm.message) : null;
+      if (!k || k.kind !== 'text' || !String(k.text || '').trim()) { await say('✍️ *' + cur.name + '* ko bhejne ke liye *text* likho.\n\n_(0 = cancel)_'); return true; }
+      const text = String(k.text).slice(0, 4000);
+      try {
+        await sendGuard(s, cur.to);
+        const sent = await s.sock.sendMessage(cur.to, { text });
+        try { addMsg('ADMIN', s, cur.to, Object.assign({}, sent, { key: Object.assign({}, sent && sent.key, { fromMe: true }), message: { conversation: text }, messageTimestamp: Math.floor(Date.now() / 1000), status: 2 }), false); } catch (e) {}
+      } catch (e) { botState.delete(jid); await say('❌ Message nahi gaya: ' + botErr(e)); return true; }
+      botState.delete(jid);
+      await say('✅ *' + cur.name + '*' + (cur.num ? ' (' + cur.num + ')' : '') + ' ko bhej diya:\n\n' + text.slice(0, 300));
+      return true;
+    }
+    if (low !== '1' && low !== '2') return false;
+    const ci = wm && wm.message && (wm.message.extendedTextMessage || {}).contextInfo, qid = ci && ci.stanzaId ? String(ci.stanzaId) : '';
+    const a = await rlyLoad(); let ref = qid ? a.map[qid] : null;
+    if (!ref && !qid && !cur && a.last && a.map[a.last] && !a.map[a.last].done) {          // plain 1 / 2 (no Reply): only when nothing else is waiting
+      let wait = 0; try { wait = (await withWb(() => aprPending())).length; } catch (e) {}
+      if (!wait) ref = a.map[a.last];
+    }
+    if (!ref || ref.done) return false;
+    const id = qid && a.map[qid] ? qid : a.last;
+    if (a.map[id]) { a.map[id].done = 1; await rlySave(a).catch(() => {}); }
+    if (low === '2') { await say('👍 Theek hai, *' + ref.name + '* ko reply nahi bhejunga.'); return true; }
+    botState.set(jid, { step: 'relayText', at: Date.now(), to: ref.jid, name: ref.name, num: ref.num });
+    await say('✍️ Ab *' + ref.name + '*' + (ref.num ? ' (' + ref.num + ')' : '') + ' ko jo bhejna hai wo *type karo*.\nWo 9621755459 wale WhatsApp se chala jayega.\n\n_(0 = cancel)_');
+    return true;
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -935,6 +1011,7 @@ module.exports = function makeWhatsApp(o) {
     };
     { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
     if (BOT_HI.test(low)) return menu();
+    if (await relayHandle(s, jid, low, t, num, wm, say, cur)) return;       // 1 / 2 answer to a "new message" alert, or the text to send
     if (await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
     if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
@@ -1200,7 +1277,7 @@ module.exports = function makeWhatsApp(o) {
       const jid = wm.key.remoteJid; if (!/@(s\.whatsapp\.net|lid)$/.test(jid || '')) return;
       if (Date.now() - tsOf(wm.messageTimestamp) > 120000) return;          // old message (history sync) - never answer those
       botGet().then(c => {
-        const num = c.on && c.nums.length ? botMatch(pnOf(s, jid), c.nums) : ''; if (!num) return;
+        const num = c.on && c.nums.length ? botMatch(pnOf(s, jid), c.nums) : ''; if (!num) { const k0 = kindText(wm.message); if (k0 && !botDup(wm, k0.kind === 'text' ? (k0.text || '') : '#' + String(wm.key.id || ''))) relayIn(uid, s, wm, jid, c); return; }
         const k = kindText(wm.message), text = k && k.kind === 'text' ? (k.text || '') : '';
         if (botDup(wm, text || (k && k.kind !== 'text' ? '#' + String(wm.key.id || '') : ''))) return;                                   // the same message again -> no second answer
         const prev = botQ.get(jid) || Promise.resolve();                // one message at a time per chat
