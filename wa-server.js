@@ -931,7 +931,7 @@ module.exports = function makeWhatsApp(o) {
         let cfg = {}; try { cfg = JSON.parse(await withWb(() => PROPS().getProperty('VCS_WA_CFG') || '') || '{}'); } catch (e) {}
         if (cfg.on === false || cfg.on === 'false') return warn('WhatsApp reply alert', 'skipped: VCS alerts switch is off');
         const to = String(cfg.to || '').replace(/[^\d+]/g, '') || (o.alertTo ? await o.alertTo() : '') || (await licCfg()).to; if (!to) return warn('WhatsApp reply alert', 'skipped: no alert number set (Deploy > WhatsApp alerts)');
-        const pn = pnOf(s, jid); if (pn && botMatch(pn, [digits(to)])) return;            // the alert number itself: never relay
+        const pn = pnOf(s, jid); if (pn && botMatch(pn, [digits(to)]) && !/^test\b/i.test(k.kind === 'text' ? String(k.text || '').trim() : '')) return;   // the alert number itself: never relay (only a message starting with "test" is relayed, so you can try it from that number)
         if (!bc || !bc.on || !botMatch(digits(to), bc.nums || [])) return warn('WhatsApp reply alert', 'skipped: alert number ' + to + ' is not one of the WhatsApp bot numbers (or the bot is off)');                 // the reply is typed in the alert number's bot chat, so that number must be a bot number
         const c = s.chats.get(jid) || {}, num = pn ? '+' + pn.split('@')[0] : numOf(jid);
         const who = c.name || c.pn || wm.pushName || num || 'Unknown';
