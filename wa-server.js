@@ -929,10 +929,10 @@ module.exports = function makeWhatsApp(o) {
       if (/^(protocol|reaction)/.test(k.kind || '')) return;
       rlyQ = rlyQ.then(async () => {
         let cfg = {}; try { cfg = JSON.parse(await withWb(() => PROPS().getProperty('VCS_WA_CFG') || '') || '{}'); } catch (e) {}
-        if (cfg.on === false || cfg.on === 'false') return;
-        const to = String(cfg.to || '').replace(/[^\d+]/g, '') || (o.alertTo ? await o.alertTo() : '') || (await licCfg()).to; if (!to) return;
+        if (cfg.on === false || cfg.on === 'false') return warn('WhatsApp reply alert', 'skipped: VCS alerts switch is off');
+        const to = String(cfg.to || '').replace(/[^\d+]/g, '') || (o.alertTo ? await o.alertTo() : '') || (await licCfg()).to; if (!to) return warn('WhatsApp reply alert', 'skipped: no alert number set (Deploy > WhatsApp alerts)');
         const pn = pnOf(s, jid); if (pn && botMatch(pn, [digits(to)])) return;            // the alert number itself: never relay
-        if (!bc || !bc.on || !botMatch(digits(to), bc.nums || [])) return;                 // the reply is typed in the alert number's bot chat, so that number must be a bot number
+        if (!bc || !bc.on || !botMatch(digits(to), bc.nums || [])) return warn('WhatsApp reply alert', 'skipped: alert number ' + to + ' is not one of the WhatsApp bot numbers (or the bot is off)');                 // the reply is typed in the alert number's bot chat, so that number must be a bot number
         const c = s.chats.get(jid) || {}, num = pn ? '+' + pn.split('@')[0] : numOf(jid);
         const who = c.name || c.pn || wm.pushName || num || 'Unknown';
         const body = k.kind === 'text' ? (k.text || '') : ((k.label || k.kind || 'Message') + (k.text ? '\n' + k.text : ''));
@@ -1013,7 +1013,7 @@ module.exports = function makeWhatsApp(o) {
     if (BOT_HI.test(low)) return menu();
     if (await relayHandle(s, jid, low, t, num, wm, say, cur)) return;       // 1 / 2 answer to a "new message" alert, or the text to send
     if (await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
-    if (!cur) return;                                                   // not in a chat and not "help" -> stay silent
+    if (!cur) { relayIn('ADMIN', s, wm, jid, await botGet()); return; }   // a bot number writing normally (no menu chat open, not "help") is just a message for the owner -> alert + "reply?"
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
     const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
