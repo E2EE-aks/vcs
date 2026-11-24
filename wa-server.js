@@ -983,6 +983,28 @@ module.exports = function makeWhatsApp(o) {
     return true;
   }
 
+  /* ---------- VCS AI: Claude answers in the WhatsApp chat (through Puter: the admin's Puter token is saved once, in Script Properties) ---------- */
+  const AI_TOK = { get: () => withWb(() => PROPS().getProperty('PUTER_TOKEN') || ''), set: v => withWb(() => { PROPS().setProperty('PUTER_TOKEN', v); }) };
+  let aiPuter = null, aiPuterTok = '';
+  function aiClient(tok) {                                              // lazy: the server still starts if the package is missing
+    if (aiPuter && aiPuterTok === tok) return aiPuter;
+    const { init } = require('@heyputer/puter.js/src/init.cjs');
+    aiPuter = init(tok); aiPuterTok = tok; return aiPuter;
+  }
+  const AI_MODEL = () => process.env.VCS_AI_MODEL || 'claude-sonnet-4-5';
+  const AI_SYS = 'Tum "VCS AI" ho, ek helpful assistant jo WhatsApp par jawab de raha hai. User ki bhasha me jawab do (Hindi/Hinglish/English). Jawab chhota aur saaf rakho. WhatsApp formatting use karo: *bold*, _italic_, simple lists; markdown headings aur tables nahi.';
+  function aiClean(t) {                                                 // markdown -> WhatsApp style
+    return String(t || '').replace(/\r/g, '').replace(/^#{1,6}\s*(.+)$/gm, '*$1*').replace(/\*\*(.+?)\*\*/g, '*$1*').replace(/^\s*[-*]\s+/gm, '• ').replace(/^---+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function aiChunks(t, n = 3500) { const out = []; let r = t; while (r.length > n) { let k = r.lastIndexOf('\n', n); if (k < n / 2) k = r.lastIndexOf(' ', n); if (k < n / 2) k = n; out.push(r.slice(0, k)); r = r.slice(k).trim(); } if (r) out.push(r); return out; }
+  async function aiAsk(tok, hist) {
+    const pu = aiClient(tok), msgs = [{ role: 'system', content: AI_SYS }].concat(hist.slice(-12));
+    const r = await Promise.race([pu.ai.chat(msgs, { model: AI_MODEL() }), new Promise((_, no) => setTimeout(() => no(new Error('60 second me jawab nahi aaya')), 60000))]);
+    const m = (r && r.message) || r; let out = typeof m === 'string' ? m : Array.isArray(m && m.content) ? m.content.map(b => (b && b.text) || '').join('') : String((m && m.content) || (r && r.text) || '');
+    out = aiClean(out); if (!out) throw new Error('AI ne khali jawab bheja');
+    return out;
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -1003,6 +1025,7 @@ module.exports = function makeWhatsApp(o) {
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
       if (DL) opts.push(['ig', 'Instagram Reel download']);               // every bot user; only the cookies step (3) is admin-only          // every bot user; only the cookies step (3) is admin-only
+      opts.push(['ai', 'VCS AI (Claude — kuch bhi pucho)']);
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
@@ -1106,8 +1129,43 @@ module.exports = function makeWhatsApp(o) {
       }
       return;
     }
+    if (cur.step === 'aiTok') {                                          // admin: paste the Puter token once
+      if (acc !== 'ADMIN') { botState.delete(jid); return say('❌ Ye sirf admin ke liye hai.'); }
+      const tok = t.replace(/^bearer\s+/i, '').replace(/\s+/g, '');
+      if (tok.length < 20) return say(cur.prompt);
+      try { await AI_TOK.set(tok); } catch (e) { return say('❌ Token save nahi hua: ' + botErr(e)); }
+      cur.step = 'aiChat'; cur.hist = []; cur.tok = tok;
+      return ask(cur, '✅ *Token save ho gaya.*\n\n_Safety ke liye token wala message chat se delete kar do._\n\n🤖 *VCS AI*\nAb kuch bhi pucho — jawab yahin aayega.\n\n_0 = band_');
+    }
+    if (cur.step === 'aiChat') {                                         // every message here is a question for the AI
+      if (!t) return;
+      if (low === 'token' && acc === 'ADMIN') { cur.step = 'aiTok'; return ask(cur, '🔑 Naya *Puter token* bhejo.\n\n_0 = cancel_'); }
+      try { s.sock.sendPresenceUpdate('composing', to).catch(() => {}); } catch (e) {}
+      cur.hist = (cur.hist || []).concat([{ role: 'user', content: t }]);
+      try {
+        const tok = cur.tok || (cur.tok = await AI_TOK.get());
+        const ans = await aiAsk(tok, cur.hist);
+        cur.hist.push({ role: 'assistant', content: ans }); cur.hist = cur.hist.slice(-12); cur.at = Date.now();
+        for (const part of aiChunks(ans)) await say(part);
+        return;
+      } catch (e) {
+        cur.hist.pop();
+        const m = botErr(e);
+        return say('❌ AI jawab nahi de paya: ' + m + (/auth|token|401|403|sign/i.test(m) ? '\n\n' + (acc === 'ADMIN' ? '_Naya token dene ke liye *token* bhejo._' : '_Admin ko token update karna hoga._') : '') + (/Cannot find module|MODULE_NOT_FOUND/i.test(m) ? '\n\n_Server par puter package install nahi hai (npm install + Node 24 chahiye)._' : ''));
+      }
+    }
     if (cur.step === 'menu') {
       const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
+      if (key === 'ai') {
+        let tok = ''; try { tok = await AI_TOK.get(); } catch (e) { botState.delete(jid); return say('❌ ' + botErr(e)); }
+        if (!tok) {
+          if (acc !== 'ADMIN') { botState.delete(jid); return say('❌ VCS AI abhi set nahi hai. Admin se kaho pehle setup kare.'); }
+          cur.step = 'aiTok';
+          return ask(cur, '🔑 *VCS AI setup (sirf ek baar)*\n\n1. puter.com par login karo (free account)\n2. puter.com/dashboard → *Create token*\n3. Wo token yahan paste karo\n\n_0 = cancel_');
+        }
+        cur.step = 'aiChat'; cur.hist = []; cur.tok = tok;
+        return ask(cur, '🤖 *VCS AI* (Claude)\n\nKuch bhi pucho — jawab yahin aayega. Ek ke baad ek sawal pooch sakte ho.' + (acc === 'ADMIN' ? '\n_Token badalna ho to *token* bhejo._' : '') + '\n\n_0 = band_');
+      }
       if (key === 'ig') {
         cur.step = 'igMenu';
         return ask(cur, '📸 *Instagram Reel Download*\n\nKya chahiye?\n\n1️⃣  Reel / video download\n' + (acc === 'ADMIN' ? '3️⃣  Cookies set karo (login maange tab)\n\n_Number bhejo: 1 ya 3' : '\n_Number bhejo: 1') + '  ·  0 = cancel_');
