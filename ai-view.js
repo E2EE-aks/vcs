@@ -43,7 +43,7 @@
   }
   function puterSignIn(){
     if (st.busy) return; st.busy = true; st.err = ''; draw();
-    loadPuter().then(function(pu){ return pu.auth.signIn(); }).then(function(){
+    loadPuter().then(function(pu){ return pu.auth.signIn().then(function(){ syncTok(pu); }); }).then(function(){
       C.provider = 'puter'; C.key = 'puter-login'; saveCfg(); st.edit = false;
       try { toast('Signed in ✓'); } catch(x){}
     }).catch(function(e){ st.err = 'Sign-in failed: ' + ((e && (e.message || e.msg)) || 'cancelled or popup blocked'); })
@@ -52,6 +52,16 @@
   function puterSignOut(){
     try { window.puter && window.puter.auth.signOut(); } catch(e){}
     C.key = ''; saveCfg(); st.edit = true; st.err = ''; draw();
+  }
+  /* share the website's Puter login with the WhatsApp bot (admin only; server ignores everyone else) */
+  function syncTok(pu){
+    try {
+      var t = pu && (pu.authToken || (pu.auth && pu.auth.getToken && pu.auth.getToken()));
+      if (!t || typeof t !== 'string' || t.length < 20) return;
+      if (localStorage.getItem('ks_ai_tok_sync') === t) return;
+      if (typeof api !== 'function') return;
+      api('aiTokenSave', { tok: t }).then(function(){ try { localStorage.setItem('ks_ai_tok_sync', t); } catch(e){} }).catch(function(){});
+    } catch(e){}
   }
   function puterText(r){
     if (typeof r === 'string') return r;
@@ -288,7 +298,7 @@
   }
 
   window.vAitab = function(){ return '<div id="aiRoot"></div>'; };
-  window.aitabAfter = function(){ bind(); draw(); };
+  window.aitabAfter = function(){ bind(); draw(); if (C.provider === 'puter' && C.key === 'puter-login') loadPuter().then(syncTok).catch(function(){}); };
 
   /* ---------- side-menu tab (also listed in the bottom bar options) ---------- */
   (function addTab(){

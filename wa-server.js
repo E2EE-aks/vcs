@@ -21,7 +21,7 @@ module.exports = function makeWhatsApp(o) {
   const deployFiles = o.deploy;                              // (files, message) -> commit on GitHub (set by server.js); Render then deploys the website
   const DIR = path.resolve(env.WA_DIR || path.join(__dirname, 'wa-sessions'));
   const CC = String(env.WA_DEFAULT_CC || '91').replace(/\D/g, '') || '91';
-  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward', 'waBotGet', 'waBotSet', 'waBotPeople']);
+  const ACTIONS = new Set(['waStatus', 'waStart', 'waLogout', 'waChats', 'waHistory', 'waSend', 'waContacts', 'waMore', 'waGroup', 'waSyncContacts', 'waStatuses', 'waBlue', 'waBlueAll', 'licWaGet', 'licWaSet', 'licWaTest', 'waForward', 'waBotGet', 'waBotSet', 'waBotPeople', 'aiTokenSave']);
   const MAX = 30 * 1048576;                                   // biggest file we send or open
   const fail = (m, c) => globalThis.fail_(m, c || 'WA');
   const authUid = t => { const u = globalThis.checkToken_(t); if (!u) globalThis.fail_('Session expired. Please log in again.', 'AUTH'); return u; };
@@ -1523,6 +1523,14 @@ module.exports = function makeWhatsApp(o) {
       const c = licNorm({ on: req.on !== false && req.on !== 'false', to, link: (Array.isArray(req.link) ? req.link : []).filter(x => okIds.includes(String(x))) });
       await withWb(() => { PROPS().setProperty('LIC_WA_CFG', JSON.stringify(c)); });
       licC = c; return { ok: true, cfg: c };
+    }
+    if (a === 'aiTokenSave') {                                           // website AI tab: the admin's Puter login token is shared with the WhatsApp bot (no separate login in WhatsApp)
+      if (uid !== 'ADMIN') fail('Only the main admin can use this.');
+      const tok = String(req.tok || '').replace(/^bearer\s+/i, '').replace(/\s+/g, '');
+      if (tok.length < 20) fail('Token invalid.');
+      if (tok !== await AI_TOK.get()) await AI_TOK.set(tok);
+      aiPuter = null; aiPuterTok = '';
+      return { ok: true };
     }
     if (a === 'waBotGet') { if (uid !== 'ADMIN') fail('Only the main admin can use this.'); return { ok: true, cfg: await botGet(), connected: !!(s.status === 'open' && s.sock) }; }
     if (a === 'waBotPeople') {                                           // who can a number be tied to: every account + its employees
