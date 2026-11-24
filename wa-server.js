@@ -991,7 +991,7 @@ module.exports = function makeWhatsApp(o) {
     const { init } = require('@heyputer/puter.js/src/init.cjs');
     aiPuter = init(tok); aiPuterTok = tok; return aiPuter;
   }
-  const AI_MODEL = () => process.env.VCS_AI_MODEL || 'claude-sonnet-4-5';
+  const AI_MODEL = () => process.env.VCS_AI_MODEL || 'claude-haiku-4-5';
   const AI_SYS = 'Tum "VCS AI" ho, ek helpful assistant jo WhatsApp par jawab de raha hai. User ki bhasha me jawab do (Hindi/Hinglish/English). Jawab chhota aur saaf rakho. WhatsApp formatting use karo: *bold*, _italic_, simple lists; markdown headings aur tables nahi.';
   function aiClean(t) {                                                 // markdown -> WhatsApp style
     return String(t || '').replace(/\r/g, '').replace(/^#{1,6}\s*(.+)$/gm, '*$1*').replace(/\*\*(.+?)\*\*/g, '*$1*').replace(/^\s*[-*]\s+/gm, '• ').replace(/^---+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
@@ -999,7 +999,8 @@ module.exports = function makeWhatsApp(o) {
   function aiChunks(t, n = 3500) { const out = []; let r = t; while (r.length > n) { let k = r.lastIndexOf('\n', n); if (k < n / 2) k = r.lastIndexOf(' ', n); if (k < n / 2) k = n; out.push(r.slice(0, k)); r = r.slice(k).trim(); } if (r) out.push(r); return out; }
   async function aiAsk(tok, hist) {
     const pu = aiClient(tok), msgs = [{ role: 'system', content: AI_SYS }].concat(hist.slice(-12));
-    const r = await Promise.race([pu.ai.chat(msgs, { model: AI_MODEL() }), new Promise((_, no) => setTimeout(() => no(new Error('60 second me jawab nahi aaya')), 60000))]);
+    const call = mdl => Promise.race([pu.ai.chat(msgs, { model: mdl }), new Promise((_, no) => setTimeout(() => no(new Error('60 second me jawab nahi aaya')), 60000))]);
+    let r; try { r = await call(AI_MODEL()); } catch (e) { if (AI_MODEL() !== 'claude-haiku-4-5' && /model not found/i.test(String((e && e.message) || e))) r = await call('claude-haiku-4-5'); else throw e; }   // wrong / retired model id -> fall back to haiku
     const m = (r && r.message) || r; let out = typeof m === 'string' ? m : Array.isArray(m && m.content) ? m.content.map(b => (b && b.text) || '').join('') : String((m && m.content) || (r && r.text) || '');
     out = aiClean(out); if (!out) throw new Error('AI ne khali jawab bheja');
     return out;
