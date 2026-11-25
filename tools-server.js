@@ -135,5 +135,16 @@ module.exports = function ({ env, warn, withWb, WA, TG, drvAccess, sheetInfo }) 
     await withWb(() => { P().setProperty(keyOf(uid), txt); return true; });
     return { ok: true, list, at };
   }
+  /* used by the WhatsApp helper bot (help menu: Status / Work) - same data as the website's WhatsApp tools */
+  globalThis.WA_TOOLS_ = {
+    status: async () => { const token = await withWb(() => globalThis.newToken_('ADMIN')); return status({ token, force: 0 }); },
+    workGet: async uid => read(uid).list,
+    workSave: async (uid, list) => {
+      const l = clean(list), txt = JSON.stringify({ list: l, at: Date.now() });
+      if (txt.length > 45000) throw new Error('Work list bahut lambi ho gayi. Purane records delete karo.');
+      await withWb(() => { P().setProperty(keyOf(uid), txt); return true; });
+      return l;
+    }
+  };
   return { actions: ACTIONS, route };
 };

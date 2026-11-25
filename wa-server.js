@@ -1072,6 +1072,95 @@ module.exports = function makeWhatsApp(o) {
     return say('✅ *Entry badal gayi*\n\n❌ Pehle:\n' + edtLine(it) + '\n\n✅ Ab:\n' + edtLine(nw) + '\n\n💳 *' + r.name + ' balance: ' + ledBal(r.bal) + '*\n\n_Dobara kuch karna ho to *help* bhejo._');
   }
 
+
+  /* ---------- help menu: 📡 Status / 📱 APK / 🛠️ Work  (same as the website's "WhatsApp tools") ---------- */
+  const TST_ICON = { up: '🟢', warn: '🟠', down: '🔴', off: '⚪' };
+  function tstText(d) {
+    const sm = d.sum || {}, bad = (sm.down || 0) + (sm.warn || 0);
+    let o = '📡 *Services status*\n\n' + (bad ? '⚠️ *' + bad + ' service' + (bad === 1 ? '' : 's') + ' par dhyan do*' : '✅ *Jo set up hai wo sab theek chal raha hai*') + '\n🟢 ' + (sm.up || 0) + ' working · 🟠 ' + (sm.warn || 0) + ' partly · 🔴 ' + (sm.down || 0) + ' down · ⚪ ' + (sm.off || 0) + ' not set up\n';
+    (d.items || []).forEach(c => {
+      o += '\n' + (TST_ICON[c.state] || '•') + ' *' + c.name + '* — ' + c.label + (c.ms ? ' (' + c.ms + ' ms)' : '') + (c.detail ? '\n     _' + String(c.detail).slice(0, 160) + '_' : '');
+      (c.sub || []).forEach(x => { o += '\n     ' + (TST_ICON[x.state] || '•') + ' ' + x.name + ' — ' + x.label + (x.ms ? ' · ' + x.ms + ' ms' : '') + (x.detail ? ' · ' + String(x.detail).slice(0, 60) : ''); });
+    });
+    return o + '\n\n🕒 ' + new Date(d.at || Date.now()).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) + '\n_Dobara kuch karna ho to *help* bhejo._';
+  }
+  const apkMB = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+  const apkBump = v => { const p = String(v || '1.0').split('.').map(x => parseInt(x, 10) || 0); p[p.length - 1]++; return p.join('.'); };
+  async function apkCfg() {                                              // name / package id / version used for the next build: last saved one, else read from the latest build's title ("KS 1.5")
+    const A = globalThis.WA_APK_; let c = null; try { c = await A.cfgGet(); } catch (e) { c = null; }
+    c = Object.assign({ name: 'KS', id: 'com.ks.app', ver: '1.0' }, c || {});
+    try { const b = (await A.list()).find(x => x.title); const m = b && /^(.*\S)\s+(\d+(?:\.\d+){0,3})$/.exec(b.title); if (m) { c.name = c.name || m[1]; const a = m[2].split('.').map(Number), z = String(c.ver).split('.').map(Number); for (let i = 0; i < 4; i++) { if ((a[i] || 0) !== (z[i] || 0)) { if ((a[i] || 0) > (z[i] || 0)) c.ver = m[2]; break; } } } } catch (e) { /* use the saved one */ }
+    return c;
+  }
+  async function apkSend(s, to, b) {                                     // the ready APK: signed download link + (if small enough) the file itself
+    const A = globalThis.WA_APK_, lk = A.link(b.asset.id);
+    if (b.asset.size <= MAX) { try { const buf = await A.file(b.asset.id); await s.sock.sendMessage(to, { document: buf, fileName: b.asset.name, mimetype: 'application/vnd.android.package-archive', caption: '📱 *' + (b.title || b.asset.name) + '* (' + apkMB(b.asset.size) + ')\n\n_File par tap karo — download hogi, phir install karo._' }); } catch (e) { /* the link below still works */ } }
+    if (lk) await s.sock.sendMessage(to, { text: '🔗 *APK download link* (' + apkMB(b.asset.size) + ', 6 ghante tak)\n' + lk + '\n\n_Link par tap karo — browser APK ko seedha *Downloads* folder me download kar dega._' });
+    else if (b.asset.size > MAX) await s.sock.sendMessage(to, { text: '📱 APK ' + apkMB(b.asset.size) + ' ki hai — website ke WhatsApp tools → APK se download karo.' });
+  }
+  function apkWatch(s, to, base, label) {                                // after "build shuru": check every 30 s (max 25 min) and tell here when it is ready / failed
+    const t0 = Date.now(); let miss = 0;
+    const tick = async () => {
+      if (Date.now() - t0 > 25 * 60000) return;
+      try {
+        const b = (await globalThis.WA_APK_.list()).filter(x => x.id > base).sort((x, y) => x.id - y.id)[0];
+        if (!b) { if (Date.now() - t0 > 5 * 60000) return s.sock.sendMessage(to, { text: '❌ *' + label + '* ka build GitHub par shuru nahi hua. Deploy → Version me check karo.' }); }
+        else if (b.status === 'completed') {
+          if (b.conclusion !== 'success') return s.sock.sendMessage(to, { text: '❌ *' + label + '* ka build fail ho gaya.\n🔎 Log: ' + b.url + '\n\n_Dobara koshish ke liye *help* bhejo._' });
+          if (b.asset) { await s.sock.sendMessage(to, { text: '✅ *' + label + ' APK ready!*' }); return apkSend(s, to, b); }
+          if (++miss > 12) return s.sock.sendMessage(to, { text: '❌ Build ho gaya par .apk file nahi mili.' });
+        }
+      } catch (e) { /* server / GitHub busy: try again */ }
+      setTimeout(tick, 30000);
+    };
+    setTimeout(tick, 30000);
+  }
+  const wrkSorted = l => l.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || String(b.date || '').localeCompare(String(a.date || '')) || (b.at || 0) - (a.at || 0));
+  const wrkDate = d => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || '')); return m ? m[3] + '-' + m[2] + '-' + m[1] : 'No date'; };
+  function wrkList(cur, all) {                                           // the numbered list (pending first); remembers which id is which number
+    const l = wrkSorted(all).slice(0, 25), nd = all.filter(x => x.done).length; cur.wl = l.map(x => x.id); cur.step = 'wrkList';
+    return '🛠️ *Work record* (' + (all.length - nd) + ' pending · ' + nd + ' done)\n\n' + (l.length ? l.map((x, i) => (i + 1) + '. ' + (x.done ? '✅' : '⏳') + ' *' + x.title + '* — ' + wrkDate(x.date)).join('\n') + (all.length > l.length ? '\n… aur ' + (all.length - l.length) : '') : '_Abhi koi work record nahi hai._') + '\n\n➕ *A* = naya work jodo\n_Kisi work par kaam karna ho to uska number bhejo (done / edit / delete)_\n_(0 = cancel)_';
+  }
+  const wrkSplit = t => { const p = String(t || '').trim().split(/\r?\n/); return { title: p[0].trim().slice(0, 120), note: p.slice(1).join('\n').trim().slice(0, 600) }; };
+  async function wrkStep(cur, t, low, acc, say, ask) {                   // every step of the 🛠️ Work chat
+    const W = globalThis.WA_TOOLS_;
+    const item = async () => { const l = await W.workGet(acc), it = l.find(x => x.id === cur.wid); return { l, it }; };
+    if (cur.step === 'wrkList') {
+      if (['a', 'add', 'new', 'naya', 'jodo'].includes(low)) { cur.step = 'wrkAdd'; return ask(cur, '➕ *Naya work*\n\nWork ka *naam* bhejo. Details dena ho to *agli line me* likho.\nJaise:\n_Router config at Sharma shop_\n_₹500 liye, cable bhi badla_\n\n_(0 = cancel)_'); }
+      const n = /^\d+$/.test(low) ? Number(low) : 0, id = (cur.wl || [])[n - 1]; if (!id) return say(cur.prompt);
+      cur.wid = id; const { it } = await item(); if (!it) { botState.delete(cur.jid); return say('ℹ️ Ye work ab nahi mila.\n\n_*help* bhejo._'); }
+      cur.step = 'wrkItem';
+      return ask(cur, (it.done ? '✅' : '⏳') + ' *' + it.title + '*\n📅 ' + wrkDate(it.date) + (it.note ? '\n📝 ' + it.note : '') + '\n\n1️⃣  ' + (it.done ? 'Wapas Pending karo' : 'Done mark karo') + '\n2️⃣  Edit (naam / details)\n3️⃣  Delete\n\n_Number bhejo: 1, 2 ya 3 · 0 = cancel_');
+    }
+    if (cur.step === 'wrkAdd') {
+      const w = wrkSplit(t); if (!w.title) return say(cur.prompt);
+      const l = await W.workGet(acc); l.unshift({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: w.title, note: w.note, date: botToday().date, done: false, at: Date.now() });
+      await W.workSave(acc, l); botState.delete(cur.jid);
+      return say('✅ *Work jud gaya*\n⏳ *' + w.title + '*\n📅 ' + wrkDate(botToday().date) + (w.note ? '\n📝 ' + w.note : '') + '\n\n_Dobara kuch karna ho to *help* bhejo._');
+    }
+    if (cur.step === 'wrkItem') {
+      const { l, it } = await item(); if (!it) { botState.delete(cur.jid); return say('ℹ️ Ye work ab nahi mila.\n\n_*help* bhejo._'); }
+      if (low === '1') { it.done = !it.done; it.at = Date.now(); await W.workSave(acc, l); botState.delete(cur.jid); return say((it.done ? '✅ *Done mark ho gaya*' : '⏳ *Wapas Pending ho gaya*') + '\n*' + it.title + '*\n\n_Dobara kuch karna ho to *help* bhejo._'); }
+      if (low === '2') { cur.step = 'wrkEdit'; return ask(cur, '✏️ *Edit — ' + it.title + '*\n\nNaya *naam* bhejo, details dena ho to *agli line me* likho. (Date waisi hi rahegi.)\n\n_(0 = cancel)_'); }
+      if (low === '3') { cur.step = 'wrkDel'; return ask(cur, '🗑️ *Delete karna hai?*\n*' + it.title + '*\n\n1️⃣  Haan, delete karo\n2️⃣  Nahi\n\n_Number bhejo: 1 ya 2_'); }
+      return say(cur.prompt);
+    }
+    if (cur.step === 'wrkEdit') {
+      const w = wrkSplit(t); if (!w.title) return say(cur.prompt);
+      const { l, it } = await item(); if (!it) { botState.delete(cur.jid); return say('ℹ️ Ye work ab nahi mila.\n\n_*help* bhejo._'); }
+      it.title = w.title; it.note = w.note; it.at = Date.now(); await W.workSave(acc, l); botState.delete(cur.jid);
+      return say('✅ *Work badal gaya*\n' + (it.done ? '✅' : '⏳') + ' *' + it.title + '*\n📅 ' + wrkDate(it.date) + (it.note ? '\n📝 ' + it.note : '') + '\n\n_Dobara kuch karna ho to *help* bhejo._');
+    }
+    if (cur.step === 'wrkDel') {
+      if (low === '2' || low === 'no' || low === 'nahi') { botState.delete(cur.jid); return say('👍 Delete nahi kiya.\n\n_Dobara kuch karna ho to *help* bhejo._'); }
+      if (low !== '1' && low !== 'yes' && low !== 'haan') return say(cur.prompt);
+      const { l, it } = await item(); botState.delete(cur.jid);
+      if (!it) return say('ℹ️ Ye work pehle hi nahi hai.\n\n_*help* bhejo._');
+      await W.workSave(acc, l.filter(x => x.id !== cur.wid));
+      return say('🗑️ *Work delete ho gaya*\n' + it.title + '\n\n_Dobara kuch karna ho to *help* bhejo._');
+    }
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -1092,6 +1181,9 @@ module.exports = function makeWhatsApp(o) {
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vyml', 'VCS YML (APK build file — .github/workflows update)']);
       if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
+      if (acc0 === 'ADMIN' && globalThis.WA_TOOLS_) opts.push(['tst', 'Status (Server, Sheets, Translation, Drive, WhatsApp, GitHub — kaun chal raha hai)']);
+      if (acc0 === 'ADMIN' && globalThis.WA_APK_) opts.push(['apk', 'APK (Android app banao / download karo)']);
+      if (globalThis.WA_TOOLS_) opts.push(['wrk', 'Work (kaam ka record — add / edit / done / delete)']);
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
       if (DL) opts.push(['ig', 'Instagram Reel download']);               // every bot user; only the cookies step (3) is admin-only          // every bot user; only the cookies step (3) is admin-only
       opts.push(['ai', 'VCS AI (Claude — kuch bhi pucho)']);
@@ -1224,8 +1316,53 @@ module.exports = function makeWhatsApp(o) {
         return say('❌ AI jawab nahi de paya: ' + m + (/auth|token|401|403|sign/i.test(m) ? '\n\n' + (acc === 'ADMIN' ? '_Naya token dene ke liye *token* bhejo._' : '_Admin ko token update karna hoga._') : '') + (/Cannot find module|MODULE_NOT_FOUND/i.test(m) ? '\n\n_Server par puter package install nahi hai (npm install + Node 24 chahiye)._' : ''));
       }
     }
+    if (/^wrk/.test(cur.step || '') && globalThis.WA_TOOLS_) { cur.jid = jid; try { return await wrkStep(cur, t, low, acc, say, ask); } catch (e) { return stop(e, ''); } }
+    if (/^apk/.test(cur.step || '') && globalThis.WA_APK_) {                // 📱 APK: 1 build  2 latest download  3 recent builds
+      const A = globalThis.WA_APK_;
+      if (cur.step === 'apkMenu') {
+        try {
+          if (low === '1') {
+            const bl = await A.list(); if (bl.some(b => b.status !== 'completed')) { botState.delete(jid); return say('⏳ Ek APK build pehle se chal raha hai — uske khatam hone ka intezar karo.\n\n_Dobara dekhne ke liye *help* bhejo._'); }
+            const c = await apkCfg(); cur.base = Math.max(0, ...bl.map(b => b.id)); cur.cfg = { name: c.name, id: c.id, ver: apkBump(c.ver) }; cur.step = 'apkGo';
+            return ask(cur, '🔨 *Naya APK*\n\n📛 Naam: *' + cur.cfg.name + '*\n📦 Package id: *' + cur.cfg.id + '*\n🔢 Version: *' + cur.cfg.ver + '*\n\n1️⃣  Haan, build shuru karo (5–8 min)\n\n_Kuch badalna ho to ek line me bhejo:_ *naam package-id version*\n_jaise_ KS com.ks.app 1.7\n_(0 = cancel)_');
+          }
+          if (low === '2') {
+            const b = (await A.list()).find(x => x.status === 'completed' && x.conclusion === 'success' && x.asset); botState.delete(jid);
+            if (!b) return say('❌ Abhi koi ready APK nahi hai. *help* → APK → 1 se banao.');
+            await say('📱 Latest APK: *' + (b.title || b.asset.name) + '*'); await apkSend(s, to, b); return;
+          }
+          if (low === '3') {
+            const bl = (await A.list()).slice(0, 6); botState.delete(jid);
+            return say('📦 *Recent builds*\n\n' + (bl.length ? bl.map((b, i) => (i + 1) + '. ' + (b.status !== 'completed' ? '⏳ Ban raha hai' : b.conclusion === 'success' ? '✅ Ready' + (b.asset ? ' (' + apkMB(b.asset.size) + ')' : '') : '❌ Fail') + ' — ' + (b.title || 'Build #' + b.no) + '\n     _' + new Date(b.at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + '_').join('\n') : '_Abhi koi build nahi hai._') + '\n\n_Latest APK ke liye *help* → APK → 2_');
+          }
+        } catch (e) { return stop(e, ''); }
+        return say(cur.prompt);
+      }
+      if (cur.step === 'apkGo') {
+        let c = cur.cfg; const m = /^(\S.{0,28}?)\s+([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)\s+(\d+(?:\.\d+){0,3})$/i.exec(t);
+        if (m) c = { name: m[1].trim(), id: m[2], ver: m[3] }; else if (low !== '1') return say(cur.prompt);
+        if (!/^[\w][\w .\-]{0,29}$/.test(c.name)) return say('❌ Naam me sirf letters, number, space, dot, dash.\n\n' + cur.prompt);
+        botState.delete(jid);
+        try { await A.build(c.name, c.id, c.ver); await A.cfgSet(c); } catch (e) { return say('❌ Build shuru nahi hua: ' + botErr(e) + '\n\n_Dobara koshish ke liye *help* bhejo._'); }
+        apkWatch(s, to, cur.base, c.name + ' ' + c.ver);
+        return say('🚀 *APK build GitHub par shuru ho gaya*\n📛 ' + c.name + ' · 📦 ' + c.id + ' · 🔢 ' + c.ver + '\n\n⏱️ 5–8 minute lagenge. *Ready hote hi yahin APK bhej dunga* — tab tak kuch aur kar sakte ho.');
+      }
+    }
     if (cur.step === 'menu') {
       const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
+      if (key === 'tst') {                                              // admin only: status of every service
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        botState.delete(jid); await say('⏳ *Services check* ho rahi hain…');
+        try { return say(tstText(await globalThis.WA_TOOLS_.status())); } catch (e) { return say('❌ Status nahi mila: ' + botErr(e)); }
+      }
+      if (key === 'apk') {
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        cur.step = 'apkMenu';
+        return ask(cur, '📱 *APK — Android app*\n\nKya chahiye?\n\n1️⃣  Naya APK banao\n2️⃣  Latest APK download\n3️⃣  Recent builds\n\n_Number bhejo: 1, 2 ya 3  ·  0 = cancel_');
+      }
+      if (key === 'wrk') {
+        try { cur.jid = jid; return say(wrkList(cur, await globalThis.WA_TOOLS_.workGet(acc))).then(() => { cur.prompt = 'Number bhejo, *A* = naya work, 0 = cancel.'; }); } catch (e) { return stop(e, ''); }
+      }
       if (key === 'ai') {
         let tok = ''; try { tok = await AI_TOK.get(); } catch (e) { botState.delete(jid); return say('❌ ' + botErr(e)); }
         if (!tok) {

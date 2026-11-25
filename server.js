@@ -941,6 +941,30 @@ function makeApp(store, env) {
       return { ok: true, id: 'apk:' + aid, ticket: exp + '.' + updTicketSig('apk:' + aid, exp) };
     }
   }
+  // used by the WhatsApp helper (help menu > APK): same actions as the Version tab - build, list, download link / file
+  const VER_SKIP_SRV = /^(server\.js|code\.gs|gas-shim\.js|google-store\.js|package(-lock)?\.json|readme\.md)$/i;
+  const verWebFileSrv = p => /\.(html|js|css|json|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|webmanifest|mp3|wav|mp4)$/i.test(p) && !VER_SKIP_SRV.test(p) && !/^(test|docs|\.github)\//i.test(p);
+  globalThis.WA_APK_ = {
+    list: async () => (await verRoute('verList', {})).builds,
+    build: async (name, id, ver) => {
+      const f = await verRoute('verFiles', {}), files = f.files.map(x => x.path).filter(verWebFileSrv);
+      if (!files.includes('index.html')) globalThis.fail_('index.html GitHub repo me nahi mila.', 'VER');
+      return verRoute('verBuild', { files, appName: name, appId: id, version: ver });
+    },
+    link: assetId => {                                                            // signed download link, valid 6 hours ('' when the public address is unknown)
+      const base = String(env.RENDER_EXTERNAL_URL || env.PUBLIC_URL || '').replace(/\/+$/, ''); if (!base || !/^\d+$/.test(String(assetId))) return '';
+      const exp = Date.now() + 6 * 3600e3, id = 'apk:' + assetId;
+      return base + '/updates/download?id=' + encodeURIComponent(id) + '&k=' + exp + '.' + updTicketSig(id, exp);
+    },
+    file: async assetId => {
+      if (!/^\d+$/.test(String(assetId))) throw new Error('Galat file.');
+      const r = await fetch('https://api.github.com/repos/' + GH.repo + '/releases/assets/' + assetId, { headers: { Authorization: 'Bearer ' + GH.token, Accept: 'application/octet-stream', 'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'attendance-app-deploy' } });
+      if (!r.ok) throw new Error('GitHub se APK nahi mili (error ' + r.status + ').');
+      return Buffer.from(await r.arrayBuffer());
+    },
+    cfgGet: () => withWb(() => { try { return JSON.parse(globalThis.PropertiesService.getScriptProperties().getProperty('WA_APK_CFG') || 'null'); } catch (e) { return null; } }),
+    cfgSet: c => withWb(() => { globalThis.PropertiesService.getScriptProperties().setProperty('WA_APK_CFG', JSON.stringify(c)); return true; })
+  };
   // ---------- Render: manual deploy + status. Env on Render: RENDER_API_KEY + RENDER_SERVICE_ID (status and deploy), or only RENDER_DEPLOY_HOOK (deploy button only) ----------
   const RD = { key: String(env.RENDER_API_KEY || '').trim(), svc: String(env.RENDER_SERVICE_ID || '').trim(), hook: String(env.RENDER_DEPLOY_HOOK || '').trim() };
   async function rdApi(method, url, body) {
