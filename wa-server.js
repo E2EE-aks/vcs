@@ -1006,6 +1006,54 @@ module.exports = function makeWhatsApp(o) {
     return out;
   }
 
+  /* ---------- Edit Entry (old expense / income) ---------- */
+  const edtDate = t => {                                                // "15-11-2025", "15/11/25", "15.11" (this year) -> "2025-11-15", or ''
+    const m = /^(\d{1,2})[-\/. ](\d{1,2})(?:[-\/. ](\d{2}|\d{4}))?$/.exec(String(t || '').trim()); if (!m) return '';
+    const d = Number(m[1]), mo = Number(m[2]); let y = m[3] ? Number(m[3]) : botToday().y; if (y < 100) y += 2000;
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return '';
+    const dt = new Date(Date.UTC(y, mo - 1, d)); if (dt.getUTCMonth() !== mo - 1) return '';
+    return y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+  };
+  const edtLine = it => '📅 ' + ledDate(it.date) + ' · ' + (it.inc ? '➕' : '➖') + ' ₹' + ledMoney(it.amount) + ' · ' + (it.cat || it.other || '—') + (it.note ? '\n📝 ' + it.note : '');
+  function edtItems(a, bd) {                                            // every expense / income entry that touches this user's own account, newest first (k = 'exp' sheet row or 'lge' ledger row)
+    const D = ledLoad(), L = ledPick(D, a, bd), out = [];
+    if (L === 'ME') D.exps.forEach(x => out.push({ k: 'exp', id: x.id, date: x.date, amount: x.amount, note: x.note, cat: x.category, inc: D.ty[x.category] === 'Income' }));
+    D.ents.forEach(e => {
+      const fromMe = L === 'ME' ? ledIsMe(e.from) : e.from === L, toMe = L === 'ME' ? ledIsMe(e.to) : e.to === L; if (fromMe === toMe) return;
+      const other = fromMe ? e.to : e.from;
+      out.push({ k: 'lge', id: e.id, date: e.date, amount: e.amount, note: e.note, cat: ledIsCat(other) ? String(other).slice(2) : '', other: ledName(D, other), inc: toMe, from: e.from, to: e.to, L });
+    });
+    out.forEach((x, i) => { x.i = i; }); out.sort((p, q) => String(q.date).localeCompare(String(p.date)) || q.i - p.i);
+    return out.slice(0, 400).map(x => { delete x.i; return x; });
+  }
+  const edtList = c => {
+    const all = c.items || [], view = c.flt ? all.filter(x => x.date === c.flt) : all, page = view.slice(c.off, c.off + 10);
+    return '✏️ *Edit Entry*' + (c.flt ? ' — ' + ledDate(c.flt) : ' — latest') + ' (' + view.length + ')\n\n'
+      + page.map((x, i) => (i + 1) + '. ' + ledDate(x.date) + ' · ' + (x.inc ? '➕' : '➖') + '₹' + ledMoney(x.amount) + ' · ' + (x.cat || x.other || '—') + (x.note ? ' · ' + String(x.note).slice(0, 25) : '')).join('\n')
+      + '\n\n_Entry ka number bhejo_\n_Kisi din ki entry dekhni ho to date bhejo (jaise 15-11-2025)_\n_' + (c.off + 10 < view.length ? '*next* = aur purani  ·  ' : '') + (c.off > 0 ? '*prev* = pichli  ·  ' : '') + (c.flt ? '*all* = sab  ·  ' : '') + '0 = cancel_';
+  };
+  const edtCard = it => '✏️ *Ye entry badalni hai:*\n\n' + edtLine(it) + '\n\n*Kya badalna hai?*\n\n1️⃣  Date\n2️⃣  Amount — naya amount\n3️⃣  Amount ➕ plus (badhao)\n4️⃣  Amount ➖ minus (ghatao)\n5️⃣  Note\n6️⃣  Category\n7️⃣  🗑️ Delete\n\n_(0 = cancel)_';
+  async function edtSave(cur, ch, acc, bd, say, stop, jid) {            // write the change into the SAME place the entry lives in (expense sheet or ledger), then show the new balance
+    const it = cur.pick; let r;
+    try {
+      r = await botRun(a => {
+        const D = ledLoad(), nd = ch.date || it.date, na = ch.amount || it.amount, nn = ch.note === undefined ? it.note : ch.note, nc = ch.cat || it.cat;
+        if (it.k === 'exp') globalThis.updateExpense_({ id: it.id, date: nd, category: nc, amount: na, note: nn });
+        else {
+          let from = it.from, to = it.to;
+          if (ch.cat) { const cc = 'C:' + ch.cat, isInc = D.ty[ch.cat] === 'Income';   // a new category changes the other side; own account side stays; income / expense direction follows the category type
+            from = isInc ? cc : it.L; to = isInc ? it.L : cc; }
+          globalThis.updateLgEntry_({ id: it.id, date: nd, from, to, amount: na, note: nn });
+        }
+        const D2 = ledLoad(), L = it.k === 'lge' ? it.L : ledPick(D2, a, bd);
+        return { name: ledName(D2, L), bal: ledStatement(D2, L, '', '').close };
+      }, acc, 'exp', true);
+    } catch (e) { return stop(e, 'Entry badli nahi: '); }
+    botState.delete(jid);
+    const nw = Object.assign({}, it, ch.date ? { date: ch.date } : {}, ch.amount ? { amount: ch.amount } : {}, ch.note !== undefined ? { note: ch.note } : {}, ch.cat ? { cat: ch.cat } : {});
+    return say('✅ *Entry badal gayi*\n\n❌ Pehle:\n' + edtLine(it) + '\n\n✅ Ab:\n' + edtLine(nw) + '\n\n💳 *' + r.name + ' balance: ' + ledBal(r.bal) + '*\n\n_Dobara kuch karna ho to *help* bhejo._');
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm) {
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -1019,6 +1067,7 @@ module.exports = function makeWhatsApp(o) {
       const pm = me.perms, ok = k => pm[k] === 'view' || pm[k] === 'edit', opts = [];
       if (pm.exp === 'edit') opts.push(['exp', 'Expense']);
       if (pm.att === 'edit') opts.push(['att', 'Attendance']);
+      if (pm.exp === 'edit') opts.push(['edt', 'Edit Entry (purani expense / income — date, amount +/-, note, category, delete)']);
       if (ok('exp')) opts.push(['bill', 'Bill PDF']);
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vzip', 'VCS ZIP (website update — ZIP file upload)']);
@@ -1031,7 +1080,7 @@ module.exports = function makeWhatsApp(o) {
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
       const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
-      return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => E[i] + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
+      return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
     { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
     if (BOT_HI.test(low)) return menu();
@@ -1208,6 +1257,12 @@ module.exports = function makeWhatsApp(o) {
         try { await botRun(() => true, acc, 'exp', true); } catch (e) { return stop(e, ''); }
         cur.step = 'expAmt'; return ask(cur, '💸 *Expense*\n\nAmount aur note bhejo.\nJaise: *150 chai*\n\n_(0 = cancel)_');
       }
+      if (key === 'edt') {                                              // edit an OLD expense / income entry: pick it (list or by date), then change date / amount (new, +, -) / note / category, or delete
+        try { cur.items = await botRun(a => edtItems(a, bd), acc, 'exp', true); } catch (e) { return stop(e, ''); }
+        if (!cur.items.length) { botState.delete(jid); return say('✏️ Abhi koi entry nahi hai.\n\n_Dobara kuch karna ho to *help* bhejo._'); }
+        cur.off = 0; cur.flt = ''; cur.step = 'edPick';
+        return ask(cur, edtList(cur));
+      }
       if (key === 'att') {
         let e; try { e = await botRun(() => { const l = globalThis.readEmployees_(), x = l.find(y => y.id === wantEmp) || l[0]; return x ? { id: x.id, name: x.name } : null; }, acc, 'att', true); } catch (er) { return stop(er, ''); }
         if (!e) { botState.delete(jid); return say('❌ Attendance me koi employee nahi mila.'); }
@@ -1281,6 +1336,63 @@ module.exports = function makeWhatsApp(o) {
       } catch (e) { return stop(e, 'Attendance mark nahi hui: '); }
       botState.delete(jid);
       return say((code === 'P' ? '✅ *Present*' : '❌ *Absent*') + ' mark ho gaya\n👤 ' + (cur.empName || '') + '\n📅 ' + n.d + '-' + String(n.m).padStart(2, '0') + '-' + n.y + '\n\n_Dobara kuch record karna ho to *help* bhejo._');
+    }
+    if (cur.step === 'edPick') {                                        // choose the entry: its number, a date (15-11-2025 / 15-11), "next" / "prev", "all"
+      const all = cur.items || [], view = cur.flt ? all.filter(x => x.date === cur.flt) : all;
+      if (low === 'next' || low === 'n') { if (cur.off + 10 < view.length) cur.off += 10; return ask(cur, edtList(cur)); }
+      if (low === 'prev' || low === 'back') { cur.off = Math.max(0, cur.off - 10); return ask(cur, edtList(cur)); }
+      if (low === 'all') { cur.flt = ''; cur.off = 0; return ask(cur, edtList(cur)); }
+      const dd = edtDate(t); if (dd) { cur.flt = dd; cur.off = 0; if (!all.some(x => x.date === dd)) { cur.flt = ''; return say('🔎 *' + ledDate(dd) + '* ki koi entry nahi mili.\n\nDusri date bhejo, ya list se number chuno.'); } return ask(cur, edtList(cur)); }
+      const it = /^\d+$/.test(low) ? view.slice(cur.off, cur.off + 10)[Number(low) - 1] : null; if (!it) return again();
+      cur.pick = it; cur.step = 'edAct';
+      return ask(cur, edtCard(it));
+    }
+    if (cur.step === 'edAct') {
+      const it = cur.pick, k = /^[1-7]$/.test(low) ? Number(low) : 0; if (!it || !k) return again();
+      if (k === 1) { cur.step = 'edDate'; return ask(cur, '📅 *Nayi date bhejo*\nJaise: *15-11-2025* ya *15-11* (is saal)\n\n_Abhi: ' + ledDate(it.date) + '_\n_(0 = cancel)_'); }
+      if (k === 2) { cur.step = 'edAmt'; cur.mode = 'set'; return ask(cur, '💰 *Naya amount bhejo*\nJaise: *250*\n\n_Abhi: ₹' + ledMoney(it.amount) + '_\n_(0 = cancel)_'); }
+      if (k === 3) { cur.step = 'edAmt'; cur.mode = 'plus'; return ask(cur, '➕ *Kitna amount badhana hai?*\nJaise: *50*  (₹' + ledMoney(it.amount) + ' + 50 = ₹' + ledMoney(it.amount + 50) + ')\n\n_(0 = cancel)_'); }
+      if (k === 4) { cur.step = 'edAmt'; cur.mode = 'minus'; return ask(cur, '➖ *Kitna amount ghatana hai?*\nJaise: *50*  (₹' + ledMoney(it.amount) + ' − 50 = ₹' + ledMoney(Math.max(0, it.amount - 50)) + ')\n\n_(0 = cancel)_'); }
+      if (k === 5) { cur.step = 'edNote'; return ask(cur, '📝 *Naya note bhejo*\n_(note hatana ho to *-* bhejo)_\n\n_Abhi: ' + (it.note || '—') + '_\n_(0 = cancel)_'); }
+      if (k === 6) {
+        if (it.k === 'lge' && !it.cat) return say('❌ Ye entry kisi category ki nahi hai (account transfer hai), isliye category nahi badal sakte. Dusra option chuno.');
+        let ct; try { ct = await botRun(() => globalThis.readCategories_().map(c => ({ n: c.name, i: c.type === 'Income' })), acc, 'exp', true); } catch (e) { return stop(e, ''); }
+        if (!ct.length) return say('❌ Koi category nahi mili.');
+        cur.cats = ct; cur.step = 'edCat';
+        return ask(cur, '🏷️ *Nayi category chuno (number bhejo):*\n\n' + ct.map((c, i) => (i + 1) + '. ' + c.n + (c.i ? ' _(Income)_' : '')).join('\n') + '\n\n_Abhi: ' + (it.cat || '—') + '_\n_(0 = cancel)_');
+      }
+      cur.step = 'edDel';
+      return ask(cur, '🗑️ *Ye entry delete karni hai?*\n\n' + edtLine(it) + '\n\n1️⃣  Haan, delete karo' + (acc === 'ADMIN' ? '' : '  _(admin ki approval ke baad)_') + '\n2️⃣  Nahi\n\n_(0 = cancel)_');
+    }
+    if (cur.step === 'edDate') {
+      const dd = edtDate(t); if (!dd) return say('❌ Date samajh nahi aayi. Aise bhejo: *15-11-2025* ya *15-11*');
+      return edtSave(cur, { date: dd }, acc, bd, say, stop, jid);
+    }
+    if (cur.step === 'edAmt') {
+      const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return;
+      const v = Number(m[1].replace(',', '.')); if (!(v > 0)) return say('Amount 0 se zyada hona chahiye.');
+      const it = cur.pick, nv = cur.mode === 'plus' ? it.amount + v : cur.mode === 'minus' ? it.amount - v : v;
+      if (!(nv > 0)) return say('❌ ₹' + ledMoney(it.amount) + ' me se ₹' + ledMoney(v) + ' ghatane par amount 0 ya kam ho jayega. Kam amount bhejo.');
+      return edtSave(cur, { amount: Math.round(nv * 100) / 100 }, acc, bd, say, stop, jid);
+    }
+    if (cur.step === 'edNote') return edtSave(cur, { note: t === '-' ? '' : t.slice(0, 300) }, acc, bd, say, stop, jid);
+    if (cur.step === 'edCat') {
+      const c = (cur.cats || [])[parseInt(low, 10) - 1] || (cur.cats || []).find(x => low && String(x.n).toLowerCase() === low); if (!c) return again();
+      return edtSave(cur, { cat: c.n }, acc, bd, say, stop, jid);
+    }
+    if (cur.step === 'edDel') {
+      if (low === '2' || low === 'no' || low === 'nahi') { botState.delete(jid); return say('👍 Delete nahi kiya. Entry waise hi hai.\n\n_Dobara kuch karna ho to *help* bhejo._'); }
+      if (low !== '1' && low !== 'haan' && low !== 'yes') return again();
+      const it = cur.pick; let res;
+      try {
+        res = await botRun(a => {
+          const direct = a.role === 'admin';
+          if (direct) { if (it.k === 'exp') globalThis.deleteExpense_({ id: it.id }); else globalThis.deleteLgEntry_({ id: it.id }); return 'done'; }
+          globalThis.requestDelete_({ kind: it.k, id: it.id }); return 'asked';
+        }, acc, 'exp', true);
+      } catch (e) { return stop(e, 'Delete nahi hua: '); }
+      botState.delete(jid);
+      return say(res === 'done' ? '🗑️ *Entry delete ho gayi*\n' + edtLine(it) + '\n\n_Dobara kuch karna ho to *help* bhejo._' : '📨 *Delete request admin ko bhej di*\n' + edtLine(it) + '\n\n_Admin approve karega tab entry hategi._');
     }
     if (cur.step === 'expAmt') {
       const m = /(\d+(?:[.,]\d+)?)/.exec(t); if (!m) return;
