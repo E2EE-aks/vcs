@@ -349,6 +349,27 @@ jobs:
           PY
           grep -c "KsRingPlugin" android/app/src/main/java/*/*/*/MainActivity.java || true
 
+      - name: Geo-fence attendance (office 1000 m) - native plugin
+        run: |
+          set -e
+          [ -f KsGeoPlugin.java ] || { echo "::warning::KsGeoPlugin.java missing - geo-fence attendance will only work while the app is open"; exit 0; }
+          JAVA_DIR=android/app/src/main/java
+          mkdir -p $JAVA_DIR/ks/geo
+          cp KsGeoPlugin.java $JAVA_DIR/ks/geo/
+          python3 - <<'PY'
+          import glob
+          ma = glob.glob('android/app/src/main/java/**/MainActivity.java', recursive=True)[0]
+          j = open(ma, encoding='utf-8').read()
+          if 'KsGeoPlugin' not in j:
+              j = j.replace('super.onCreate(savedInstanceState);', 'registerPlugin(ks.geo.KsGeoPlugin.class);\n    super.onCreate(savedInstanceState);', 1)
+              open(ma, 'w', encoding='utf-8').write(j)
+          print(j[:1500])
+          PY
+          M=android/app/src/main/AndroidManifest.xml
+          grep -q "android.permission.ACCESS_BACKGROUND_LOCATION" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.ACCESS_BACKGROUND_LOCATION\" />\n</manifest>#" $M
+          grep -q "ks.geo.KsGeoPlugin\$GeoReceiver" $M || sed -i "s#</application>#    <receiver android:name=\"ks.geo.KsGeoPlugin\$GeoReceiver\" android:exported=\"false\" />\n    <receiver android:name=\"ks.geo.KsGeoPlugin\$BootReceiver\" android:exported=\"true\"><intent-filter><action android:name=\"android.intent.action.BOOT_COMPLETED\" /></intent-filter></receiver>\n    </application>#" $M
+          grep -n "KsGeoPlugin\|BACKGROUND_LOCATION" $M android/app/src/main/java/*/*/*/MainActivity.java
+
       - name: Firebase (notifications when the app is closed)
         run: |
           if [ -n "$GSJ" ]; then
