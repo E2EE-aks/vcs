@@ -12,8 +12,11 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.location.Location;
+import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Looper;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -36,6 +39,8 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.Scanner;
 import java.util.TimeZone;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /* Geo-fence attendance that works WITHOUT opening the app.
    - The app hands over the office position, the radius and the login it already has with set().
@@ -107,9 +112,16 @@ public class KsGeoPlugin extends Plugin {
       LocationManager lm = (LocationManager) c.getSystemService(Context.LOCATION_SERVICE);
       lm.addProximityAlert(lat, lng, rad, -1, fenceIntent(c));
     } catch (Exception e) {}
+    scheduleCheck(c, 60000L);
+  }
+
+  /* next look at the phone's position (a one-shot alarm that is allowed to run in Doze; every check sets the next one) */
+  static void scheduleCheck(Context c, long delayMs) {
     try {
       AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
-      am.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 60000, 15 * 60 * 1000L, checkIntent(c));
+      long at = System.currentTimeMillis() + delayMs;
+      if (Build.VERSION.SDK_INT >= 23) am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, checkIntent(c));
+      else am.set(AlarmManager.RTC_WAKEUP, at, checkIntent(c));
     } catch (Exception e) {}
   }
 
@@ -209,14 +221,39 @@ public class KsGeoPlugin extends Plugin {
     return best;
   }
 
+  /* a real, new position: asks GPS / network for one fix (waits up to 12 s); falls back to the last one the phone already has */
+  static Location freshFix(final Context c) {
+    final Location[] got = new Location[1];
+    final CountDownLatch cd = new CountDownLatch(1);
+    final LocationManager lm = (LocationManager) c.getSystemService(Context.LOCATION_SERVICE);
+    final LocationListener ls = new LocationListener() {
+      @Override public void onLocationChanged(Location l) { if (l != null) { got[0] = l; cd.countDown(); } }
+      @Override public void onStatusChanged(String p, int s, Bundle b) {}
+      @Override public void onProviderEnabled(String p) {}
+      @Override public void onProviderDisabled(String p) {}
+    };
+    try {
+      boolean any = false;
+      for (String p : new String[] { LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER }) {
+        if (lm.isProviderEnabled(p)) { lm.requestLocationUpdates(p, 0L, 0f, ls, Looper.getMainLooper()); any = true; }
+      }
+      if (any) cd.await(12, TimeUnit.SECONDS);
+    } catch (Exception e) {
+    } finally {
+      try { lm.removeUpdates(ls); } catch (Exception e) {}
+    }
+    return got[0] != null ? got[0] : lastFix(c);
+  }
+
   /* inside the circle (alert) or time to look (15-minute check) */
   public static class GeoReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(final Context c, final Intent in) {
       final SharedPreferences sp = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
       if (!sp.getBoolean("on", false)) return;
-      if (today().equals(sp.getString("done", ""))) return;
       final boolean fence = ACT_FENCE.equals(in.getAction());
+      if (!fence) scheduleCheck(c, 10 * 60 * 1000L);                // keep the 10-minute look going (also when today is already done: it just returns below)
+      if (today().equals(sp.getString("done", ""))) return;
       if (fence && !in.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, true)) return;   // leaving the circle: nothing to do
       final PendingResult pr = goAsync();
       new Thread(new Runnable() {
@@ -226,9 +263,14 @@ public class KsGeoPlugin extends Plugin {
             double lat = Double.longBitsToDouble(sp.getLong("lat", 0));
             double lng = Double.longBitsToDouble(sp.getLong("lng", 0));
             float acc = 0f;
-            Location l = lastFix(c);
+            Location l = freshFix(c);
             if (l != null) { lat = l.getLatitude(); lng = l.getLongitude(); acc = l.getAccuracy(); }
-            else if (!fence) return;                       // 15-minute check without any fix: wait for the next one
+            else if (!fence) return;                       // check without any fix: wait for the next one
+            if (l != null) {                               // clearly far from the office: no need to bother the server
+              float[] dd = new float[1];
+              Location.distanceBetween(l.getLatitude(), l.getLongitude(), Double.longBitsToDouble(sp.getLong("lat", 0)), Double.longBitsToDouble(sp.getLong("lng", 0)), dd);
+              if (dd[0] - Math.min(l.getAccuracy(), 150f) > sp.getFloat("radius", 1000f)) return;
+            }
             String api = sp.getString("api", ""), token = sp.getString("token", "");
             if (api.length() == 0 || token.length() == 0) return;
             JSONObject body = new JSONObject();
