@@ -15,6 +15,7 @@
   var LN = native && C.Plugins ? C.Plugins.LocalNotifications : null;
   var $ = function(s, r){ return (r || document).querySelector(s); };
   var say = function(m, bad){ try { toast(m, bad); } catch(e){} };
+  function res(t){ var e = $('#gaRes'); if (e) e.textContent = new Date().toLocaleTimeString() + ' · ' + t; }
   var info = '', lastSig = '', busy = false, checking = false, nativeOk = null, st = { loc:false, bg:false };
 
   function key(){ var u = ''; try { u = (S.me && (S.me.username || S.me.id || S.me.name)) || ''; } catch(e){} return 'ks_geoatt_cfg_' + String(u); }
@@ -104,6 +105,7 @@
   /* ----- app open: look at the position every minute ----- */
   function check(manual){
     var c = load();
+    if (manual){ if (!c.on) res('Option is OFF'); else if (checking) res('Another check is still running, wait 20 s and try again'); else if (!ready()) res('App data not loaded yet - press Refresh'); else if (typeof can === 'function' && !can('att')) res('This login has no Attendance edit access'); }
     if (!c.on || checking || !ready() || (typeof can === 'function' && !can('att'))) return;
     if (!manual && (markedToday() || c.done === todayKey())) return;
     if (!navigator.geolocation){ if (manual) say('This device has no location access.', true); return; }
@@ -113,9 +115,11 @@
         var la = pos.coords.latitude, lo = pos.coords.longitude, ac = pos.coords.accuracy || 0;
         var nr = nearest(la, lo), dist = nr.d;
         var el = $('#gaDist'); if (el) el.textContent = 'You are about ' + (dist >= 1000 ? (dist / 1000).toFixed(1) + ' km' : Math.round(dist) + ' m') + ' from ' + nr.p.name + '.';
+        if (manual) res('Phone says ' + la.toFixed(5) + ', ' + lo.toFixed(5) + ' (accuracy ' + Math.round(ac) + ' m)');
         if (dist - Math.min(ac, 150) > nr.p.radius){ if (manual) say('You are outside the ' + nr.p.radius + ' m area of every saved place.', true); return; }
-        if (markedToday()){ if (manual) say('Today is already marked.'); return; }
+        if (markedToday()){ if (manual){ say('Today is already marked.'); res('App already shows today as marked'); } return; }
         var r = await api('geoMark', { lat:la, lng:lo, acc:ac, emp:S.emp });
+        res('Server: ' + JSON.stringify(r));
         if (r.marked){
           var n = new Date(), m = n.getMonth() + 1, d = n.getDate();
           if (!S.d.attendance[m]) S.d.attendance[m] = {};
@@ -125,7 +129,7 @@
           try { render(); } catch(e){}
         } else if (r.already){ store({ on:true, done:todayKey() }); if (manual) say('Today is already marked (' + r.code + ').'); }
         else if (r.yearMismatch){ if (manual) say('Attendance year in Settings is ' + r.year + '.', true); }
-      } catch(e){ if (manual) say((e && e.message) || 'Could not check the location', true); }
+      } catch(e){ res('ERROR: ' + ((e && e.message) || e)); if (manual) say((e && e.message) || 'Could not check the location', true); }
       finally { checking = false; }
     }, function(err){
       checking = false;
@@ -148,7 +152,7 @@
       '<label style="display:flex;align-items:center;gap:10px;font-weight:600"><input type="checkbox" id="gaOn"' + (c.on ? ' checked' : '') + ' style="width:20px;height:20px"> Mark me Present automatically at the office</label>' +
       '<div class="muted" style="font-size:13px;margin-top:10px">Saved places (Present is marked within <b>1000 m</b> of any of them):</div><div id="gaPlaces" style="font-size:14px">' + placesHtml() + '</div>' +
       '<div class="muted" id="gaInfo" style="font-size:13px;margin-top:10px">' + (c.on ? info : '') + '</div>' +
-      '<div class="muted" id="gaDist" style="font-size:13px;margin-top:6px"></div>' +
+      '<div class="muted" id="gaDist" style="font-size:13px;margin-top:6px"></div><div id="gaRes" style="font-size:12px;margin-top:6px;word-break:break-all;color:#b45309"></div>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px"><button class="btn soft sm" id="gaNow">📡 Check my location now</button><button class="btn soft sm" id="gaAdd">➕ Add my current location</button>' + (KG ? '<button class="btn ghost sm" id="gaPerm">🔓 Allow location all the time</button>' : '') + '</div>' +
       '<div class="muted" style="font-size:12px;margin-top:10px">When you reach the office the day is marked <b>P</b> and you get “Present marked by geo fencing 🎉”. A day that is already marked is never changed.' + (KG ? '' : ' (In the browser this works while the page is open; the Android app also works when closed.)') + '</div></div>';
   };
