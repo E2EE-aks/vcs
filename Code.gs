@@ -2012,7 +2012,7 @@ function geoMark_(req) {
   var s = readSettings_();
   var year = Number(publicSettings_(s).year);
   var tz = 'Asia/Kolkata';
-  var y = Number(Utilities.formatDate(new Date(), tz, 'yyyy')), m = Number(Utilities.formatDate(new Date(), tz, 'M')), d = Number(Utilities.formatDate(new Date(), tz, 'd'));
+  var y = Number(Utilities.formatDate(new Date(), tz, 'yyyy')), m = Number(Utilities.formatDate(new Date(), tz, 'MM')), d = Number(Utilities.formatDate(new Date(), tz, 'dd'));
   if (year !== y) return { ok: true, marked: false, yearMismatch: true, year: year };
   var valid = false;
   s.statuses.forEach(function (x) { if (x.code === 'P') valid = true; });
