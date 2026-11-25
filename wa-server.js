@@ -1075,14 +1075,22 @@ module.exports = function makeWhatsApp(o) {
 
   /* ---------- help menu: 📡 Status / 📱 APK / 🛠️ Work  (same as the website's "WhatsApp tools") ---------- */
   const TST_ICON = { up: '🟢', warn: '🟠', down: '🔴', off: '⚪' };
-  function tstText(d) {
-    const sm = d.sum || {}, bad = (sm.down || 0) + (sm.warn || 0);
-    let o = '📡 *Services status*\n\n' + (bad ? '⚠️ *' + bad + ' service' + (bad === 1 ? '' : 's') + ' par dhyan do*' : '✅ *Jo set up hai wo sab theek chal raha hai*') + '\n🟢 ' + (sm.up || 0) + ' working · 🟠 ' + (sm.warn || 0) + ' partly · 🔴 ' + (sm.down || 0) + ' down · ⚪ ' + (sm.off || 0) + ' not set up\n';
-    (d.items || []).forEach(c => {
-      o += '\n' + (TST_ICON[c.state] || '•') + ' *' + c.name + '* — ' + c.label + (c.ms ? ' (' + c.ms + ' ms)' : '') + (c.detail ? '\n     _' + String(c.detail).slice(0, 160) + '_' : '');
-      (c.sub || []).forEach(x => { o += '\n     ' + (TST_ICON[x.state] || '•') + ' ' + x.name + ' — ' + x.label + (x.ms ? ' · ' + x.ms + ' ms' : '') + (x.detail ? ' · ' + String(x.detail).slice(0, 60) : ''); });
-    });
-    return o + '\n\n🕒 ' + new Date(d.at || Date.now()).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) + '\n_Dobara kuch karna ho to *help* bhejo._';
+  const TST_FIX = { translate: 'Google "429" = bahut zyada request (rate-limit). Kuch der baad apne aap theek hota hai — 2-3 min ruk ke dobara check karo. Lingva "403" = wo address block hai.', drive: 'Website → Settings → Google Drive → *Reconnect* karo (token expire / revoke ho gaya).', wa: 'Website → WhatsApp tab me QR scan karke dobara link karo.', tg: 'Website → Telegram tab me dobara sign in karo.', github: 'Render me GITHUB_TOKEN / GITHUB_REPO check karo (token ko Contents + Actions: Read and write chahiye).', sheets: 'Server ne sheet abhi load nahi ki — thodi der baad dobara check karo.', mail: 'Render me SMTP_USER / SMTP_PASS daalo.', push: 'Render me FCM_SERVICE_ACCOUNT (Firebase JSON) check karo.', turn: 'Render me ICE_SERVERS ya METERED_APP + METERED_API_KEY daalo.', cal: 'Render me CAL_CLIENT_ID / CAL_CLIENT_SECRET / PUBLIC_URL daalo.' };
+  const tstMs = c => c.ms ? ' · ⏱️ ' + c.ms + ' ms' : '';
+  function tstText(d, cur) {                                             // heading + category-wise short list (problems first); tap a number for the full issue
+    const sm = d.sum || {}, bad = (sm.down || 0) + (sm.warn || 0), it = d.items || [], rank = c => c.state === 'down' ? 0 : c.state === 'warn' ? 1 : c.state === 'up' ? 2 : 3;
+    const l = it.map((c, i) => [c, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(x => x[0]); cur.items = l; cur.step = 'tstList';
+    const grp = (title, f) => { const g = l.map((c, i) => [c, i + 1]).filter(x => f(x[0])); return g.length ? '\n' + title + ' (' + g.length + ')\n' + g.map(x => x[1] + '. ' + (TST_ICON[x[0].state] || '•') + ' ' + x[0].name + ' — ' + x[0].label + tstMs(x[0])).join('\n') + '\n' : ''; };
+    return '📡 *Services status*\n\n' + (bad ? '⚠️ *' + bad + ' service' + (bad === 1 ? '' : 's') + ' par dhyan do*' : '✅ *Jo set up hai wo sab theek chal raha hai*') + '\n🟢 ' + (sm.up || 0) + ' working · 🟠 ' + (sm.warn || 0) + ' partly · 🔴 ' + (sm.down || 0) + ' down · ⚪ ' + (sm.off || 0) + ' not set up\n🕒 ' + new Date(d.at || Date.now()).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) + '\n'
+      + grp('🔴 *Problem*', c => c.state === 'down' || c.state === 'warn') + grp('🟢 *Sab theek*', c => c.state === 'up') + grp('⚪ *Set up nahi*', c => c.state === 'off')
+      + '\n👉 *Issue / detail dekhne ke liye number bhejo*\n_R = dobara check · 0 = band_';
+  }
+  function tstDetail(c) {
+    let o = (TST_ICON[c.state] || '•') + ' *' + c.name + '*\nStatus: *' + c.label + '*' + (c.ms ? '\n⏱️ Ping: *' + c.ms + ' ms*' : '');
+    if (c.detail) o += '\n\n' + (c.state === 'up' ? 'ℹ️ ' : '❗ *Issue:* ') + c.detail;
+    if (c.sub && c.sub.length) o += '\n\n' + c.sub.map(x => (TST_ICON[x.state] || '•') + ' *' + x.name + '* — ' + x.label + (x.ms ? ' · ⏱️ ' + x.ms + ' ms' : '') + (x.detail ? '\n     _' + String(x.detail).slice(0, 80) + '_' : '')).join('\n');
+    if (c.state !== 'up' && TST_FIX[c.id]) o += '\n\n💡 *Kya karna hai:* ' + TST_FIX[c.id];
+    return o + '\n\n_Dusra number bhejo · R = dobara check · 0 = band_';
   }
   const apkMB = b => b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
   const apkBump = v => { const p = String(v || '1.0').split('.').map(x => parseInt(x, 10) || 0); p[p.length - 1]++; return p.join('.'); };
@@ -1316,6 +1324,11 @@ module.exports = function makeWhatsApp(o) {
         return say('❌ AI jawab nahi de paya: ' + m + (/auth|token|401|403|sign/i.test(m) ? '\n\n' + (acc === 'ADMIN' ? '_Naya token dene ke liye *token* bhejo._' : '_Admin ko token update karna hoga._') : '') + (/Cannot find module|MODULE_NOT_FOUND/i.test(m) ? '\n\n_Server par puter package install nahi hai (npm install + Node 24 chahiye)._' : ''));
       }
     }
+    if (cur.step === 'tstList') {                                          // 📡 Status: number = that service's issue, R = check again
+      if (low === 'r' || low === 'refresh') { try { return say(tstText(await globalThis.WA_TOOLS_.status(), cur)); } catch (e) { return stop(e, 'Status nahi mila: '); } }
+      const c = /^\d+$/.test(low) ? (cur.items || [])[Number(low) - 1] : null; if (!c) return again();
+      return say(tstDetail(c));
+    }
     if (/^wrk/.test(cur.step || '') && globalThis.WA_TOOLS_) { cur.jid = jid; try { return await wrkStep(cur, t, low, acc, say, ask); } catch (e) { return stop(e, ''); } }
     if (/^apk/.test(cur.step || '') && globalThis.WA_APK_) {                // 📱 APK: 1 build  2 latest download  3 recent builds
       const A = globalThis.WA_APK_;
@@ -1350,10 +1363,10 @@ module.exports = function makeWhatsApp(o) {
     }
     if (cur.step === 'menu') {
       const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
-      if (key === 'tst') {                                              // admin only: status of every service
+      if (key === 'tst') {                                              // admin only: status of every service (short list, tap a number for the issue)
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
-        botState.delete(jid); await say('⏳ *Services check* ho rahi hain…');
-        try { return say(tstText(await globalThis.WA_TOOLS_.status())); } catch (e) { return say('❌ Status nahi mila: ' + botErr(e)); }
+        await say('⏳ *Services check* ho rahi hain…');
+        try { return say(tstText(await globalThis.WA_TOOLS_.status(), cur)); } catch (e) { return stop(e, 'Status nahi mila: '); }
       }
       if (key === 'apk') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
