@@ -1169,11 +1169,81 @@ module.exports = function makeWhatsApp(o) {
     }
   }
 
+  /* ---------- Voice notes: speak instead of typing ----------
+     A voice note from a bot number is turned into text (Google Gemini) and then runs through the very same menu steps as a typed message.
+     Key: env GEMINI_API_KEY, or the main admin sends once in the bot chat:  voice key <key>   (free key: aistudio.google.com) */
+  const VOX_KEY = { get: async () => env.GEMINI_API_KEY || await withWb(() => PROPS().getProperty('GEMINI_KEY') || ''), set: v => withWb(() => { PROPS().setProperty('GEMINI_KEY', v); }) };
+  const VOX_PROMPT = 'This is a short voice command for a WhatsApp expense / attendance bot, spoken in Hindi, English or Hinglish. Write exactly what was said, in Latin (English) letters only, never Devanagari. Write all numbers as digits (ek sau pachas -> 150). Keep English words in English spelling (expense, attendance, present, absent, help, menu, cancel, done, food). No punctuation at the end, no quotes, no translation, no explanation. If there is no clear speech, reply with nothing.';
+  async function voxText(buf, mime, key) {
+    const models = [...new Set([env.VCS_VOICE_MODEL, 'gemini-3.8-flash', 'gemini-flash-latest'].filter(Boolean))];
+    let err = '';
+    for (const m of models) {
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(m) + ':generateContent', {
+        method: 'POST', signal: AbortSignal.timeout(45000), headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ inline_data: { mime_type: String(mime || 'audio/ogg').split(';')[0], data: buf.toString('base64') } }, { text: VOX_PROMPT }] }] }) });
+      const j = await r.json().catch(() => null);
+      if (r.ok) return ((((j && j.candidates || [])[0] || {}).content || {}).parts || []).map(x => x.thought ? '' : x.text || '').join('').replace(/\s+/g, ' ').replace(/^["' ]+|["' .!?,]+$/g, '').slice(0, 500);
+      err = (j && j.error && j.error.message) || ('HTTP ' + r.status);
+      if (r.status !== 404) break;                                       // only a retired / unknown model id is worth trying the next one
+    }
+    throw new Error(err);
+  }
+  const VOX_MENU = [['edt', /\bedit\b/], ['att', /\b(attendance|haziri|hazri|hajri)\b/], ['bill', /\b(bill|balance|statement)\b/], ['exp', /\b(expense|expence|kharcha|kharch|income)\b/], ['rack', /\brack\b/], ['wrk', /\b(work|kaam)\b/], ['dl', /\byou ?tube\b/], ['ig', /\b(insta|instagram|reel)\b/], ['req', /\b(pending|request|requests)\b/], ['tst', /\bstatus\b/], ['apk', /\bapk\b/], ['ai', /\b(ai|claude)\b/]];
+  const voxNorm = t => String(t || '').toLowerCase().replace(/(\d),(?=\d)/g, '$1').replace(/[^\p{L}\p{N}.]+/gu, ' ').replace(/\.(?!\d)/g, ' ').replace(/\s+/g, ' ').trim();
+  function voxCommand(text) {                                           // one sentence that does the whole job -> { key, next } or null
+    const v = voxNorm(text);
+    if (/^(help|menu|help menu|menu kholo|menu dikhao)$/.test(v)) return { key: 'help' };
+    if (/^(attendance |haziri |hazri |aaj )*(present|absent)( (lagao|laga do|lagado|mark karo|mark kar do|kar do|karo))?$/.test(v) || /^(attendance|haziri|hazri) (me |mein )?(present|absent)\b/.test(v)) return { key: 'att', next: /absent/.test(v) ? 'absent' : 'present' };
+    if (/^(expense|expence|kharcha|kharch|income)\b/.test(v) || /^\d+(\.\d+)? .*\b(expense|expence|kharcha|kharch|income)\b/.test(v)) {
+      const rest = v.replace(/\b(expense|expence|kharcha|kharch|income|likho|likh do|add karo|add|karo|kar do|rupaye|rupaya|rupees|rupee|rupay|rs)\b/g, ' ').replace(/\s+/g, ' ').trim().replace(/^(ka|ki|me|mein) /, '');
+      return { key: 'exp', next: /\d/.test(rest) ? rest : '' };
+    }
+    if (/^(bill|bill pdf|balance|balance batao)$/.test(v)) return { key: 'bill' };
+    const rk = /^rack (?:mapping )?(?:ins |number )?([a-z0-9]*\d[a-z0-9]*)$/.exec(v); if (rk) return { key: 'rack', next: rk[1] };
+    return null;
+  }
+  async function voxStep(s, jid, num, wm) {
+    const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
+    const cfg = await botGet(), bd = (cfg.bind || {})[num] || {};
+    let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
+    const au = unwrap(wm.message).audioMessage || {};
+    const pass = () => { if (!cur) relayIn('ADMIN', s, wm, jid, cfg); };  // not a command: it is just a message for the owner, as before
+    if (bd.unl) return botStep(s, jid, '', num, wm);                     // login / password steps are typed only
+    if (cur && cur.step === 'relayText') return botStep(s, jid, '', num, wm);   // a reply to another person must be typed
+    if (Number(au.seconds) > 60) { if (!cur) return pass(); return say('🎤 Voice note 60 second se chhota rakho.'); }
+    let text = '';
+    try {
+      const key = await VOX_KEY.get();
+      if (!key) { if (!cur) return pass(); return say('🎤 Voice abhi set nahi hai. Type karke bhejo.' + ((bd.acc || 'ADMIN') === 'ADMIN' ? '\n_Set karne ke liye bhejo:_ *voice key <Gemini key>*' : '')); }
+      const buf = await L().downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage });
+      text = await voxText(buf, au.mimetype, key);
+    } catch (e) { warn('WhatsApp voice', e && e.message); if (!cur) return pass(); return say('❌ Voice samajh nahi paya: ' + botErr(e) + '\n\nDobara bolo ya type karo.'); }
+    if (!text) { if (!cur) return pass(); return say('🎤 Awaaz saaf nahi aayi, dobara bolo.'); }
+    const cmd = (!cur || cur.step === 'menu') ? voxCommand(text) : null;
+    if (!cur && !cmd) return pass();                                     // never let an ordinary voice note answer an approval / reply question
+    await say('🎤 _Suna:_ ' + text);
+    const v = voxNorm(text);
+    if (cmd) {
+      if (cmd.key === 'help') return botStep(s, jid, 'help', num, wm);
+      botState.set(jid, { step: 'menu', at: Date.now(), opts: [cmd.key], prompt: '' });   // same permission checks as choosing it from the menu
+      await botStep(s, jid, '1', num, null, { quiet: !!cmd.next, voice: true });
+      const now = botState.get(jid);
+      if (cmd.next && now && now.step !== 'menu') return botStep(s, jid, cmd.next, num, null, { voice: true });
+      return;
+    }
+    if (cur.step === 'menu') {
+      const hit = VOX_MENU.find(([k, re]) => cur.opts.includes(k) && re.test(v));
+      if (hit) return botStep(s, jid, String(cur.opts.indexOf(hit[0]) + 1), num, null, { voice: true });
+    }
+    const words = { ek: '1', one: '1', do: '2', two: '2', teen: '3', three: '3', char: '4', chaar: '4', four: '4', paanch: '5', five: '5', zero: '0', band: '0', 'band karo': '0', 'cancel karo': '0' };
+    return botStep(s, jid, words[v] || (/^(number )?\d+(\.\d+)?$/.test(v) ? v.replace('number ', '') : /^(cancel|done|haan|yes|nahi|no|next|prev|back|all)$/.test(v) ? v : text.replace(/(\d),(?=\d)/g, '$1')), num, null, { voice: true });
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
-  async function botStep(s, jid, text, num, wm) {
+  async function botStep(s, jid, text, num, wm, vo = {}) {              // vo.voice = came from a voice note, vo.quiet = do not send the in-between question
     const to = jid;                                                     // answer in the very same chat the message came from
-    const say = async t => { await new Promise(r => setTimeout(r, 700)); return s.sock.sendMessage(to, { text: t }); };
-    const t = String(text || '').trim(), low = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    const say = async t => { if (vo.quiet && !/^❌/.test(t)) return; await new Promise(r => setTimeout(r, 700)); return s.sock.sendMessage(to, { text: t }); };
+    const t = String(text || '').trim(); let low = t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
     const ask = (c, m) => { c.prompt = m; return say(m); };            // remember the question, so a wrong answer just repeats it
     const menu = async () => {                                          // welcome (name) + ONLY the options this number's account is allowed to use
@@ -1203,6 +1273,10 @@ module.exports = function makeWhatsApp(o) {
     };
     { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
     if (BOT_HI.test(low)) return menu();
+    { const vk = /^voice key\s+(\S{20,})$/i.exec(t);                      // main admin: save the voice (Gemini) key once
+      if (vk) { const b = ((await botGet()).bind || {})[num] || {}; if ((b.acc || 'ADMIN') !== 'ADMIN') return say('❌ Ye sirf admin ke liye hai.');
+        try { await VOX_KEY.set(vk[1]); } catch (e) { return say('❌ Key save nahi hui: ' + botErr(e)); }
+        return say('✅ *Voice chalu ho gaya.*\nAb voice note me bolo: _expense 150 chai food_, _present lagao_, _menu_.\n\n_Safety ke liye key wala message chat se delete kar do._'); } }
     if (await relayHandle(s, jid, low, t, num, wm, say, cur)) return;       // 1 / 2 answer to a "new message" alert, or the text to send
     if (await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
     if (!cur) { relayIn('ADMIN', s, wm, jid, await botGet()); return; }   // a bot number writing normally (no menu chat open, not "help") is just a message for the owner -> alert + "reply?"
@@ -1577,8 +1651,14 @@ module.exports = function makeWhatsApp(o) {
       const cats = ct.exp.concat(ct.inc);
       if (!cats.length) { botState.delete(jid); return say('❌ Koi category nahi mili. Pehle app me category banao.'); }
       cur.amount = amount; cur.note = t.replace(m[0], '').replace(/\s+/g, ' ').trim(); cur.cats = cats; cur.inc = new Set(ct.inc); cur.step = 'expCat';
+      let spoken = '';                                                     // voice: category said in the same sentence -> save straight away
+      if (vo.voice) {
+        const has = c => (' ' + voxNorm(cur.note) + ' ').includes(' ' + voxNorm(c) + ' ');
+        const found = cats.filter(c => voxNorm(c) && has(c));
+        if (found.length === 1) { spoken = found[0]; cur.note = (' ' + voxNorm(cur.note) + ' ').replace(' ' + voxNorm(spoken) + ' ', ' ').trim(); low = String(spoken).toLowerCase(); }
+      }
       const lines = (arr, off) => arr.map((c, i) => (off + i + 1) + '. ' + c).join('\n');
-      return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + (ct.who ? '\n👤 ' + ct.who : '') + '\n\n*Category chuno (number bhejo):*' + (ct.exp.length ? '\n\n*Expense*\n' + lines(ct.exp, 0) : '') + (ct.inc.length ? '\n\n*Income*\n' + lines(ct.inc, ct.exp.length) : '') + '\n\n_(0 = cancel)_');
+      if (!spoken) return ask(cur, '💸 ₹' + amount + (cur.note ? ' · ' + cur.note : '') + (ct.who ? '\n👤 ' + ct.who : '') + '\n\n*Category chuno (number bhejo):*' + (ct.exp.length ? '\n\n*Expense*\n' + lines(ct.exp, 0) : '') + (ct.inc.length ? '\n\n*Income*\n' + lines(ct.inc, ct.exp.length) : '') + '\n\n_(0 = cancel)_');
     }
     if (cur.step === 'expCat') {
       const c = cur.cats[parseInt(low, 10) - 1] || cur.cats.find(x => low && String(x).toLowerCase() === low) || cur.cats.find(x => low.length > 1 && String(x).toLowerCase().includes(low)); if (!c) return again();
@@ -1625,10 +1705,10 @@ module.exports = function makeWhatsApp(o) {
       if (Date.now() - tsOf(wm.messageTimestamp) > 120000) return;          // old message (history sync) - never answer those
       botGet().then(c => {
         const num = c.on && c.nums.length ? botMatch(pnOf(s, jid), c.nums) : ''; if (!num) { const k0 = kindText(wm.message); if (k0 && !botDup(wm, k0.kind === 'text' ? (k0.text || '') : '#' + String(wm.key.id || ''))) relayIn(uid, s, wm, jid, c); return; }
-        const k = kindText(wm.message), text = k && k.kind === 'text' ? (k.text || '') : '';
+        const k = kindText(wm.message), text = k && k.kind === 'text' ? (k.text || '') : '', voice = !!(k && k.kind === 'voice');
         if (botDup(wm, text || (k && k.kind !== 'text' ? '#' + String(wm.key.id || '') : ''))) return;                                   // the same message again -> no second answer
         const prev = botQ.get(jid) || Promise.resolve();                // one message at a time per chat
-        botQ.set(jid, prev.then(() => botStep(s, jid, text, num, wm)).catch(e => warn('WhatsApp bot', e && e.message)));
+        botQ.set(jid, prev.then(() => voice ? voxStep(s, jid, num, wm) : botStep(s, jid, text, num, wm)).catch(e => warn('WhatsApp bot', e && e.message)));
       }).catch(e => warn('WhatsApp bot', e && e.message));
     } catch (e) { warn('WhatsApp bot', e && e.message); }
   }
