@@ -1797,6 +1797,14 @@ function makeApp(store, env) {
     const p = handle0(body);
     let r0 = null; try { r0 = JSON.parse(body); } catch (e) {}
     if (r0 && r0.action === 'chatSnapOpen') p.then(res => { if (res && res.ok && res.fileId) setTimeout(() => drvDelete(res.fileId).catch(e => warn('snap delete', e && e.message)), 200000); }, () => {});
+    if (r0 && r0.action === 'geoMark') p.then(async res => {                 // Present marked by geo-fence -> WhatsApp alert to the alert number
+      try {
+        if (!(res && res.ok && res.marked) || !WA.isOpen('ADMIN')) return;
+        const to = await vwTo(); if (!to) return;
+        const n = attNow();
+        await WA.sendText('ADMIN', to, '✅ *Present marked by geo fencing* 🎉\n' + (res.who ? '👤 ' + res.who + '\n' : '') + '📍 ' + (res.place || 'Office') + ' (~' + (res.dist || 0) + ' m)\n📅 ' + n.date + '  🕒 ' + n.hm + ' IST');
+      } catch (e) { warn('Geo-fence WhatsApp alert', e && e.message); }
+    }, () => {});
     if (r0 && r0.action === 'chatSend') p.then(res => { if (res && res.ok) PUSH.chat(r0, res).catch(e => warn('push', e && e.message)); }, () => {});
     return p;
   };

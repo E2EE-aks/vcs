@@ -80,9 +80,26 @@ public class KsGeoPlugin extends Plugin {
     return f.format(new Date());
   }
 
-  static PendingIntent fenceIntent(Context c) {
+  static PendingIntent fenceIntent(Context c, int n) {
     Intent i = new Intent(c, GeoReceiver.class).setAction(ACT_FENCE);
-    return PendingIntent.getBroadcast(c, 7301, i, flags(true));
+    return PendingIntent.getBroadcast(c, 7330 + n, i, flags(true));
+  }
+
+  /* every place to watch: [{lat,lng,radius}] (the app sends the office + the places saved in the app); old versions only had one */
+  static JSONArray places(SharedPreferences sp) {
+    try {
+      JSONArray a = new JSONArray(sp.getString("places", "[]"));
+      if (a.length() > 0) return a;
+    } catch (Exception e) {}
+    JSONArray a = new JSONArray();
+    try {
+      JSONObject o = new JSONObject();
+      o.put("lat", Double.longBitsToDouble(sp.getLong("lat", 0)));
+      o.put("lng", Double.longBitsToDouble(sp.getLong("lng", 0)));
+      o.put("radius", (double) sp.getFloat("radius", 1000f));
+      a.put(o);
+    } catch (Exception e) {}
+    return a;
   }
 
   static PendingIntent checkIntent(Context c) {
@@ -93,7 +110,7 @@ public class KsGeoPlugin extends Plugin {
   static void stop(Context c) {
     try {
       LocationManager lm = (LocationManager) c.getSystemService(Context.LOCATION_SERVICE);
-      lm.removeProximityAlert(fenceIntent(c));
+      for (int i = 0; i < 9; i++) lm.removeProximityAlert(fenceIntent(c, i));
     } catch (Exception e) {}
     try {
       AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
@@ -106,11 +123,12 @@ public class KsGeoPlugin extends Plugin {
     SharedPreferences sp = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     if (!sp.getBoolean("on", false) || !hasLoc(c)) return;
     try {
-      double lat = Double.longBitsToDouble(sp.getLong("lat", 0));
-      double lng = Double.longBitsToDouble(sp.getLong("lng", 0));
-      float rad = sp.getFloat("radius", 1000f);
       LocationManager lm = (LocationManager) c.getSystemService(Context.LOCATION_SERVICE);
-      lm.addProximityAlert(lat, lng, rad, -1, fenceIntent(c));
+      JSONArray pl = places(sp);
+      for (int i = 0; i < pl.length() && i < 9; i++) {
+        JSONObject o = pl.getJSONObject(i);
+        lm.addProximityAlert(o.getDouble("lat"), o.getDouble("lng"), (float) o.optDouble("radius", 1000.0), -1, fenceIntent(c, i));
+      }
     } catch (Exception e) {}
     scheduleCheck(c, 60000L);
   }
@@ -170,6 +188,7 @@ public class KsGeoPlugin extends Plugin {
       ed.putLong("lat", Double.doubleToRawLongBits(call.getDouble("lat", 0.0)));
       ed.putLong("lng", Double.doubleToRawLongBits(call.getDouble("lng", 0.0)));
       ed.putFloat("radius", call.getFloat("radius", 1000f));
+      ed.putString("places", call.getString("places", "[]"));
       ed.putString("api", call.getString("api", ""));
       ed.putString("token", call.getString("token", ""));
       ed.putString("asUser", call.getString("asUser", ""));
@@ -266,10 +285,16 @@ public class KsGeoPlugin extends Plugin {
             Location l = freshFix(c);
             if (l != null) { lat = l.getLatitude(); lng = l.getLongitude(); acc = l.getAccuracy(); }
             else if (!fence) return;                       // check without any fix: wait for the next one
-            if (l != null) {                               // clearly far from the office: no need to bother the server
-              float[] dd = new float[1];
-              Location.distanceBetween(l.getLatitude(), l.getLongitude(), Double.longBitsToDouble(sp.getLong("lat", 0)), Double.longBitsToDouble(sp.getLong("lng", 0)), dd);
-              if (dd[0] - Math.min(l.getAccuracy(), 150f) > sp.getFloat("radius", 1000f)) return;
+            if (l != null) {                               // clearly far from every saved place: no need to bother the server
+              boolean near = false;
+              JSONArray pl = places(sp);
+              for (int i = 0; i < pl.length(); i++) {
+                JSONObject o = pl.getJSONObject(i);
+                float[] dd = new float[1];
+                Location.distanceBetween(l.getLatitude(), l.getLongitude(), o.getDouble("lat"), o.getDouble("lng"), dd);
+                if (dd[0] - Math.min(l.getAccuracy(), 150f) <= (float) o.optDouble("radius", 1000.0)) { near = true; break; }
+              }
+              if (!near) return;
             }
             String api = sp.getString("api", ""), token = sp.getString("token", "");
             if (api.length() == 0 || token.length() == 0) return;
