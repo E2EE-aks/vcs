@@ -161,7 +161,7 @@ function fail_(msg, code) {
 
 var WRITE_ACTIONS = {
   historyRestore: 1, saveLoginCfg: 1, evSaveTasks: 1, evMark: 1,
-  setup: 1, setAttendance: 1, geoMark: 1, saveSettings: 1, saveStatuses: 1, changeCredentials: 1,
+  setup: 1, setAttendance: 1, geoMark: 1, geoPlaceSave: 1, geoPlaceDel: 1, saveSettings: 1, saveStatuses: 1, changeCredentials: 1,
   addExpense: 1, updateExpense: 1, deleteExpense: 1,
   saveLgAccount: 1, deleteLgAccount: 1, addLgEntry: 1, updateLgEntry: 1, deleteLgEntry: 1,
   addCategory: 1, updateCategory: 1, deleteCategory: 1,
@@ -178,7 +178,7 @@ var WRITE_ACTIONS = {
 
 // What each action needs. 'att' / 'exp' / 'work' need EDIT access to that section; 'emp' / 'creds' need that right.
 var NEED = {
-  setAttendance: 'att', geoMark: 'att',
+  setAttendance: 'att', geoMark: 'att', geoPlaceSave: 'att', geoPlaceDel: 'att',
   addExpense: 'exp', updateExpense: 'exp', deleteExpense: 'exp', saveLgAccount: 'exp', deleteLgAccount: 'exp', addLgEntry: 'exp', updateLgEntry: 'exp', deleteLgEntry: 'exp', addCategory: 'exp', updateCategory: 'exp', deleteCategory: 'exp',
 
   addWork: 'work', updateWork: 'work', deleteWork: 'work',
@@ -293,6 +293,9 @@ function route_(req) {
       case 'getAll':            return { ok: true, data: getAll_() };
       case 'setAttendance':     out = setAttendance_(req); break;
       case 'geoMark':           out = geoMark_(req); break;
+      case 'geoPlaces':         return { ok: true, places: geoAll_() };
+      case 'geoPlaceSave':      out = geoPlaceSave_(req); break;
+      case 'geoPlaceDel':       out = geoPlaceDel_(req); break;
       case 'saveSettings':      out = saveSettings_(req); break;
       case 'saveLoginCfg':      out = saveLoginCfg_(req); break;
       case 'saveTheme':         out = saveTheme_(req); break;
@@ -931,7 +934,7 @@ function historyRestore_(req) {
 // ---------- ACTIVITY LOG (what each user did: every save / add / delete, not just sign-ins) ----------
 // Human-readable label + a short detail builder for each action the app can log.
 var ACTIVITY_LABEL_ = {
-  setAttendance: 'Updated attendance', geoMark: 'Geo-fence attendance', saveSettings: 'Changed settings', saveStatuses: 'Changed status codes',
+  setAttendance: 'Updated attendance', geoMark: 'Geo-fence attendance', geoPlaceSave: 'Added a geo-fence place', geoPlaceDel: 'Removed a geo-fence place', saveSettings: 'Changed settings', saveStatuses: 'Changed status codes',
   addStatus: 'Added a status code', deleteStatus: 'Deleted a status code', historyRestore: 'Restored an earlier change',
   addEmployee: 'Added an employee', updateEmployee: 'Updated an employee', deleteEmployee: 'Deleted an employee',
   changeCredentials: 'Changed login password', addExpense: 'Added an expense', updateExpense: 'Updated an expense', deleteExpense: 'Deleted an expense', requestDelete: 'Asked the admin to delete an entry', decideDelete: 'Decided a delete request',
@@ -1979,11 +1982,31 @@ function geoDist_(la1, lo1, la2, lo2) {
   var h = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(la1 * r) * Math.cos(la2 * r) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
   return 2 * R * Math.asin(Math.sqrt(h));
 }
+// Extra places (saved from the app: "Add my current location"): script property GEO_PLACES = [{id,name,lat,lng,radius}]
+function geoCustom_() { var r = []; try { r = JSON.parse(String(PropertiesService.getScriptProperties().getProperty('GEO_PLACES') || '[]')); } catch (e) { r = []; } return Array.isArray(r) ? r : []; }
+function geoAll_() { return [{ id: 'office', name: 'Goel Sinks India Pvt. Ltd., Rohini', lat: GEO_LAT, lng: GEO_LNG, radius: GEO_RADIUS_M }].concat(geoCustom_()); }
+function geoPlaceSave_(req) {
+  var lat = Number(req.lat), lng = Number(req.lng), rad = Math.min(Math.max(Number(req.radius) || 1000, 100), 5000);
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) fail_('Location missing.');
+  var name = String(req.name || '').trim().slice(0, 40) || 'My place';
+  var list = geoCustom_();
+  if (list.length >= 8) fail_('Maximum 8 places. Remove one first.');
+  list.push({ id: Utilities.getUuid().replace(/-/g, '').slice(0, 8), name: name, lat: lat, lng: lng, radius: rad });
+  PropertiesService.getScriptProperties().setProperty('GEO_PLACES', JSON.stringify(list));
+  return { ok: true, places: geoAll_() };
+}
+function geoPlaceDel_(req) {
+  var list = geoCustom_().filter(function (x) { return x.id !== String(req.id || ''); });
+  PropertiesService.getScriptProperties().setProperty('GEO_PLACES', JSON.stringify(list));
+  return { ok: true, places: geoAll_() };
+}
 function geoMark_(req) {
   var lat = Number(req.lat), lng = Number(req.lng), acc = Math.min(Math.max(Number(req.acc) || 0, 0), 150);
   if (!isFinite(lat) || !isFinite(lng)) fail_('Location missing.');
-  var dist = geoDist_(lat, lng, GEO_LAT, GEO_LNG);
-  if (dist - acc > GEO_RADIUS_M) return { ok: true, marked: false, outside: true, dist: Math.round(dist) };
+  var hit = null, near = 1e12;
+  geoAll_().forEach(function (p) { var d = geoDist_(lat, lng, p.lat, p.lng); if (d < near) near = d; if (!hit && d - acc <= p.radius) hit = { p: p, d: d }; });
+  if (!hit) return { ok: true, marked: false, outside: true, dist: Math.round(near) };
+  var dist = hit.d;
   var emps = readEmployees_();
   var emp = emps.filter(function (x) { return x.id === String(req.emp || ''); })[0] || emps[0];
   var s = readSettings_();
@@ -1999,7 +2022,7 @@ function geoMark_(req) {
   var cur = String(a.sh.getRange(a.rows[m], a.dayCol[d]).getValue() || '').trim().toUpperCase();
   if (cur) return { ok: true, marked: false, already: true, code: cur, d: d, m: m };
   a.sh.getRange(a.rows[m], a.dayCol[d]).setValue('P');
-  return { ok: true, marked: true, d: d, m: m, dist: Math.round(dist) };
+  return { ok: true, marked: true, d: d, m: m, dist: Math.round(dist), place: hit.p.name, who: String(CTX.name || CTX.username || '') };
 }
 
 // ---------- CATEGORIES ----------
