@@ -285,6 +285,7 @@
     else box = '<div class="wa-qrph"><button class="btn" onclick="waStart()">🟢 Show QR code</button></div>';
     return '<div class="wa-login" id="waLogin"><div><h2>🟢 Use WhatsApp here</h2><ol><li>Open <b>WhatsApp</b> on your phone</li><li>Android: tap <b>⋮ ▸ Linked devices</b><br>iPhone: <b>Settings ▸ Linked devices</b></li><li>Tap <b>Link a device</b></li><li>Point your phone at this screen to scan the QR code</li></ol>' +
       (G.err ? '<p style="color:var(--bad);margin-top:12px">' + esc(G.err) + '</p>' : '') +
+      '<div class="actions" style="margin-top:14px;flex-wrap:wrap"><button class="btn soft sm" onclick="waTools(\'status\')">📡 Services status</button> <button class="btn soft sm" onclick="waTools(\'apk\')">📱 Generate APK</button> <button class="btn soft sm" onclick="waTools(\'work\')">🛠️ Work record</button></div>' +
       '<p class="muted" style="margin-top:16px;font-size:13px;line-height:1.6">🔒 It is your own account — nobody else sees your chats. Nothing is copied into the Google Sheet. Your chats, contacts and recent messages appear here right after you scan.</p>' +
       (working ? '<div class="actions" style="margin-top:10px"><button class="btn ghost sm" onclick="waRetry()">↻ New QR</button> <button class="btn ghost sm" onclick="waCancel()">Cancel</button></div>' : '') + '</div><div class="wa-qrwrap">' + box + '</div></div>';
   }
@@ -292,7 +293,7 @@
     return '<div class="wa-app' + (G.open ? ' open' : '') + '" id="waApp"><div class="wa-side">' +
       '<div class="wa-top"><button class="wa-circ" title="Menu" onclick="waMenu(event)">•••</button><button class="wa-circ plus" title="New chat" onclick="waNewToggle()">＋</button></div><h1 class="wa-big" id="waBig">Chats</h1>' +
       '<div class="wa-menu hidden" id="waMenu"><div class="wa-mrow"><span class="wa-av sm" id="waMeAv"></span><div class="wa-mid"><b id="waMeNm"></b><small id="waMeNo"></small></div></div>' +
-      '<button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>' +
+      '<button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button onclick="waMenuGo(\'tstatus\')">📡 Services status</button><button onclick="waMenuGo(\'tapk\')">📱 Generate APK</button><button onclick="waMenuGo(\'twork\')">🛠️ Work record</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>' +
       '<div class="wa-blueall" id="waBlueAll"></div>' +
       '<div id="waNewBox"></div><div class="wa-srch"><input class="input" id="waSearch" placeholder="🔍  Search or start a new chat" oninput="waFilter(this.value)"></div>' +
       '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div><div class="wa-tabs" id="waTabs"></div></div><div class="wa-main" id="waMain"></div></div>';
@@ -322,7 +323,7 @@
     if (f === 'comm') return '<div class="wa-empty"><div style="font-size:52px">👥</div><b style="font-size:18px">Communities</b><div>Your groups are in the Chats tab (use the Groups filter).</div></div>';
     var me = G.me || {}, st = G.st || {}, nm = me.name || st.name || 'WhatsApp', no = me.number || st.number || '';
     return '<div class="wa-you">' + avatar({ name:nm, av:me.av || '' }) + '<b style="font-size:20px">' + esc(nm) + '</b><small style="opacity:.7">' + esc(no) + '</small></div>' +
-      '<div class="wa-ys"><button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>';
+      '<div class="wa-ys"><button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button onclick="waMenuGo(\'tstatus\')">📡 Services status</button><button onclick="waMenuGo(\'tapk\')">📱 Generate APK</button><button onclick="waMenuGo(\'twork\')">🛠️ Work record</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>';
   }
   window.waTab = function(tb){
     G.f = (tb === 'all' && (G.f === 'unread' || G.f === 'groups')) ? G.f : tb;
@@ -552,7 +553,8 @@
   document.addEventListener('click', function(){ var m = $('#waMenu'); if (m) m.classList.add('hidden'); });
   window.waMenuGo = function(k){ var m = $('#waMenu'); if (m) m.classList.add('hidden');
     if (k === 'new'){ if (!G.newOpen) waNewToggle(); } else if (k === 'grp'){ G.newOpen = true; G.grp = { on:true, sel:{} }; paintSide(true); paintContacts(); }
-    else if (k === 'sync') waSyncC(); else if (k === 'refresh') waRefresh(); else if (k === 'relink') waRelink(); else if (k === 'out') waLogout(); else if (k === 'web') window.open('https://web.whatsapp.com/', '_blank', 'noopener'); };
+    else if (k === 'sync') waSyncC(); else if (k === 'refresh') waRefresh(); else if (k === 'relink') waRelink(); else if (k === 'out') waLogout(); else if (k === 'web') window.open('https://web.whatsapp.com/', '_blank', 'noopener');
+    else if (k === 'tstatus' || k === 'tapk' || k === 'twork') waTools(k === 'tstatus' ? 'status' : k === 'tapk' ? 'apk' : 'work'); };
   window.waCFilter = function(v){ G.cq = String(v || ''); paintContacts(); };
   window.waChip = function(f){ G.f = f; G.sigL = ''; paintSide(true); if (f === 'status') loadStat(); };
   window.waCall = async function(video){
