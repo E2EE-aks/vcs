@@ -881,6 +881,24 @@ module.exports = function makeWhatsApp(o) {
     if (!out.length) throw new Error('ZIP khali hai');
     return out;
   }
+  async function botVyml(s, jid, cur, wm, low) {                         // a workflow (.yml) file -> always into .github/workflows/
+    const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
+    const k = wm && wm.message ? kindText(wm.message) : null;
+    if (!k || k.kind !== 'file') return say('⚙️ *.yml* file ko *Document* ke roop me bhejo (📎 → Document).\n\n_(0 = cancel)_');
+    let name = String(k.name || '').replace(/\s*\(\d+\)(\.[^.\/]+)?$/, '$1').split('/').pop();   // "build-apk (1).yml" -> "build-apk.yml"
+    if (!/\.ya?ml$/i.test(name)) return say('❌ *' + (name || 'file') + '* .yml file nahi hai. Sirf *.yml* / *.yaml* bhejo.');
+    if (!/^[\w.\-]+$/.test(name)) return say('❌ File ka naam sahi nahi (*' + name + '*). Naam me space ya khaas chinh na ho.');
+    if ((k.size || 0) > 1048576) return say('❌ YML file 1 MB se badi hai.');
+    let buf; try { buf = await L().downloadMediaMessage(wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage }); } catch (e) { return say('❌ File download nahi hui, dobara bhejo.'); }
+    if (!buf || !buf.length) return say('❌ File khali mili, dobara bhejo.');
+    const txt = buf.toString('utf8');
+    if (txt.includes('\t') && /^\t/m.test(txt)) return say('❌ *' + name + '* me tab character hai — YAML me tab nahi chalta. Spaces se indent karke dobara bhejo.');
+    if (!/^on:|^"on":|^true:/m.test(txt) || !/^jobs:/m.test(txt)) return say('❌ *' + name + '* GitHub workflow jaisi nahi lag rahi (*on:* ya *jobs:* nahi mila). Sahi file bhejo.');
+    const path = '.github/workflows/' + name;
+    cur.step = 'vcsFile'; cur.files = [{ path, buf }];
+    await say('⚙️ *' + path + '* mil gayi. GitHub pe bhej raha hoon…\n_(Naya APK banane ke liye Deploy tab / GitHub Actions se build chalana padega.)_');
+    return botVcsFlush(s, jid, cur);
+  }
   async function botVzip(s, jid, cur, wm, low) {
     const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
     const k = wm && wm.message ? kindText(wm.message) : null;
@@ -1071,6 +1089,7 @@ module.exports = function makeWhatsApp(o) {
       if (ok('exp')) opts.push(['bill', 'Bill PDF']);
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vcs', 'VCS (website update)']);
       if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vzip', 'VCS ZIP (website update — ZIP file upload)']);
+      if (acc0 === 'ADMIN' && typeof deployFiles === 'function') opts.push(['vyml', 'VCS YML (APK build file — .github/workflows update)']);
       if (acc0 === 'ADMIN' && typeof srcZip === 'function') opts.push(['src', 'VCS Source Code (download ZIP)']);
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
@@ -1094,6 +1113,7 @@ module.exports = function makeWhatsApp(o) {
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
     if (cur.step === 'vzipFile') return botVzip(s, jid, cur, wm, low);
+    if (cur.step === 'ymlFile') return botVyml(s, jid, cur, wm, low);
     if (/^ig/.test(cur.step || '') && DL) {                              // Instagram Reel: 1) link  2) the video comes in this chat  (3 = admin: Instagram cookies)
       if (cur.step === 'igMenu') {
         if (low === '3' && acc === 'ADMIN') { cur.step = 'igCk'; return ask(cur, '🍪 *Instagram cookies*\n\nAgar Instagram login maange to yahan apni *cookies.txt* file bhejo (📎 → Document), ya uska text paste kar do.\n\n⚠️ Asli account ki jagah ek *alag / naya* account use karo.\n\nSirf *instagram.com* ki cookies export karo (Netscape format).\n\n_0 = cancel_'); }
@@ -1235,6 +1255,12 @@ module.exports = function makeWhatsApp(o) {
         if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
         cur.step = 'vzipFile'; cur.files = [];
         return ask(cur, '🗜️ *VCS ZIP — website update*\n\nWebsite ki *ZIP file* ko *Document* ke roop me bhejo (📎 → Document).\n\nZIP ke andar ki sab files ek hi baar me GitHub pe jayengi (jo badli hui hain wahi update hongi) aur website live hogi. GitHub wala folder-zip bhi chalega (upar ka folder apne aap hat jayega).\n\n_(0 = cancel)_');
+      }
+      if (key === 'vyml') {
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        if (typeof deployFiles !== 'function') { botState.delete(jid); return say('❌ GitHub deploy yahan jura nahi hai.'); }
+        cur.step = 'ymlFile'; cur.files = [];
+        return ask(cur, '⚙️ *VCS YML — APK build file update*\n\n*build-apk.yml* (ya koi bhi .yml) ko *Document* ke roop me bhejo (📎 → Document).\n\nFile apne aap GitHub ke *.github/workflows/* folder me jayegi (purani file replace hogi). Folder ka path likhne ki zarurat nahi.\n\n_(0 = cancel)_');
       }
       if (key === 'src') {                                              // admin only: send the whole website source as a ZIP document (tap it in WhatsApp = it downloads to the phone)
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
