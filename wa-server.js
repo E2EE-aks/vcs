@@ -493,6 +493,7 @@ module.exports = function makeWhatsApp(o) {
     globalThis.buildCtx_(a.id);
     return fn(a);
   });
+  const bindOf = (s, cfg, num) => (s && s.uid && s.uid !== 'ADMIN') ? { acc: s.uid, emp: '', label: 'Own WhatsApp' } : ((cfg && cfg.bind) || {})[num] || {};   // a user's OWN linked WhatsApp always works as that user's account
   const botErr = e => String((e && e.message) || e).slice(0, 150);
 
 
@@ -1224,7 +1225,7 @@ module.exports = function makeWhatsApp(o) {
   }
   async function voxStep(s, jid, num, wm) {
     const say = async t => { await new Promise(r => setTimeout(r, 500)); return s.sock.sendMessage(jid, { text: t }); };
-    const cfg = await botGet(), bd = (cfg.bind || {})[num] || {};
+    const cfg = await botGet(), bd = bindOf(s, cfg, num);
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
     const au = unwrap(wm.message).audioMessage || {};
     const pass = () => { if (!cur && !(wm.key && wm.key.fromMe)) relayIn('ADMIN', s, wm, jid, cfg); };  // not a command: it is just a message for the owner, as before
@@ -1262,6 +1263,16 @@ module.exports = function makeWhatsApp(o) {
   /* ---------- option "WhatsApp Status download": contacts who put a status (last 24 h) -> pick a name -> pick / download its status in this chat ---------- */
   const wstAgo = at => { const m = Math.max(1, Math.round((Date.now() - at) / 60000)); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' ghante'; };
   const wstIcon = k => ({ photo: '📷', video: '🎬', gif: '🎞️', voice: '🎤', audio: '🎵', text: '📝' }[k] || '•');
+  async function wstPull(s) {                                          // ask the phone for the status feed (status@broadcast) and wait a few seconds for it to arrive
+    const before = s.statSeen || 0;
+    try {
+      let key = null, ts = Math.floor(Date.now() / 1000);
+      s.stat.forEach(g => g.items.forEach(i => { if (i.wm && i.wm.key && (!key || i.at < key.at)) key = { at: i.at, key: i.wm.key }; }));
+      if (key) ts = Math.floor(key.at / 1000);
+      await s.sock.fetchMessageHistory(50, key ? key.key : { remoteJid: 'status@broadcast', fromMe: false, id: '' }, key ? ts : Math.floor(Date.now() / 1000));
+    } catch (e) { warn('WhatsApp status pull', e && e.message); return; }
+    for (let i = 0; i < 14; i++) { await new Promise(r => setTimeout(r, 1000)); if ((s.statSeen || 0) > before && i >= 3) break; }
+  }
   const wstKind = k => ({ photo: 'Photo', video: 'Video', gif: 'GIF', voice: 'Voice', audio: 'Audio', text: 'Text' }[k] || k);
   function wstListText(cur, s) {
     const list = statusView('ADMIN', s); cur.list = list;
@@ -1295,7 +1306,7 @@ module.exports = function makeWhatsApp(o) {
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
     const ask = (c, m) => { c.prompt = m; return say(m); };            // remember the question, so a wrong answer just repeats it
     const menu = async () => {                                          // welcome (name) + ONLY the options this number's account is allowed to use
-      const cfg0 = await botGet(), bd0 = (cfg0.bind || {})[num] || {}, acc0 = bd0.acc || 'ADMIN';
+      const cfg0 = await botGet(), bd0 = bindOf(s, cfg0, num), acc0 = bd0.acc || 'ADMIN';
       let me; try { me = await botRun(a => ({ name: a.name || a.username || '', perms: a.perms || {} }), acc0); } catch (e) { botState.delete(jid); return say('❌ ' + botErr(e)); }
       const pm = me.perms, ok = k => pm[k] === 'view' || pm[k] === 'edit', opts = [];
       if (pm.exp === 'edit') opts.push(['exp', 'Expense']);
@@ -1320,18 +1331,18 @@ module.exports = function makeWhatsApp(o) {
       const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
       return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
     };
-    { const cu = await botGet(), bu = (cu.bind || {})[num] || {}; if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
+    { const cu = await botGet(), bu = bindOf(s, cu, num); if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
     if (BOT_HI.test(low)) return menu();
     { const vk = /^voice key\s+(\S{20,})$/i.exec(t);                      // main admin: save the voice (Gemini) key once
-      if (vk) { const b = ((await botGet()).bind || {})[num] || {}; if ((b.acc || 'ADMIN') !== 'ADMIN') return say('❌ Ye sirf admin ke liye hai.');
+      if (vk) { const b = bindOf(s, await botGet(), num); if ((b.acc || 'ADMIN') !== 'ADMIN') return say('❌ Ye sirf admin ke liye hai.');
         try { await VOX_KEY.set(vk[1]); } catch (e) { return say('❌ Key save nahi hui: ' + botErr(e)); }
         return say('✅ *Voice chalu ho gaya.*\nAb voice note me bolo: _expense 150 chai food_, _present lagao_, _menu_.\n\n_Safety ke liye key wala message chat se delete kar do._'); } }
-    if (await relayHandle(s, jid, low, t, num, wm, say, cur)) return;       // 1 / 2 answer to a "new message" alert, or the text to send
-    if (await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
+    if (s.uid === 'ADMIN' && await relayHandle(s, jid, low, t, num, wm, say, cur)) return;       // 1 / 2 answer to a "new message" alert, or the text to send
+    if (s.uid === 'ADMIN' && await aprHandle(jid, low, num, wm, say, cur)) return;                // Approve / Deny answer to a VCS Management request
     if (!cur) { relayIn('ADMIN', s, wm, jid, await botGet()); return; }   // a bot number writing normally (no menu chat open, not "help") is just a message for the owner -> alert + "reply?"
     if (['0', 'cancel', 'stop'].includes(low)) { if (cur.timer) clearTimeout(cur.timer); botState.delete(jid); return say('❎ Cancel ho gaya. Dobara shuru karne ke liye *help* bhejo.'); }
     cur.at = Date.now();
-    const cfg = await botGet(), bd = (cfg.bind || {})[num] || {}, acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
+    const cfg = await botGet(), bd = bindOf(s, cfg, num), acc = bd.acc || 'ADMIN', wantEmp = bd.emp || '';   // this number belongs to ONE account (+ one employee): it can only touch that data
     const again = () => undefined;                                     // wrong number in the menu: stay quiet   // wrong answer inside a step: stay quiet (no "samajh nahi aaya" reply), the question above is still open
     const stop = (e, pre) => { botState.delete(jid); return say('❌ ' + pre + botErr(e)); };
     if (cur.step === 'vcsFile') return botVcsFile(s, jid, cur, wm, low);
@@ -1486,7 +1497,8 @@ module.exports = function makeWhatsApp(o) {
     }
     if (cur.step === 'wstList' || cur.step === 'wstPick') {             // 📲 WhatsApp Status: 1) contact list  2) that contact's statuses  3) download
       if (acc !== 'ADMIN') { botState.delete(jid); return say('❌ Ye option sirf main admin ke number ke liye hai.'); }
-      if (low === 'r' || low === 'refresh' || (cur.step === 'wstPick' && (low === 'b' || low === 'back'))) { cur.step = 'wstList'; cur.c = null; return say(wstListText(cur, s)); }
+      if (low === 'r' || low === 'refresh') { await say('⏳ Phone se status mangwa raha hoon…'); await wstPull(s); cur.step = 'wstList'; cur.c = null; return say(wstListText(cur, s)); }
+      if (cur.step === 'wstPick' && (low === 'b' || low === 'back')) { cur.step = 'wstList'; cur.c = null; return say(wstListText(cur, s)); }
       if (cur.step === 'wstList') {
         const c = /^\d+$/.test(low) ? (cur.list || [])[Number(low) - 1] : null; if (!c) return again();
         cur.step = 'wstPick'; cur.c = c; return say(wstItemsText(c));
@@ -1510,6 +1522,7 @@ module.exports = function makeWhatsApp(o) {
       if (key === 'wst') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         cur.step = 'wstList';
+        await say('⏳ Phone se saare status mangwa raha hoon…'); await wstPull(s);
         return ask(cur, wstListText(cur, s));
       }
       if (key === 'apk') {
@@ -1770,7 +1783,8 @@ module.exports = function makeWhatsApp(o) {
   }
   function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
     try {
-      if (uid !== 'ADMIN' || !wm || !wm.key || !wm.message || !s.sock || s.status !== 'open') return;
+      if (!wm || !wm.key || !wm.message || !s.sock || s.status !== 'open') return;
+      if (uid !== 'ADMIN' && !wm.key.fromMe) return;                  // other users' own WhatsApp: only their "Message yourself" chat talks to the bot
       const jid = wm.key.remoteJid; if (!/@(s\.whatsapp\.net|lid)$/.test(jid || '')) return;
       let self = false;                                                // the linked number writing to itself ("Message yourself" chat) can use the menu too
       if (wm.key.fromMe) {
