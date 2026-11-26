@@ -1365,7 +1365,10 @@ module.exports = function makeWhatsApp(o) {
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
       const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
-      return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
+      const sent = await ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '  ·  ya neeche list me naam par tap karo_');
+      const seen = new Set(), labels = opts.map((x, i) => { let l = String(x[1]).replace(/\s*[(—].*$/, '').trim().slice(0, 60) || ('Option ' + (i + 1)); if (seen.has(l)) l = l + ' ' + (i + 1); seen.add(l); return l; });
+      await menuPoll(s, jid, c, labels, num, 0);
+      return sent;
     };
     { const cu = await botGet(), bu = bindOf(s, cu, num); if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
     if (BOT_HI.test(low)) return menu();
@@ -1845,7 +1848,7 @@ module.exports = function makeWhatsApp(o) {
         const k1 = kindText(wm.message), t1 = k1 && k1.kind === 'text' ? (k1.text || '') : '';
         if (t1 && s.botTxt && s.botTxt.has(t1)) return;                 // same words as a message the bot itself sent = its own echo
         if (tsOf(wm.messageTimestamp) < (s.openAt || 0) - 2000) return;   // sent before this connection opened (re-delivered after a restart / deploy) - never answer old ones
-        if (!(k1 && (k1.kind === 'voice' || k1.kind === 'file' || k1.kind === 'photo' || (k1.kind === 'text' && t1.length <= 300)))) return;   // short typed text, a voice note, or a file / photo (for the VCS upload steps)
+        if (!(k1 && (k1.kind === 'voice' || (k1.kind === 'text' && t1.length <= 300)))) return;   // only short typed text or a voice note
         if (!botState.has(jid) && !(k1.kind === 'voice' || /^help$/i.test(t1.trim()) || /^voice key\s+\S{20,}$/i.test(t1.trim()))) return;   // no menu open: only the word "help" starts it
       }
       if (Date.now() - tsOf(wm.messageTimestamp) > 120000) return;          // old message (history sync) - never answer those
