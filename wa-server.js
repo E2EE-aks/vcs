@@ -811,6 +811,15 @@ module.exports = function makeWhatsApp(o) {
     const n = botNorm({ on: c.on, nums: c.nums, bind: b });
     await withWb(() => { PROPS().setProperty('WA_BOT_CFG', JSON.stringify(n)); }); botCfg = n;
   }
+  async function autoBindOwn(uid, s) {                                // a user links their OWN WhatsApp in the website and that number sits in the list as "New user" -> tie it to that user's account now
+    try {
+      if (!uid || uid === 'ADMIN' || !s.number) return;
+      const c = await botGet(), num = botMatch('+' + digits(s.number), c.nums), b = num && (c.bind || {})[num];
+      if (!b || !b.unl) return;
+      let nm = ''; try { nm = await botRun(a => a.name || a.username || '', uid); } catch (e) { return; }
+      await unlBind(num, uid, nm);
+    } catch (e) { warn('WhatsApp auto link', e && e.message); }
+  }
   async function unlSendQr(s, to) {                                    // the ₹ joining-payment QR, as a picture in the same WhatsApp chat
     try {
       const price = globalThis.PAYG_PRICE_ || 1, img = fs.readFileSync(path.join(__dirname, 'pay-qr.png'));
@@ -1260,6 +1269,33 @@ module.exports = function makeWhatsApp(o) {
     return botStep(s, jid, words[v] || (/^(number )?\d+(\.\d+)?$/.test(v) ? v.replace('number ', '') : /^(cancel|done|haan|yes|nahi|no|next|prev|back|all)$/.test(v) ? v : text.replace(/(\d),(?=\d)/g, '$1')), num, null, { voice: true });
   }
 
+  /* ---------- tap menu: the menu is also sent as a WhatsApp poll - tap a name = same as typing its number (polls work on normal numbers; buttons do not) ---------- */
+  async function menuPoll(s, jid, c, labels, num, page) {
+    try {
+      const big = labels.length > 12, PS = 11, start = big ? page * PS : 0, end = big ? Math.min(labels.length, start + PS) : labels.length, values = [], map = [];
+      if (start >= labels.length) return;
+      for (let i = start; i < end; i++) { values.push(labels[i]); map.push(i); }
+      if (end < labels.length) { values.push('➡️ Aur options'); map.push(-(page + 2)); }
+      if (values.length < 2) return;
+      const r = await s.sock.sendMessage(jid, { poll: { name: '👇 Naam par tap karke chuno' + (big ? ' (' + (page + 1) + ')' : ''), values, selectableCount: 1 } });
+      if (!r || !r.key || !r.key.id) return;
+      s.polls = s.polls || new Map(); s.polls.set(r.key.id, { jid, c, num, labels, values, map, last: 0 });
+      if (s.polls.size > 40) s.polls.delete(s.polls.keys().next().value);
+    } catch (e) { warn('WhatsApp menu poll', e && e.message); }
+  }
+  async function pollVote(s, u) {                                       // a vote on one of our menu polls -> the same as typing that option's number
+    const p = s.polls && s.polls.get(u.key.id); if (!p) return;
+    const ups = u.update.pollUpdates || [], up = ups[ups.length - 1]; if (!up || !up.vote) return;
+    const ts = Number(up.senderTimestampMs && up.senderTimestampMs.toNumber ? up.senderTimestampMs.toNumber() : up.senderTimestampMs) || 0;
+    if (ts && ts <= p.last) return; p.last = ts;
+    const sel = (up.vote.selectedOptions || []).map(b => Buffer.from(b).toString('hex')); if (!sel.length) return;
+    const i = p.values.findIndex(v => crypto.createHash('sha256').update(v).digest('hex') === sel[0]); if (i < 0) return;
+    const cur = botState.get(p.jid); if (!cur || cur !== p.c) return;       // that menu is closed / replaced by a newer one
+    const idx = p.map[i];
+    if (idx < 0) return menuPoll(s, p.jid, p.c, p.labels, p.num, -idx - 1);
+    const prev = botQ.get(p.jid) || Promise.resolve();
+    botQ.set(p.jid, prev.then(() => botStep(s, p.jid, String(idx + 1), p.num, null)).catch(e => warn('WhatsApp bot', e && e.message)));
+  }
   /* ---------- option "WhatsApp Status download": contacts who put a status (last 24 h) -> pick a name -> pick / download its status in this chat ---------- */
   const wstAgo = at => { const m = Math.max(1, Math.round((Date.now() - at) / 60000)); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' ghante'; };
   const wstIcon = k => ({ photo: '📷', video: '🎬', gif: '🎞️', voice: '🎤', audio: '🎵', text: '📝' }[k] || '•');
@@ -1329,7 +1365,10 @@ module.exports = function makeWhatsApp(o) {
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
       const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
-      return ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
+      const sent = await ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '  ·  ya neeche list me naam par tap karo_');
+      const seen = new Set(), labels = opts.map((x, i) => { let l = String(x[1]).replace(/\s*[(—].*$/, '').trim().slice(0, 60) || ('Option ' + (i + 1)); if (seen.has(l)) l = l + ' ' + (i + 1); seen.add(l); return l; });
+      await menuPoll(s, jid, c, labels, num, 0);
+      return sent;
     };
     { const cu = await botGet(), bu = bindOf(s, cu, num); if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
     if (BOT_HI.test(low)) return menu();
@@ -1799,6 +1838,7 @@ module.exports = function makeWhatsApp(o) {
   async function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
     try {
       if (!wm || !wm.key || !wm.message || !s.sock || s.status !== 'open') return;
+      if (unwrap(wm.message).pollUpdateMessage) return;                // a vote on a poll is handled by pollVote, never as a chat message
       if (uid !== 'ADMIN' && !wm.key.fromMe) return;                  // other users' own WhatsApp: only their "Message yourself" chat talks to the bot
       const jid = wm.key.remoteJid; if (!/@(s\.whatsapp\.net|lid)$/.test(jid || '')) return;
       let self = false;                                                // the linked number writing to itself ("Message yourself" chat) can use the menu too
@@ -1864,7 +1904,7 @@ module.exports = function makeWhatsApp(o) {
         clearTimeout(wd); s.err = ''; scheduleBackup(uid, 8000);
         setTimeout(() => { if (s.gen === gen && s.status === 'open' && s.contacts.size < 8) syncContacts(s); }, 20000);   // few contacts so far -> ask the phone for them
         s.status = 'open'; s.qr = ''; s.tries = 0;
-        s.openAt = Date.now(); const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
+        s.openAt = Date.now(); const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || ''); autoBindOwn(uid, s);
         setTimeout(() => { if (s.gen === gen && s.status === 'open') { resolveLids(s).then(() => saveSoon(uid, s)); } }, 6000);
         /* people who do not have your number saved see your WhatsApp *profile name* — keep it "VCS" (change with env WA_PROFILE_NAME; set it to "-" to leave the name alone) */
         if (uid === 'ADMIN') setTimeout(() => { if (s.gen === gen && s.status === 'open') depResume(s).catch(e => warn('WhatsApp deploy status', e && e.message)); }, 8000);   // finish the "upload -> live" message after a deploy
@@ -1926,6 +1966,7 @@ module.exports = function makeWhatsApp(o) {
     const RANK = { error: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
     const bump = (m, st2) => { if (m && m.out && st2 && (RANK[st2] || 0) >= (RANK[m.status] || 0)) m.status = st2; };
     sock.ev.on('messages.update', ups => ups.forEach(u => {
+      if (u.update && u.update.pollUpdates && u.key && s.polls && s.polls.has(u.key.id)) { pollVote(s, u).catch(e => warn('WhatsApp poll vote', e && e.message)); return; }
       if (u.update && u.update.message && u.key) {                                   // the sender edited a message
         const em = u.update.message.editedMessage && u.update.message.editedMessage.message, ed = editInfo(u.update.message);
         if (ed) { applyEdit(uid, s, ed.key, u.key.remoteJid, ed.msg, ed.ts); return; }
