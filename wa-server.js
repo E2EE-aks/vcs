@@ -1749,11 +1749,17 @@ module.exports = function makeWhatsApp(o) {
   }
   function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
     try {
-      if (uid !== 'ADMIN' || !wm || !wm.key || wm.key.fromMe || !wm.message || !s.sock || s.status !== 'open') return;
+      if (uid !== 'ADMIN' || !wm || !wm.key || !wm.message || !s.sock || s.status !== 'open') return;
       const jid = wm.key.remoteJid; if (!/@(s\.whatsapp\.net|lid)$/.test(jid || '')) return;
+      let self = false;                                                // the linked number writing to itself ("Message yourself" chat) can use the menu too
+      if (wm.key.fromMe) {
+        const u = s.sock.user || {}, bj = bareJid(jid);
+        self = bj === bareJid(u.id) || (u.lid && bj === bareJid(u.lid)) || (!!s.number && digits(pnOf(s, jid)) === digits(s.number));
+        if (!self || (s.botSent && s.botSent.has(wm.key.id))) return;   // other people's chats / our own replies never trigger the bot
+      }
       if (Date.now() - tsOf(wm.messageTimestamp) > 120000) return;          // old message (history sync) - never answer those
       botGet().then(c => {
-        const num = c.on && c.nums.length ? botMatch(pnOf(s, jid), c.nums) : ''; if (!num) { const k0 = kindText(wm.message); if (k0 && !botDup(wm, k0.kind === 'text' ? (k0.text || '') : '#' + String(wm.key.id || ''))) relayIn(uid, s, wm, jid, c); return; }
+        const num = !c.on ? '' : self ? (botMatch(pnOf(s, jid), c.nums) || digits(s.number)) : (c.nums.length ? botMatch(pnOf(s, jid), c.nums) : ''); if (!num) { if (self) return; const k0 = kindText(wm.message); if (k0 && !botDup(wm, k0.kind === 'text' ? (k0.text || '') : '#' + String(wm.key.id || ''))) relayIn(uid, s, wm, jid, c); return; }
         const k = kindText(wm.message), text = k && k.kind === 'text' ? (k.text || '') : '', voice = !!(k && k.kind === 'voice');
         if (botDup(wm, text || (k && k.kind !== 'text' ? '#' + String(wm.key.id || '') : ''))) return;                                   // the same message again -> no second answer
         const prev = botQ.get(jid) || Promise.resolve();                // one message at a time per chat
@@ -1789,6 +1795,8 @@ module.exports = function makeWhatsApp(o) {
       connectTimeoutMs: 45000, defaultQueryTimeoutMs: 60000, keepAliveIntervalMs: 25000,
       getMessage: async key => { const m = key && s.sent && s.sent.get(key.id); return m || undefined; } }, useVer ? { version } : {}));      // WhatsApp asks "send this again" when a phone could not open a message: answer it from what we sent
     s.sock = sock;
+    { const send0 = sock.sendMessage.bind(sock); s.botSent = new Set();   // remember every message WE send, so the bot never answers its own replies in the "Message yourself" chat
+      sock.sendMessage = async (...a) => { const r = await send0(...a); try { const id = r && r.key && r.key.id; if (id) { s.botSent.add(id); if (s.botSent.size > 400) s.botSent.delete(s.botSent.values().next().value); } } catch (e) {} return r; }; }
     { s.sent = s.sent || new Map(); const raw = sock.sendMessage.bind(sock);
       sock.sendMessage = async function () { const r = await raw.apply(null, arguments); try { if (r && r.key && r.key.id && r.message) { s.sent.set(r.key.id, r.message); if (s.sent.size > 800) s.sent.delete(s.sent.keys().next().value); } } catch (e) {} return r; }; }
     const wd = setTimeout(() => { if (s.gen === gen && s.status === 'starting') { s.err = 'WhatsApp did not answer in time. Tap “Show QR code” to try again.'; try { sock.end(undefined); } catch (e) {} } }, 30000);   // no QR in 30 s -> give up with a message
