@@ -1355,6 +1355,28 @@ function makeApp(store, env) {
     }
     return { ok: true, cfg: await vwCfg(), to: await vwTo(), connected: WA.isOpen('ADMIN') };
   }
+  // ---------- location alert: the phone reached Shastri Nagar metro -> WhatsApp message to the alert number ----------
+  const METRO = { name: 'Shastri Nagar Metro Station', lat: 28.6701, lng: 77.1818, radius: 400 };
+  let metroAt = 0;
+  async function metroRoute(r) {
+    const uid = globalThis.checkToken_(r.token); if (!uid) globalThis.fail_('Session expired. Please log in again.', 'AUTH');
+    if (uid !== 'ADMIN') globalThis.fail_('Only the main admin can use this.', 'PERM');
+    const lat = Number(r.lat), lng = Number(r.lng), k = Math.PI / 180;
+    const dist = Math.round(6371000 * Math.hypot((lat - METRO.lat) * k, (lng - METRO.lng) * k * Math.cos(METRO.lat * k)));
+    if (!(dist <= METRO.radius + 50)) globalThis.fail_('Location alert area se bahar hai.', 'GEO');
+    if (Date.now() - metroAt < 30 * 60000) return { ok: true, repeat: true };
+    if (!WA.isOpen('ADMIN')) globalThis.fail_('WhatsApp connected nahi hai.', 'VCSWA');
+    const to = await vwTo(); if (!to) globalThis.fail_('Alert number set nahi hai.', 'VCSWA');
+    const n = attNow();
+    await WA.sendText('ADMIN', to, '📍 *' + METRO.name + ' pahunch gaye*\n📏 ~' + dist + ' m\n📅 ' + n.date + '  🕒 ' + n.hm + ' IST\nhttps://maps.google.com/?q=' + lat + ',' + lng);
+    metroAt = Date.now();
+    return { ok: true, sent: true };
+  }
+  const fastMetro = body => {
+    let r; try { r = JSON.parse(body); } catch (e) { return null; }
+    if (!r || r.action !== 'geoAlert') return null;
+    return Promise.resolve().then(() => metroRoute(r)).catch(errOut);
+  };
   const fastVw = body => {
     let r; try { r = JSON.parse(body); } catch (e) { return null; }
     if (!r || !VW_ACTIONS.has(r.action)) return null;
@@ -1818,7 +1840,7 @@ function makeApp(store, env) {
   };
   const handle0 = body => {
     const tr = live.begin(body), fin = r => { live.end(tr, r); return r; }, crash = e => { live.end(tr, { ok: false, code: 'CRASH', error: e && e.message }, true); throw e; };
-    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastTools(body) || fastStock(body) || fastVw(body) || fastRtc(body) || fastTr(body) || fastRingtone(body));
+    const fast = live.within(tr, () => fastExp(body) || fastCall(body) || fastLive(body) || fastMail(body) || fastTg(body) || fastWa(body) || fastYt(body) || fastPush(body) || fastSites(body) || fastTools(body) || fastStock(body) || fastVw(body) || fastMetro(body) || fastRtc(body) || fastTr(body) || fastRingtone(body));
     if (fast) { live.started(tr); return fast.then(fin, crash); }                         // fast lane: never waits behind sheet saves
     const job = () => live.within(tr, () => { live.started(tr); return run(body); });
     return (chain = chain.then(job, job)).then(fin, crash);

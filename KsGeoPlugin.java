@@ -102,6 +102,55 @@ public class KsGeoPlugin extends Plugin {
     return a;
   }
 
+  /* ----- location alert: WhatsApp message on reaching this spot (separate from attendance) ----- */
+  static final String ACT_METRO = "ks.geo.METRO";
+  static final double METRO_LAT = 28.6701, METRO_LNG = 77.1818;      // Shastri Nagar metro station (Delhi, Red Line)
+  static final float METRO_RADIUS = 400f;
+
+  static PendingIntent metroIntent(Context c) {
+    Intent i = new Intent(c, GeoReceiver.class).setAction(ACT_METRO);
+    return PendingIntent.getBroadcast(c, 7350, i, flags(true));
+  }
+
+  static JSONObject post(String api, JSONObject body) throws Exception {
+    HttpURLConnection h = (HttpURLConnection) new URL(api).openConnection();
+    h.setRequestMethod("POST");
+    h.setDoOutput(true);
+    h.setConnectTimeout(20000);
+    h.setReadTimeout(25000);
+    h.setRequestProperty("Content-Type", "text/plain;charset=utf-8");
+    OutputStream os = h.getOutputStream();
+    os.write(body.toString().getBytes("UTF-8"));
+    os.close();
+    InputStream is = h.getResponseCode() >= 400 ? h.getErrorStream() : h.getInputStream();
+    String txt = "";
+    if (is != null) {
+      Scanner sc = new Scanner(is, "UTF-8").useDelimiter("\\A");
+      txt = sc.hasNext() ? sc.next() : "";
+      sc.close();
+    }
+    return new JSONObject(txt);
+  }
+
+  /* one alert per visit: sent on coming in, ready again after going well away */
+  static void metroCheck(Context c, SharedPreferences sp, Location l) {
+    try {
+      if (l == null || l.getAccuracy() > 500f) return;
+      float[] d = new float[1];
+      Location.distanceBetween(l.getLatitude(), l.getLongitude(), METRO_LAT, METRO_LNG, d);
+      if (d[0] > METRO_RADIUS + 300f) { sp.edit().putBoolean("metroIn", false).apply(); return; }
+      if (d[0] > METRO_RADIUS || sp.getBoolean("metroIn", false)) return;
+      String api = sp.getString("api", ""), token = sp.getString("token", "");
+      if (api.length() == 0 || token.length() == 0) return;
+      JSONObject body = new JSONObject();
+      body.put("action", "geoAlert");
+      body.put("token", token);
+      body.put("lat", l.getLatitude());
+      body.put("lng", l.getLongitude());
+      if (post(api, body).optBoolean("ok")) sp.edit().putBoolean("metroIn", true).apply();
+    } catch (Exception e) {}
+  }
+
   static PendingIntent checkIntent(Context c) {
     Intent i = new Intent(c, GeoReceiver.class).setAction(ACT_CHECK);
     return PendingIntent.getBroadcast(c, 7302, i, flags(false));
@@ -111,6 +160,7 @@ public class KsGeoPlugin extends Plugin {
     try {
       LocationManager lm = (LocationManager) c.getSystemService(Context.LOCATION_SERVICE);
       for (int i = 0; i < 9; i++) lm.removeProximityAlert(fenceIntent(c, i));
+      lm.removeProximityAlert(metroIntent(c));
     } catch (Exception e) {}
     try {
       AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
@@ -124,6 +174,7 @@ public class KsGeoPlugin extends Plugin {
     if (!sp.getBoolean("on", false) || !hasLoc(c)) return;
     try {
       LocationManager lm = (LocationManager) c.getSystemService(Context.LOCATION_SERVICE);
+      lm.addProximityAlert(METRO_LAT, METRO_LNG, METRO_RADIUS, -1, metroIntent(c));
       JSONArray pl = places(sp);
       for (int i = 0; i < pl.length() && i < 9; i++) {
         JSONObject o = pl.getJSONObject(i);
@@ -271,18 +322,20 @@ public class KsGeoPlugin extends Plugin {
       final SharedPreferences sp = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
       if (!sp.getBoolean("on", false)) return;
       final boolean fence = ACT_FENCE.equals(in.getAction());
-      if (!fence) scheduleCheck(c, 10 * 60 * 1000L);                // keep the 10-minute look going (also when today is already done: it just returns below)
-      if (today().equals(sp.getString("done", ""))) return;
+      final boolean metro = ACT_METRO.equals(in.getAction());
+      if (!fence && !metro) scheduleCheck(c, 10 * 60 * 1000L);       // keep the 10-minute look going
       if (fence && !in.getBooleanExtra(LocationManager.KEY_PROXIMITY_ENTERING, true)) return;   // leaving the circle: nothing to do
       final PendingResult pr = goAsync();
       new Thread(new Runnable() {
         @Override
         public void run() {
           try {
+            Location l = freshFix(c);
+            metroCheck(c, sp, l);
+            if (metro || today().equals(sp.getString("done", ""))) return;   // attendance part only below
             double lat = Double.longBitsToDouble(sp.getLong("lat", 0));
             double lng = Double.longBitsToDouble(sp.getLong("lng", 0));
             float acc = 0f;
-            Location l = freshFix(c);
             if (l != null) { lat = l.getLatitude(); lng = l.getLongitude(); acc = l.getAccuracy(); }
             else if (!fence) return;                       // check without any fix: wait for the next one
             if (l != null) {                               // clearly far from every saved place: no need to bother the server
