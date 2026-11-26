@@ -1488,9 +1488,7 @@ module.exports = function makeWhatsApp(o) {
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
       if (!opts.length) { botState.delete(jid); return say(hi + 'Is account ke liye koi option on nahi hai. Admin se permission lo.'); }
       const E = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'], c = { step: 'menu', at: Date.now(), opts: opts.map(x => x[0]) }; botState.set(jid, c);
-      const sent = await ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '  ·  ya neeche list me naam par tap karo_');
-      const seen = new Set(), labels = opts.map((x, i) => { let l = String(x[1]).replace(/\s*[(—].*$/, '').trim().slice(0, 60) || ('Option ' + (i + 1)); if (seen.has(l)) l = l + ' ' + (i + 1); seen.add(l); return l; });
-      await menuPoll(s, jid, c, labels, num, 0);
+      const sent = await ask(c, hi + '*Kya record karna hai?*\n\n' + opts.map((x, i) => (E[i] || (i + 1) + '.') + '  ' + x[1]).join('\n') + '\n\n_Number bhejo: ' + opts.map((x, i) => i + 1).join(', ') + '_');
       return sent;
     };
     { const cu = await botGet(), bu = bindOf(s, cu, num); if (bu.unl) return unlStep(s, jid, low, t, num, cur, say); }   // number added as "New user": only Login / Create account
