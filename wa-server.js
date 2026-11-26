@@ -1218,7 +1218,7 @@ module.exports = function makeWhatsApp(o) {
     }
     throw new Error(err);
   }
-  const VOX_MENU = [['edt', /\bedit\b/], ['att', /\b(attendance|haziri|hazri|hajri)\b/], ['bill', /\b(bill|balance|statement)\b/], ['exp', /\b(expense|expence|kharcha|kharch|income)\b/], ['rack', /\brack\b/], ['wrk', /\b(work|kaam)\b/], ['dl', /\byou ?tube\b/], ['ig', /\b(insta|instagram|reel)\b/], ['req', /\b(pending|request|requests)\b/], ['wst', /\b(whatsapp|wa) status\b|\bstatus (download|save|saver)\b|\bstatus saver\b/], ['tst', /\bstatus\b/], ['apk', /\bapk\b/], ['ai', /\b(ai|claude)\b/]];
+  const VOX_MENU = [['edt', /\bedit\b/], ['att', /\b(attendance|haziri|hazri|hajri)\b/], ['bill', /\b(bill|balance|statement)\b/], ['exp', /\b(expense|expence|kharcha|kharch|income)\b/], ['rack', /\brack\b/], ['trn', /\b(train|pnr|rail|railway)\b/], ['wrk', /\b(work|kaam)\b/], ['dl', /\byou ?tube\b/], ['ig', /\b(insta|instagram|reel)\b/], ['req', /\b(pending|request|requests)\b/], ['wst', /\b(whatsapp|wa) status\b|\bstatus (download|save|saver)\b|\bstatus saver\b/], ['tst', /\bstatus\b/], ['apk', /\bapk\b/], ['ai', /\b(ai|claude)\b/]];
   const voxNorm = t => String(t || '').toLowerCase().replace(/(\d),(?=\d)/g, '$1').replace(/[^\p{L}\p{N}.]+/gu, ' ').replace(/\.(?!\d)/g, ' ').replace(/\s+/g, ' ').trim();
   function voxCommand(text) {                                           // one sentence that does the whole job -> { key, next } or null
     const v = voxNorm(text);
@@ -1334,6 +1334,128 @@ module.exports = function makeWhatsApp(o) {
     return '';
   }
 
+  /* ---------- 🚆 Train tracking: PNR (10 digit) or train number (5 digit) -> where the train is now + km left ----------
+     Data comes from the IRCTC API on RapidAPI (free plan is enough). Key: env RAPIDAPI_KEY, or the admin pastes it once in the chat (saved in script properties RAIL_KEY).
+     Host can be changed with env RAIL_API_HOST (default irctc1.p.rapidapi.com). */
+  const RAIL_KEY = { get: async () => env.RAPIDAPI_KEY || await withWb(() => PROPS().getProperty('RAIL_KEY') || ''), set: v => withWb(() => { PROPS().setProperty('RAIL_KEY', v); }) };
+  const RAIL_HOST = String(env.RAIL_API_HOST || 'irctc1.p.rapidapi.com').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const TRN_ASK = '🚆 *Train Tracking*\n\n*PNR* (10 number) bhejo — train kahan hai aur kitne km baaki hain bata dunga.\nYa seedha *train number* (5 number) bhejo, jaise _12951_.\n\n_(0 = cancel)_';
+  const TRN_MORE = '\n\n_R = dobara refresh · naya PNR / train number bhejo · 0 = band_';
+  const TRN_ENDED = /(reached|arrived (at|in)) (its |the )?destination|journey (ended|completed)|terminated|train has (arrived|reached)/i, TRN_NOTSTART = /not (yet )?started|yet to (start|depart)|will (start|depart)/i;
+  const trnPick = (o, ...k) => { for (const x of k) if (o && o[x] != null && o[x] !== '') return o[x]; return null; };
+  const trnNum = v => { if (v == null || v === '') return null; const n = parseFloat(String(v).replace(/[^\d.\-]/g, '')); return isFinite(n) ? n : null; };
+  const trnKm = n => Math.round(n).toLocaleString('en-IN') + ' km';
+  async function railGet(path, params) {
+    const key = await RAIL_KEY.get(); if (!key) { const e = new Error('NOKEY'); e.nokey = true; throw e; }
+    const r = await fetch('https://' + RAIL_HOST + path + '?' + new URLSearchParams(params), { headers: { 'x-rapidapi-key': key, 'x-rapidapi-host': RAIL_HOST }, signal: AbortSignal.timeout(25000) });
+    let j = null; try { j = await r.json(); } catch (e) { j = null; }
+    const bad = m => { const e = new Error(m); e.fatal = true; return e; };
+    if (r.status === 401 || r.status === 403) throw bad('API key galat hai ya RapidAPI par IRCTC API subscribe nahi hai (' + r.status + ')');
+    if (r.status === 429) throw bad('API ki limit khatam ho gayi (429) — thodi der baad ya kal try karo');
+    if (!r.ok) throw new Error((j && (j.message || j.error)) ? String(j.message || j.error).slice(0, 120) : 'Railway server ne jawab nahi diya (' + r.status + ')');
+    if (!j) throw new Error('Railway server ka jawab samajh nahi aaya');
+    if (j.status === false || j.success === false) throw new Error(String(j.message || 'Data nahi mila').slice(0, 120));
+    return j.data !== undefined ? j.data : j;
+  }
+  function trnDate(v) {                                                 // "2026-11-26" / "26-11-2026" / "Nov 26, 2026" / "26 Nov 2026" -> UTC day number (null if unknown)
+    const s = String(v || '').trim(), MN = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']; let m, y, mo, d;
+    if ((m = /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/.exec(s))) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+    else if ((m = /^(\d{1,2})[-\/ ](\d{1,2})[-\/ ](\d{4})/.exec(s))) { d = +m[1]; mo = +m[2]; y = +m[3]; }
+    else if ((m = /^(\d{1,2})[-\/ ]([A-Za-z]{3})[a-z]*[-\/ ,]+(\d{4})/.exec(s))) { d = +m[1]; mo = MN.indexOf(m[2].toLowerCase()) + 1; y = +m[3]; }
+    else if ((m = /^([A-Za-z]{3})[a-z]*[-\/ ]+(\d{1,2})[-\/ ,]+(\d{4})/.exec(s))) { mo = MN.indexOf(m[1].toLowerCase()) + 1; d = +m[2]; y = +m[3]; }
+    else return null;
+    return mo >= 1 ? Math.round(Date.UTC(y, mo - 1, d) / 86400000) : null;
+  }
+  function trnDays(doj) {                                               // which "startDay" (0 = today, 1 = yesterday, 2 = 2 days ago) to ask for, best guess first; { early: true } = journey not started yet
+    const j = trnDate(doj), t = botToday(), td = Math.round(Date.UTC(t.y, t.m - 1, t.d) / 86400000);
+    if (j == null) return { days: [0, 1, 2] };
+    const diff = td - j; if (diff < 0) return { early: true, diff: -diff };
+    const first = Math.min(diff, 2), days = [first].concat([0, 1, 2].filter(x => x !== first).sort((a, b) => Math.abs(a - first) - Math.abs(b - first)));
+    return { days: diff > 2 ? null : days, old: diff > 2 };
+  }
+  async function trnLive(no, days) {                                    // tries the candidate days; prefers the one where the train is really running
+    let first = null, last = null;
+    for (const sd of days) {
+      try {
+        const d = await railGet('/api/v1/liveTrainStatus', { trainNo: no, startDay: sd }); if (!d || typeof d !== 'object') continue;
+        const txt = JSON.stringify([d.status, d.current_location_info, d.message, d.train_status_message]), r = { d, sd, ended: TRN_ENDED.test(txt), ns: TRN_NOTSTART.test(txt) };
+        if (!first) first = r; if (!r.ended && !r.ns) return r;
+      } catch (e) { if (e.fatal || e.nokey) throw e; last = e; }
+    }
+    if (first) return first; throw last || new Error('Is train ka live status abhi nahi mila');
+  }
+  async function trnPnr(pnr) {                                          // PNR -> { no, name, doj, board, to, toCode, pax[] }
+    const d = await railGet('/api/v3/getPNRStatus', { pnrNumber: pnr }); if (!d || typeof d !== 'object') throw new Error('PNR ka data nahi mila');
+    const no = String(trnPick(d, 'TrainNo', 'train_number', 'trainNo', 'train_no') || '').replace(/\D/g, ''); if (!no) throw new Error('PNR galat hai ya abhi system me nahi hai');
+    const pax = (trnPick(d, 'PassengerStatus', 'passenger_status', 'passengers') || []).slice(0, 6).map((p, i) => {
+      const st = trnPick(p, 'CurrentStatus', 'current_status', 'currentStatus', 'BookingStatus', 'booking_status') || '', co = trnPick(p, 'Coach', 'CurrentCoachId', 'coach') || '', br = trnPick(p, 'Berth', 'CurrentBerthNo', 'berth') || '';
+      return 'P' + (i + 1) + ': ' + st + (co || br ? ' · ' + [co, br].filter(Boolean).join(' ') : '');
+    });
+    return { pnr, no, name: trnPick(d, 'TrainName', 'train_name', 'trainName') || '', doj: trnPick(d, 'Doj', 'doj', 'DateOfJourney', 'date_of_journey', 'SourceDoj') || '',
+      board: trnPick(d, 'BoardingStationName', 'boarding_station_name', 'BoardingPoint', 'boarding_point') || '', boardCode: trnPick(d, 'BoardingPoint', 'boarding_point') || '',
+      to: trnPick(d, 'ReservationUptoName', 'reservation_upto_name', 'DestinationName', 'To', 'destination_station_name') || '', toCode: trnPick(d, 'ReservationUpto', 'reservation_upto', 'To', 'destination_station') || '',
+      chart: trnPick(d, 'ChartPrepared', 'chart_prepared'), pax };
+  }
+  const trnStn = d => [].concat(d.previous_stations || [], d.upcoming_stations || [], d.stations || []).filter(x => x && typeof x === 'object');
+  const trnSame = (x, nm, cd) => { const c = String(trnPick(x, 'station_code', 'stationCode', 'code') || '').toUpperCase(), n = String(trnPick(x, 'station_name', 'stationName', 'name') || '').toLowerCase().replace(/[^a-z]/g, '');
+    const wn = String(nm || '').toLowerCase().replace(/[^a-z]/g, ''); return (cd && c && c === String(cd).toUpperCase()) || (wn && n && (n === wn || n.startsWith(wn) || wn.startsWith(n))); };
+  function trnDelay(v) { if (v == null || v === '') return ''; const n = trnNum(v); if (typeof v === 'number' || /^-?\d+$/.test(String(v).trim())) return n > 0 ? '⏱️ *' + n + ' min late*' : '✅ *Time par*'; return '⏱️ ' + String(v).slice(0, 40); }
+  function trnText(r, info) {
+    const d = r.d, g = (...k) => trnPick(d, ...k), st = trnStn(d);
+    const no = g('train_number', 'train_no', 'trainNo') || info.no, nm = g('train_name', 'trainName') || info.name || '';
+    let o = '🚆 *' + no + (nm ? ' ' + nm : '') + '*\n';
+    if (info.pnr) o += '🎫 PNR ' + info.pnr + (info.doj ? ' · ' + info.doj : '') + '\n' + (info.board || info.to ? '🧭 ' + (info.board || '—') + ' ➜ ' + (info.to || '—') + '\n' : '') + (info.pax && info.pax.length ? info.pax.join('\n') + '\n' : '');
+    o += '\n';
+    const msgs = Array.isArray(d.current_location_info) ? d.current_location_info.map(x => typeof x === 'string' ? x : trnPick(x, 'readable_message', 'message', 'hint', 'label')).filter(Boolean) : [];
+    const cn = g('current_station_name', 'currentStationName', 'current_station'), curKm = trnNum(g('distance_from_source', 'distance_from_source_km', 'current_distance'));
+    let where = msgs[0] || (typeof d.status === 'string' ? d.status : '') || (cn ? String(cn) + ' ke paas' : '');
+    if (r.ns) o += '⏳ *Train abhi chali nahi* (is date par start nahi hui)\n' + (where ? '_' + String(where).slice(0, 160) + '_\n' : '');
+    else if (r.ended) o += '🏁 *Train apne last station par pahunch chuki hai*\n' + (where ? '_' + String(where).slice(0, 160) + '_\n' : '');
+    else o += '📍 *Abhi yahan hai:*\n' + (where ? String(where).slice(0, 200) : 'Location abhi nahi mili') + '\n' + (cn && !String(where).includes(String(cn)) ? '🚉 Nazdeeki station: *' + cn + '*\n' : '');
+    const dl = trnDelay(g('delay', 'delay_minutes', 'late_by')); if (dl && !r.ns) o += dl + '\n';
+    const tot = trnNum(g('total_distance', 'totalDistance')); let destKm = null, destName = '';
+    if (info.to || info.toCode) { const hit = st.find(x => trnSame(x, info.to, info.toCode)); if (hit) { destKm = trnNum(trnPick(hit, 'distance_from_source', 'distance', 'dist')); destName = info.to || String(trnPick(hit, 'station_name', 'name') || ''); } }
+    if (curKm != null && !r.ns) {
+      o += '🛣️ Chal chuki: *' + trnKm(curKm) + '*' + (tot ? ' (total ' + trnKm(tot) + ')' : '') + '\n';
+      if (destKm != null) o += '🏁 *' + destName + ' tak ' + trnKm(Math.max(0, destKm - curKm)) + ' baaki*\n';
+      if (tot != null && (destKm == null || Math.abs(tot - destKm) > 1)) o += (destKm == null ? '🏁 *Train ke last station tak ' : '➡️ Train ke last station tak ') + trnKm(Math.max(0, tot - curKm)) + ' baaki' + (destKm == null ? '*' : '') + '\n';
+    } else if (!r.ns) o += '🛣️ _Kitne km baaki hain — ye data abhi API se nahi mila._\n';
+    const up = (d.upcoming_stations || []).filter(x => x && typeof x === 'object')[0];
+    if (up && !r.ended) { const e = trnPick(up, 'eta', 'arrival', 'sta'), dd = trnPick(up, 'delay', 'arrival_delay'); o += '⏭️ Agla station: *' + (trnPick(up, 'station_name', 'name') || '—') + '*' + (e ? ' · ETA ' + e : '') + (dd != null && trnNum(dd) > 0 ? ' (+' + trnNum(dd) + ' min)' : '') + '\n'; }
+    const upd = g('updated_time', 'update_time', 'last_updated', 'time_stamp'); if (upd) o += '🕒 _Update: ' + String(upd).slice(0, 40) + '_\n';
+    return o.trim() + TRN_MORE;
+  }
+  async function trnStep(cur, t, low, acc, say, ask) {                  // every step of the 🚆 Train chat
+    const keyHelp = '🔑 *Train API key (sirf ek baar)*\n\n1. rapidapi.com par free account banao\n2. "IRCTC" API (irctc1) search karo → *Subscribe* → free *Basic* plan\n3. Wahan ka *X-RapidAPI-Key* copy karke yahan paste karo\n\n_0 = cancel_';
+    if (cur.step === 'trnKey') {
+      if (acc !== 'ADMIN') { botState.delete(cur.jid); return say('❌ Ye sirf admin ke liye hai.'); }
+      const k = t.replace(/\s+/g, ''); if (k.length < 20) return say(cur.prompt);
+      try { await RAIL_KEY.set(k); } catch (e) { return say('❌ Key save nahi hui: ' + botErr(e)); }
+      cur.step = 'trnPnr';
+      return ask(cur, '✅ *Key save ho gayi.*\n_Safety ke liye key wala message chat se delete kar do._\n\n' + TRN_ASK);
+    }
+    // step 'trnPnr'
+    const raw = t.replace(/[\s-]/g, ''), refresh = low === 'r' || low === 'refresh';
+    if (low === 'key' && acc === 'ADMIN') { cur.step = 'trnKey'; return ask(cur, keyHelp); }
+    let info = null, no = '';
+    if (refresh && cur.trn) { info = cur.trn.info; no = cur.trn.no; }
+    else if (/^\d{10}$/.test(raw)) { info = { pnr: raw }; }
+    else if (/^\d{5}$/.test(raw)) { no = raw; info = { no: raw }; }
+    else return say(cur.prompt);
+    try {
+      await say('⏳ *' + (info.pnr && !no ? 'PNR check' : 'Train ki location') + '* ho rahi hai…');
+      if (info.pnr && !info.no) { info = Object.assign({}, await trnPnr(info.pnr)); no = info.no; }
+      const dd = info.doj ? trnDays(info.doj) : { days: [0, 1, 2] };
+      if (dd.early) { cur.trn = { info, no }; return say('🎫 PNR ' + info.pnr + ' · 🚆 *' + no + ' ' + info.name + '*\n🧭 ' + info.board + ' ➜ ' + info.to + '\n\n⏳ Journey date *' + info.doj + '* abhi aayi nahi (' + dd.diff + ' din baad) — train abhi chali nahi.\n' + (info.pax.length ? '\n' + info.pax.join('\n') + '\n' : '') + TRN_MORE); }
+      if (dd.old) return say('ℹ️ Journey date *' + info.doj + '* purani hai — live status sirf pichle 2-3 din ka milta hai.' + TRN_MORE);
+      const r = await trnLive(no, dd.days); cur.trn = { info, no };
+      return say(trnText(r, info));
+    } catch (e) {
+      if (e.nokey) { if (acc !== 'ADMIN') return say('❌ Train tracking abhi set nahi hai. Admin se kaho pehle setup kare.'); cur.step = 'trnKey'; return ask(cur, keyHelp); }
+      return say('❌ ' + botErr(e) + TRN_MORE);
+    }
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm, vo = {}) {              // vo.voice = came from a voice note, vo.quiet = do not send the in-between question
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -1356,6 +1478,7 @@ module.exports = function makeWhatsApp(o) {
       if (acc0 === 'ADMIN') opts.push(['req', 'Pending requests (delete / payment) — approve / deny']);
       if (acc0 === 'ADMIN' && globalThis.WA_TOOLS_) opts.push(['tst', 'Status (Server, Sheets, Translation, Drive, WhatsApp, GitHub — kaun chal raha hai)']);
       if (acc0 === 'ADMIN' && globalThis.WA_APK_) opts.push(['apk', 'APK (Android app banao / download karo)']);
+      opts.push(['trn', 'Train Tracking (PNR / train number — abhi kahan hai, kitne km baaki)']);
       if (globalThis.WA_TOOLS_) opts.push(['wrk', 'Work (kaam ka record — add / edit / done / delete)']);
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
       if (DL) opts.push(['ig', 'Instagram Reel download']);               // every bot user; only the cookies step (3) is admin-only          // every bot user; only the cookies step (3) is admin-only
@@ -1472,6 +1595,7 @@ module.exports = function makeWhatsApp(o) {
       }
       return;
     }
+    if (cur.step === 'trnPnr' || cur.step === 'trnKey') { cur.jid = jid; return trnStep(cur, t, low, acc, say, ask); }   // 🚆 Train Tracking
     if (cur.step === 'aiTok') {                                          // admin: paste the Puter token once
       if (acc !== 'ADMIN') { botState.delete(jid); return say('❌ Ye sirf admin ke liye hai.'); }
       const tok = t.replace(/^bearer\s+/i, '').replace(/\s+/g, '');
@@ -1568,6 +1692,17 @@ module.exports = function makeWhatsApp(o) {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         cur.step = 'apkMenu';
         return ask(cur, '📱 *APK — Android app*\n\nKya chahiye?\n\n1️⃣  Naya APK banao\n2️⃣  Latest APK download\n3️⃣  Recent builds\n\n_Number bhejo: 1, 2 ya 3  ·  0 = cancel_');
+      }
+      if (key === 'trn') {                                              // every bot user: PNR / train number -> live location + km left
+        let hk = ''; try { hk = await RAIL_KEY.get(); } catch (e) { return stop(e, ''); }
+        cur.jid = jid;
+        if (!hk) {
+          if (acc !== 'ADMIN') { botState.delete(jid); return say('❌ Train tracking abhi set nahi hai. Admin se kaho pehle setup kare.'); }
+          cur.step = 'trnKey';
+          return ask(cur, '🔑 *Train API key (sirf ek baar)*\n\n1. rapidapi.com par free account banao\n2. "IRCTC" API (irctc1) search karo → *Subscribe* → free *Basic* plan\n3. Wahan ka *X-RapidAPI-Key* copy karke yahan paste karo\n\n_0 = cancel_');
+        }
+        cur.step = 'trnPnr';
+        return ask(cur, TRN_ASK);
       }
       if (key === 'wrk') {
         try { cur.jid = jid; return say(wrkList(cur, await globalThis.WA_TOOLS_.workGet(acc))).then(() => { cur.prompt = 'Number bhejo, *A* = naya work, 0 = cancel.'; }); } catch (e) { return stop(e, ''); }
