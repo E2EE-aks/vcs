@@ -41,7 +41,7 @@ module.exports = function makeWhatsApp(o) {
 
   /* per user: sock, status (idle|starting|qr|open), qr, name, number, chats Map, msgs Map, raw Map (media only, in memory) */
   const users = new Map();
-  const st = uid => { let s = users.get(uid); if (!s) { s = { sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), blueMap: new Map(), hideAll: true, lid: new Map(), stat: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
+  const st = uid => { let s = users.get(uid); if (!s) { s = { uid, sock: null, status: 'idle', qr: '', name: '', number: '', chats: new Map(), msgs: new Map(), raw: new Map(), wantOn: false, tries: 0, lastSend: 0, gen: 0, saveT: null, loaded: false, pics: new Map(), media: new Map(), err: '', vi: 0, contacts: new Map(), blueMap: new Map(), hideAll: true, lid: new Map(), stat: new Map(), hist: { chats: 0, msgs: 0 } }; users.set(uid, s); } return s; };
   const hasSaved = uid => { try { const c = JSON.parse(fs.readFileSync(path.join(udir(uid), 'creds.json'), 'utf8')); return !!(c && c.me); } catch (e) { return false; } };   // only a really linked login counts (half-finished QR logins are ignored)
   const wipe = uid => { try { fs.rmSync(udir(uid), { recursive: true, force: true }); } catch (e) {} };
 
@@ -67,6 +67,7 @@ module.exports = function makeWhatsApp(o) {
       try {
         if (/^session-/.test(n)) return;                       // per-contact encryption sessions are NOT saved: a restored old one makes the other phone show "Waiting for this message"; WhatsApp builds a fresh one automatically
         let c = fs.readFileSync(path.join(d, n), 'utf8');
+        if (n === 'status.json' && !withStore) return;
         if (n === 'store.json') { if (!withStore) return; c = slimStore(c); if (!c) return; }
         files[n] = c;
       } catch (e) {}
@@ -135,6 +136,24 @@ module.exports = function makeWhatsApp(o) {
       if (j.hideAll === false) s.hideAll = false;
       Object.keys(j.msgs || {}).forEach(k => s.msgs.set(k, j.msgs[k]));
     } catch (e) {}
+    try {                                                              // contacts' statuses (24 h) also survive a restart / deploy
+      const B = L(), j = JSON.parse(fs.readFileSync(path.join(udir(uid), 'status.json'), 'utf8'), B.BufferJSON.reviver), now = Date.now();
+      (j.g || []).forEach(g => { const items = (g.items || []).filter(i => i && i.wm && now - i.at < 24 * 3600e3); if (items.length && !s.stat.has(g.id)) s.stat.set(g.id, { id: g.id, push: g.push || '', items }); });
+    } catch (e) {}
+  }
+  function saveStat(s) {
+    if (!s.uid || s.statT) return;
+    s.statT = setTimeout(() => {
+      s.statT = null;
+      try {
+        const B = L(), all = []; s.stat.forEach(g => g.items.forEach(i => all.push([g, i])));
+        all.sort((a, b) => b[1].at - a[1].at); const keep = new Set(all.slice(0, 120).map(x => x[1].id)), g2 = [];
+        s.stat.forEach(g => { const items = g.items.filter(i => keep.has(i.id)).map(i => { const x = Object.assign({}, i, { thumb: '' }); x.wm = JSON.parse(JSON.stringify(i.wm, B.BufferJSON.replacer), (k, v) => k === 'jpegThumbnail' ? undefined : v); return x; }); if (items.length) g2.push({ id: g.id, push: g.push, items }); });
+        fs.mkdirSync(udir(s.uid), { recursive: true });
+        fs.writeFileSync(path.join(udir(s.uid), 'status.json'), JSON.stringify({ g: g2 }, B.BufferJSON.replacer));
+        scheduleBackup(s.uid, 60000);
+      } catch (e) { warn('WhatsApp status save', e && e.message); }
+    }, 3000);
   }
   function saveSoon(uid, s) {
     if (s.saveT) return;
@@ -231,7 +250,7 @@ module.exports = function makeWhatsApp(o) {
       learn(s, part, wm.key.participantAlt); learn(s, part, wm.key.participantPn);
       const jid = bareJid(part), x = unwrap(wm.message), pm = x.protocolMessage;
       if (pm && pm.key && pm.key.id && (pm.type === 0 || pm.type === 'REVOKE')) {                    // the contact deleted a status
-        const g = s.stat.get(jid); if (g) { g.items = g.items.filter(i => i.id !== pm.key.id); if (!g.items.length) s.stat.delete(jid); } return;
+        const g = s.stat.get(jid); if (g) { g.items = g.items.filter(i => i.id !== pm.key.id); if (!g.items.length) s.stat.delete(jid); saveStat(s); } return;
       }
       const k = kindText(wm.message); if (!k || !/^(text|photo|video|gif|voice|audio)$/.test(k.kind)) return;
       const at = tsOf(wm.messageTimestamp); if (Date.now() - at > STAT_TTL) return;
@@ -241,7 +260,7 @@ module.exports = function makeWhatsApp(o) {
       const it = { id: wm.key.id, at, kind: k.kind, text: k.text || '', mime: k.mime || '', thumb: k.thumb || '', media: k.media ? 1 : 0, wm };
       if (k.dur) it.dur = k.dur;
       if (k.kind === 'text') { const e = x.extendedTextMessage || {}; it.bg = hex(e.backgroundArgb); it.fg = hex(e.textArgb); }
-      g.items.push(it); g.items.sort((a, b) => a.at - b.at);
+      g.items.push(it); g.items.sort((a, b) => a.at - b.at); saveStat(s);
       let n = 0; s.stat.forEach(q => { n += q.items.length; });
       if (n > STAT_MAX) purgeStat(s);
       if (n > STAT_MAX) { const old = [...s.stat.values()].sort((a, b) => a.items[0].at - b.items[0].at)[0]; if (old) s.stat.delete(old.id); }
