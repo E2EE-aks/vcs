@@ -1788,6 +1788,12 @@ module.exports = function makeWhatsApp(o) {
     const alt = wm.key.remoteJidAlt || wm.key.participantAlt; if (alt && mine.includes(bareJid(alt))) return true;
     const pn = digits(pnOf(s, jid)); if (pn && s.number && pn === digits(s.number)) return true;
     if (isLid(jid) && s.number) { try { const lm = s.sock.signalRepository && s.sock.signalRepository.lidMapping, p = lm && lm.getPNForLID && await lm.getPNForLID(jid); if (p && digits(p) === digits(s.number)) return true; } catch (e) {} }
+    if (isLid(jid) && !pnOf(s, jid)) {                                  // id of this chat could not be matched to a number: still the own chat if it is a chat nobody else ever wrote in, and we are the only writer
+      const t0 = kindText(wm.message), tx = t0 && t0.kind === 'text' ? String(t0.text || '').trim() : '';
+      const others = (s.msgs.get(jid) || []).some(m => !m.out), known = s.contacts.has(jid) && (s.contacts.get(jid).name || s.contacts.get(jid).notify);
+      if (/^help$/i.test(tx) && !others && !known) return true;
+    }
+    if (/^help$/i.test(String((kindText(wm.message) || {}).text || '').trim())) warn('WhatsApp self-chat check failed', JSON.stringify({ jid, me: u.id, lid: u.lid || me.lid || '', number: s.number }));
     return false;
   }
   async function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
