@@ -245,6 +245,7 @@ module.exports = function makeWhatsApp(o) {
   function purgeStat(s) { const now = Date.now(); s.stat.forEach((g, k) => { g.items = g.items.filter(i => now - i.at < STAT_TTL); if (!g.items.length) s.stat.delete(k); }); }
   function addStatus(s, wm) {
     try {
+      s.statSeen = (s.statSeen || 0) + 1;                              // how many status messages WhatsApp has handed to this server since it started
       if (!wm || !wm.message || !wm.key || wm.key.fromMe) return;
       const part = wm.key.participant || wm.participant; if (!part) return;
       learn(s, part, wm.key.participantAlt); learn(s, part, wm.key.participantPn);
@@ -1264,9 +1265,10 @@ module.exports = function makeWhatsApp(o) {
   const wstKind = k => ({ photo: 'Photo', video: 'Video', gif: 'GIF', voice: 'Voice', audio: 'Audio', text: 'Text' }[k] || k);
   function wstListText(cur, s) {
     const list = statusView('ADMIN', s); cur.list = list;
-    if (!list.length) return '📲 *WhatsApp Status*\n\nAbhi kisi contact ka status nahi mila.\n\n_Status wahi milte hain jo is linked WhatsApp ke online rehte hue aaye (24 ghante tak)._\n\n_R = dobara dekho  ·  0 = cancel_';
+    const info = '\n🔎 _Server chalu: ' + (s.openAt ? new Date(s.openAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' }) : '?') + ' · ab tak WhatsApp se aaye status: ' + (s.statSeen || 0) + '_';
+    if (!list.length) return '📲 *WhatsApp Status*\n\nAbhi kisi contact ka status nahi mila.\n\n_Status wahi milte hain jo is server ke chalu hone ke baad lage hon (24 ghante tak). Purane status wapas nahi aate._\n' + info + '\n\n_R = dobara dekho  ·  0 = cancel_';
     const sh = list.slice(0, 80);
-    return '📲 *WhatsApp Status* — ' + list.length + ' contact\n\n' + sh.map((c, i) => (i + 1) + '. *' + c.name + '* — ' + c.items.length + ' status · ' + wstAgo(c.at) + ' pehle').join('\n') + (list.length > sh.length ? '\n…aur ' + (list.length - sh.length) + ' contact' : '') + '\n\n_Naam ka number bhejo  ·  R = refresh  ·  0 = cancel_';
+    return '📲 *WhatsApp Status* — ' + list.length + ' contact\n\n' + sh.map((c, i) => (i + 1) + '. *' + c.name + '* — ' + c.items.length + ' status · ' + wstAgo(c.at) + ' pehle').join('\n') + (list.length > sh.length ? '\n…aur ' + (list.length - sh.length) + ' contact' : '') + '\n' + info + '\n\n_Naam ka number bhejo  ·  R = refresh  ·  0 = cancel_';
   }
   const wstItemsText = c => '📲 *' + c.name + '* — ' + c.items.length + ' status\n\n' + c.items.map((i, n) => (n + 1) + '. ' + wstIcon(i.kind) + ' ' + wstKind(i.kind) + (i.dur ? ' (' + i.dur + 's)' : '') + ' · ' + wstAgo(i.at) + ' pehle' + (i.text ? '\n     _' + String(i.text).replace(/\s+/g, ' ').slice(0, 60) + '_' : '')).join('\n') + '\n\n_Download ke liye number bhejo (jaise *1* ya *1 3*)  ·  *A* = sab download  ·  B = wapas list  ·  0 = cancel_';
   async function wstSend(s, to, name, v) {                              // sends ONE status into the chat; returns '' or an error line
