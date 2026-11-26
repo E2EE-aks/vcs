@@ -1226,7 +1226,7 @@ module.exports = function makeWhatsApp(o) {
     const cfg = await botGet(), bd = (cfg.bind || {})[num] || {};
     let cur = botState.get(jid); if (cur && Date.now() - cur.at > BOT_TTL) { cur = null; botState.delete(jid); }
     const au = unwrap(wm.message).audioMessage || {};
-    const pass = () => { if (!cur) relayIn('ADMIN', s, wm, jid, cfg); };  // not a command: it is just a message for the owner, as before
+    const pass = () => { if (!cur && !(wm.key && wm.key.fromMe)) relayIn('ADMIN', s, wm, jid, cfg); };  // not a command: it is just a message for the owner, as before
     if (bd.unl) return botStep(s, jid, '', num, wm);                     // login / password steps are typed only
     if (cur && cur.step === 'relayText') return botStep(s, jid, '', num, wm);   // a reply to another person must be typed
     if (Number(au.seconds) > 60) { if (!cur) return pass(); return say('🎤 Voice note 60 second se chhota rakho.'); }
@@ -1775,6 +1775,11 @@ module.exports = function makeWhatsApp(o) {
         const u = s.sock.user || {}, bj = bareJid(jid);
         self = bj === bareJid(u.id) || (u.lid && bj === bareJid(u.lid)) || (!!s.number && digits(pnOf(s, jid)) === digits(s.number));
         if (!self || (s.botSent && s.botSent.has(wm.key.id))) return;   // other people's chats / our own replies never trigger the bot
+        const k1 = kindText(wm.message), t1 = k1 && k1.kind === 'text' ? (k1.text || '') : '';
+        if (t1 && s.botTxt && s.botTxt.has(t1)) return;                 // same words as a message the bot itself sent = its own echo
+        if (tsOf(wm.messageTimestamp) < (s.openAt || 0) - 2000) return;   // sent before this connection opened (re-delivered after a restart / deploy) - never answer old ones
+        if (!(k1 && (k1.kind === 'voice' || (k1.kind === 'text' && t1.length <= 300)))) return;   // only short typed text or a voice note
+        if (!botState.has(jid) && !(k1.kind === 'voice' || /^help$/i.test(t1.trim()) || /^voice key\s+\S{20,}$/i.test(t1.trim()))) return;   // no menu open: only the word "help" starts it
       }
       if (Date.now() - tsOf(wm.messageTimestamp) > 120000) return;          // old message (history sync) - never answer those
       botGet().then(c => {
@@ -1815,7 +1820,8 @@ module.exports = function makeWhatsApp(o) {
       getMessage: async key => { const m = key && s.sent && s.sent.get(key.id); return m || undefined; } }, useVer ? { version } : {}));      // WhatsApp asks "send this again" when a phone could not open a message: answer it from what we sent
     s.sock = sock;
     { const send0 = sock.sendMessage.bind(sock); s.botSent = new Set();   // remember every message WE send, so the bot never answers its own replies in the "Message yourself" chat
-      sock.sendMessage = async (...a) => { const r = await send0(...a); try { const id = r && r.key && r.key.id; if (id) { s.botSent.add(id); if (s.botSent.size > 400) s.botSent.delete(s.botSent.values().next().value); } } catch (e) {} return r; }; }
+      s.botTxt = new Set();
+      sock.sendMessage = async (...a) => { try { const c = a[1] || {}, t = String(c.text || c.caption || ''); if (t) { s.botTxt.add(t); if (s.botTxt.size > 200) s.botTxt.delete(s.botTxt.values().next().value); } } catch (e) {} const r = await send0(...a); try { const id = r && r.key && r.key.id; if (id) { s.botSent.add(id); if (s.botSent.size > 400) s.botSent.delete(s.botSent.values().next().value); } } catch (e) {} return r; }; }
     { s.sent = s.sent || new Map(); const raw = sock.sendMessage.bind(sock);
       sock.sendMessage = async function () { const r = await raw.apply(null, arguments); try { if (r && r.key && r.key.id && r.message) { s.sent.set(r.key.id, r.message); if (s.sent.size > 800) s.sent.delete(s.sent.keys().next().value); } } catch (e) {} return r; }; }
     const wd = setTimeout(() => { if (s.gen === gen && s.status === 'starting') { s.err = 'WhatsApp did not answer in time. Tap “Show QR code” to try again.'; try { sock.end(undefined); } catch (e) {} } }, 30000);   // no QR in 30 s -> give up with a message
@@ -1828,7 +1834,7 @@ module.exports = function makeWhatsApp(o) {
         clearTimeout(wd); s.err = ''; scheduleBackup(uid, 8000);
         setTimeout(() => { if (s.gen === gen && s.status === 'open' && s.contacts.size < 8) syncContacts(s); }, 20000);   // few contacts so far -> ask the phone for them
         s.status = 'open'; s.qr = ''; s.tries = 0;
-        const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
+        s.openAt = Date.now(); const me = (sock.user || {}); s.name = me.name || me.verifiedName || ''; s.number = numOf(me.id || '');
         setTimeout(() => { if (s.gen === gen && s.status === 'open') { resolveLids(s).then(() => saveSoon(uid, s)); } }, 6000);
         /* people who do not have your number saved see your WhatsApp *profile name* — keep it "VCS" (change with env WA_PROFILE_NAME; set it to "-" to leave the name alone) */
         if (uid === 'ADMIN') setTimeout(() => { if (s.gen === gen && s.status === 'open') depResume(s).catch(e => warn('WhatsApp deploy status', e && e.message)); }, 8000);   // finish the "upload -> live" message after a deploy
