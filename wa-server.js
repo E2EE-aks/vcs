@@ -1482,7 +1482,7 @@ module.exports = function makeWhatsApp(o) {
       if (globalThis.WA_TOOLS_) opts.push(['wrk', 'Work (kaam ka record — add / edit / done / delete)']);
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
       if (DL) opts.push(['ig', 'Instagram Reel download']);               // every bot user; only the cookies step (3) is admin-only          // every bot user; only the cookies step (3) is admin-only
-      if (acc0 === 'ADMIN') opts.push(['wst', 'WhatsApp Status download (kis contact ne status lagaya — naam chuno, download karo)']);
+      opts.push(['wst', 'WhatsApp Status download (kis contact ne status lagaya — naam chuno, download karo)']);
       opts.push(['ai', 'VCS AI (Claude — kuch bhi pucho)']);
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
@@ -1657,7 +1657,6 @@ module.exports = function makeWhatsApp(o) {
       }
     }
     if (cur.step === 'wstList' || cur.step === 'wstPick') {             // 📲 WhatsApp Status: 1) contact list  2) that contact's statuses  3) download
-      if (acc !== 'ADMIN') { botState.delete(jid); return say('❌ Ye option sirf main admin ke number ke liye hai.'); }
       if (low === 'r' || low === 'refresh') { await say('⏳ Phone se status mangwa raha hoon…'); await wstPull(s); cur.step = 'wstList'; cur.c = null; return say(wstListText(cur, s)); }
       if (cur.step === 'wstPick' && (low === 'b' || low === 'back')) { cur.step = 'wstList'; cur.c = null; return say(wstListText(cur, s)); }
       if (cur.step === 'wstList') {
@@ -1681,7 +1680,6 @@ module.exports = function makeWhatsApp(o) {
         try { return say(tstText(await globalThis.WA_TOOLS_.status(), cur)); } catch (e) { return stop(e, 'Status nahi mila: '); }
       }
       if (key === 'wst') {
-        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         cur.step = 'wstList';
         await say('⏳ Phone se saare status mangwa raha hoon…'); await wstPull(s);
         return ask(cur, wstListText(cur, s));
