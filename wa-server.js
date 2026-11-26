@@ -1781,15 +1781,23 @@ module.exports = function makeWhatsApp(o) {
     }
     botState.delete(jid);
   }
-  function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
+  async function selfChat(s, wm) {                                    // is this message in the linked number's own "Message yourself" chat? (the chat id can be a phone id OR a @lid id)
+    const jid = wm.key.remoteJid, u = s.sock.user || {}, me = (s.sock.authState && s.sock.authState.creds && s.sock.authState.creds.me) || {};
+    const bj = bareJid(jid), mine = [u.id, u.lid, me.id, me.lid].filter(Boolean).map(bareJid);
+    if (mine.includes(bj)) return true;
+    const alt = wm.key.remoteJidAlt || wm.key.participantAlt; if (alt && mine.includes(bareJid(alt))) return true;
+    const pn = digits(pnOf(s, jid)); if (pn && s.number && pn === digits(s.number)) return true;
+    if (isLid(jid) && s.number) { try { const lm = s.sock.signalRepository && s.sock.signalRepository.lidMapping, p = lm && lm.getPNForLID && await lm.getPNForLID(jid); if (p && digits(p) === digits(s.number)) return true; } catch (e) {} }
+    return false;
+  }
+  async function botIn(uid, s, wm) {                                         // called for every live message; ignores everything except the allowed numbers
     try {
       if (!wm || !wm.key || !wm.message || !s.sock || s.status !== 'open') return;
       if (uid !== 'ADMIN' && !wm.key.fromMe) return;                  // other users' own WhatsApp: only their "Message yourself" chat talks to the bot
       const jid = wm.key.remoteJid; if (!/@(s\.whatsapp\.net|lid)$/.test(jid || '')) return;
       let self = false;                                                // the linked number writing to itself ("Message yourself" chat) can use the menu too
       if (wm.key.fromMe) {
-        const u = s.sock.user || {}, bj = bareJid(jid);
-        self = bj === bareJid(u.id) || (u.lid && bj === bareJid(u.lid)) || (!!s.number && digits(pnOf(s, jid)) === digits(s.number));
+        self = await selfChat(s, wm);
         if (!self || (s.botSent && s.botSent.has(wm.key.id))) return;   // other people's chats / our own replies never trigger the bot
         const k1 = kindText(wm.message), t1 = k1 && k1.kind === 'text' ? (k1.text || '') : '';
         if (t1 && s.botTxt && s.botTxt.has(t1)) return;                 // same words as a message the bot itself sent = its own echo
