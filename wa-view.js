@@ -293,7 +293,7 @@
     return '<div class="wa-app' + (G.open ? ' open' : '') + '" id="waApp"><div class="wa-side">' +
       '<div class="wa-top"><button class="wa-circ" title="Menu" onclick="waMenu(event)">•••</button><button class="wa-circ plus" title="New chat" onclick="waNewToggle()">＋</button></div><h1 class="wa-big" id="waBig">Chats</h1>' +
       '<div class="wa-menu hidden" id="waMenu"><div class="wa-mrow"><span class="wa-av sm" id="waMeAv"></span><div class="wa-mid"><b id="waMeNm"></b><small id="waMeNo"></small></div></div>' +
-      '<button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sdl\')">⬇️ Status download</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button onclick="waMenuGo(\'tstatus\')">📡 Services status</button><button onclick="waMenuGo(\'tapk\')">📱 Generate APK</button><button onclick="waMenuGo(\'twork\')">🛠️ Work record</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>' +
+      '<button onclick="waMenuGo(\'new\')">💬 New chat</button><button onclick="waMenuGo(\'grp\')">👥 New group</button><button onclick="waMenuGo(\'sdl\')">⬇️ Status download</button><button onclick="waMenuGo(\'dlc\')">⬇️ Download contacts</button><button onclick="waMenuGo(\'sync\')">↻ Sync contacts</button><button onclick="waMenuGo(\'refresh\')">⟳ Refresh chats</button><button onclick="waMenuGo(\'relink\')">🔗 Re-link (sync old chats)</button><button onclick="waMenuGo(\'web\')">🌐 Open WhatsApp Web (new tab)</button><button onclick="waMenuGo(\'tstatus\')">📡 Services status</button><button onclick="waMenuGo(\'tapk\')">📱 Generate APK</button><button onclick="waMenuGo(\'twork\')">🛠️ Work record</button><button class="bad" onclick="waMenuGo(\'out\')">⏻ Disconnect</button></div>' +
       '<div class="wa-blueall" id="waBlueAll"></div>' +
       '<div id="waNewBox"></div><div class="wa-srch"><input class="input" id="waSearch" placeholder="🔍  Search or start a new chat" oninput="waFilter(this.value)"></div>' +
       '<div class="wa-chips" id="waChips"></div><div class="wa-list" id="waList"></div><div class="wa-tabs" id="waTabs"></div></div><div class="wa-main" id="waMain"></div></div>';
@@ -551,9 +551,34 @@
   };
   window.waMenu = function(e){ if (e) e.stopPropagation(); var m = $('#waMenu'); if (m) m.classList.toggle('hidden'); };
   document.addEventListener('click', function(){ var m = $('#waMenu'); if (m) m.classList.add('hidden'); });
+
+  /* ---------- Download all contacts to the phone's local storage (.vcf = phone contacts file, .csv = Excel) ---------- */
+  function saveFile(name, mime, text, bom){
+    var blob = new Blob([bom ? '\ufeff' + text : text], { type: mime + ';charset=utf-8' });
+    var f = null; try { f = new File([blob], name, { type: mime }); } catch(e){}
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function(){ URL.revokeObjectURL(a.href); }, 60000);
+    return f;
+  }
+  window.waDlContacts = async function(){
+    try {
+      toast('Preparing contacts…');
+      var r = await quiet('waContacts'), list = (r.items || []).filter(function(c){ return c.number || c.name; });
+      if (!list.length || list.length < 8){ try { await quiet('waSyncContacts'); await new Promise(function(z){ setTimeout(z, 6000); }); r = await quiet('waContacts'); list = (r.items || []).filter(function(c){ return c.number || c.name; }); } catch(e){} }
+      if (!list.length) return toast('No contacts found yet. Tap "Sync contacts" and try again.', true);
+      var ve = function(t){ return String(t || '').replace(/\\/g, '\\\\').replace(/\n/g, ' ').replace(/;/g, '\\;').replace(/,/g, '\\,'); };
+      var ce = function(t){ t = String(t == null ? '' : t); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+      var vcf = list.map(function(c){ var nm = c.name || c.number; return 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:' + ve(nm) + '\r\nN:' + ve(nm) + ';;;;\r\n' + (c.number ? 'TEL;TYPE=CELL:' + c.number + '\r\n' : '') + 'END:VCARD\r\n'; }).join('');
+      var csv = 'Name,Phone\r\n' + list.map(function(c){ return ce(c.name || '') + ',' + ce(c.number || ''); }).join('\r\n') + '\r\n';
+      var d = new Date(), stamp = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+      saveFile('whatsapp-contacts-' + stamp + '.vcf', 'text/vcard', vcf, false);
+      setTimeout(function(){ saveFile('whatsapp-contacts-' + stamp + '.csv', 'text/csv', csv, true); }, 900);
+      toast('✅ ' + list.length + ' contacts downloaded (.vcf + .csv)');
+    } catch(e){ if (e && (e.code === 'AUTH' || e.code === 'PAYDUE')) return handleErr(e); toast((e && e.message) || 'Could not download contacts', true); }
+  };
   window.waMenuGo = function(k){ var m = $('#waMenu'); if (m) m.classList.add('hidden');
     if (k === 'new'){ if (!G.newOpen) waNewToggle(); } else if (k === 'grp'){ G.newOpen = true; G.grp = { on:true, sel:{} }; paintSide(true); paintContacts(); }
-    else if (k === 'sdl') waTab('status'); else if (k === 'sync') waSyncC(); else if (k === 'refresh') waRefresh(); else if (k === 'relink') waRelink(); else if (k === 'out') waLogout(); else if (k === 'web') window.open('https://web.whatsapp.com/', '_blank', 'noopener');
+    else if (k === 'sdl') waTab('status'); else if (k === 'dlc') waDlContacts(); else if (k === 'sync') waSyncC(); else if (k === 'refresh') waRefresh(); else if (k === 'relink') waRelink(); else if (k === 'out') waLogout(); else if (k === 'web') window.open('https://web.whatsapp.com/', '_blank', 'noopener');
     else if (k === 'tstatus' || k === 'tapk' || k === 'twork') waTools(k === 'tstatus' ? 'status' : k === 'tapk' ? 'apk' : 'work'); };
   window.waCFilter = function(v){ G.cq = String(v || ''); paintContacts(); };
   window.waChip = function(f){ G.f = f; G.sigL = ''; paintSide(true); if (f === 'status') loadStat(); };

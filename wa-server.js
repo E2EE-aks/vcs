@@ -1318,6 +1318,21 @@ module.exports = function makeWhatsApp(o) {
     return '📲 *WhatsApp Status* — ' + list.length + ' contact\n\n' + sh.map((c, i) => (i + 1) + '. *' + c.name + '* — ' + c.items.length + ' status · ' + wstAgo(c.at) + ' pehle').join('\n') + (list.length > sh.length ? '\n…aur ' + (list.length - sh.length) + ' contact' : '') + '\n' + info + '\n\n_Naam ka number bhejo  ·  R = refresh  ·  0 = cancel_';
   }
   const wstItemsText = c => '📲 *' + c.name + '* — ' + c.items.length + ' status\n\n' + c.items.map((i, n) => (n + 1) + '. ' + wstIcon(i.kind) + ' ' + wstKind(i.kind) + (i.dur ? ' (' + i.dur + 's)' : '') + ' · ' + wstAgo(i.at) + ' pehle' + (i.text ? '\n     _' + String(i.text).replace(/\s+/g, ' ').slice(0, 60) + '_' : '')).join('\n') + '\n\n_Download ke liye number bhejo (jaise *1* ya *1 3*)  ·  *A* = sab download  ·  B = wapas list  ·  0 = cancel_';
+  /* ---------- option "Contacts download": the phone's whole address book -> .vcf (phone contacts) + .csv (Excel) sent into this chat ---------- */
+  async function ctcRows(s) {
+    await resolveLids(s);
+    const m = new Map(), add = (id, name) => { const pn = pnOf(s, id), key = pn || id, o = m.get(key) || { name: '', number: pn ? '+' + pn.split('@')[0] : numOf(id) }; if (name && !o.name) o.name = name; m.set(key, o); };
+    s.contacts.forEach(c => add(c.id, c.name || c.pn || ''));
+    s.chats.forEach(c => { if (!c.group) add(c.id, c.name || c.pn || ''); });
+    return [...m.values()].filter(c => c.name || c.number).sort((x, y) => (x.name || '~' + x.number).toLowerCase() < (y.name || '~' + y.number).toLowerCase() ? -1 : 1);
+  }
+  function ctcFiles(list) {
+    const ve = t => String(t || '').replace(/\\/g, '\\\\').replace(/\r?\n/g, ' ').replace(/;/g, '\\;').replace(/,/g, '\\,'), ce = t => { t = String(t == null ? '' : t); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const vcf = list.map(c => { const nm = c.name || c.number; return 'BEGIN:VCARD\r\nVERSION:3.0\r\nFN:' + ve(nm) + '\r\nN:' + ve(nm) + ';;;;\r\n' + (c.number ? 'TEL;TYPE=CELL:' + c.number + '\r\n' : '') + 'END:VCARD\r\n'; }).join('');
+    const csv = '\ufeffName,Phone\r\n' + list.map(c => ce(c.name || '') + ',' + ce(c.number || '')).join('\r\n') + '\r\n';
+    const d = new Date(Date.now() + 19800000), st = d.toISOString().slice(0, 10);
+    return { vcf: { buf: Buffer.from(vcf, 'utf8'), name: 'whatsapp-contacts-' + st + '.vcf' }, csv: { buf: Buffer.from(csv, 'utf8'), name: 'whatsapp-contacts-' + st + '.csv' } };
+  }
   async function wstSend(s, to, name, v) {                              // sends ONE status into the chat; returns '' or an error line
     let it = null; s.stat.forEach(g => { const f = g.items.find(i => i.id === v.id); if (f) it = f; });
     if (!it) return '❌ ' + wstKind(v.kind) + ' status hat gaya / expire ho gaya.';
@@ -1483,6 +1498,7 @@ module.exports = function makeWhatsApp(o) {
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
       if (DL) opts.push(['ig', 'Instagram Reel download']);               // every bot user; only the cookies step (3) is admin-only          // every bot user; only the cookies step (3) is admin-only
       opts.push(['wst', 'WhatsApp Status download (kis contact ne status lagaya — naam chuno, download karo)']);
+      opts.push(['ctc', 'Contacts download (saare contacts — .vcf + .csv file)']);
       opts.push(['ai', 'VCS AI (Claude — kuch bhi pucho)']);
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
@@ -1678,6 +1694,20 @@ module.exports = function makeWhatsApp(o) {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         await say('⏳ *Services check* ho rahi hain…');
         try { return say(tstText(await globalThis.WA_TOOLS_.status(), cur)); } catch (e) { return stop(e, 'Status nahi mila: '); }
+      }
+      if (key === 'ctc') {                                              // 👤 every bot user: all contacts of the linked phone as .vcf + .csv
+        botState.delete(jid);
+        await say('⏳ *Contacts* taiyaar ho rahe hain…');
+        try {
+          let list = await ctcRows(s);
+          if (list.length < 8) { try { await syncContacts(s); await new Promise(r => setTimeout(r, 7000)); list = await ctcRows(s); } catch (e) { warn('WhatsApp contacts sync', e && e.message); } }
+          if (!list.length) return say('❌ Abhi koi contact nahi mila. Thodi der baad *help* bhejke dobara try karo.');
+          const f = ctcFiles(list);
+          await s.sock.sendMessage(jid, { document: f.vcf.buf, fileName: f.vcf.name, mimetype: 'text/vcard', caption: '👤 *' + list.length + ' contacts* (.vcf)\n\n_File par tap karo → Contacts app me import hoga._' });
+          await new Promise(r => setTimeout(r, 700));
+          await s.sock.sendMessage(jid, { document: f.csv.buf, fileName: f.csv.name, mimetype: 'text/csv', caption: '📊 Excel / Sheets ke liye (.csv)' });
+          return say('✅ *Ho gaya* — ' + list.length + ' contacts bhej diye.\n\n_Dobara kuch karna ho to *help* bhejo._');
+        } catch (e) { return stop(e, 'Contacts nahi bhej paya: '); }
       }
       if (key === 'wst') {
         cur.step = 'wstList';
