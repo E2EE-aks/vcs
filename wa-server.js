@@ -1188,7 +1188,7 @@ module.exports = function makeWhatsApp(o) {
     }
     throw new Error(err);
   }
-  const VOX_MENU = [['edt', /\bedit\b/], ['att', /\b(attendance|haziri|hazri|hajri)\b/], ['bill', /\b(bill|balance|statement)\b/], ['exp', /\b(expense|expence|kharcha|kharch|income)\b/], ['rack', /\brack\b/], ['wrk', /\b(work|kaam)\b/], ['dl', /\byou ?tube\b/], ['ig', /\b(insta|instagram|reel)\b/], ['req', /\b(pending|request|requests)\b/], ['tst', /\bstatus\b/], ['apk', /\bapk\b/], ['ai', /\b(ai|claude)\b/]];
+  const VOX_MENU = [['edt', /\bedit\b/], ['att', /\b(attendance|haziri|hazri|hajri)\b/], ['bill', /\b(bill|balance|statement)\b/], ['exp', /\b(expense|expence|kharcha|kharch|income)\b/], ['rack', /\brack\b/], ['wrk', /\b(work|kaam)\b/], ['dl', /\byou ?tube\b/], ['ig', /\b(insta|instagram|reel)\b/], ['req', /\b(pending|request|requests)\b/], ['wst', /\b(whatsapp|wa) status\b|\bstatus (download|save|saver)\b|\bstatus saver\b/], ['tst', /\bstatus\b/], ['apk', /\bapk\b/], ['ai', /\b(ai|claude)\b/]];
   const voxNorm = t => String(t || '').toLowerCase().replace(/(\d),(?=\d)/g, '$1').replace(/[^\p{L}\p{N}.]+/gu, ' ').replace(/\.(?!\d)/g, ' ').replace(/\s+/g, ' ').trim();
   function voxCommand(text) {                                           // one sentence that does the whole job -> { key, next } or null
     const v = voxNorm(text);
@@ -1239,6 +1239,33 @@ module.exports = function makeWhatsApp(o) {
     return botStep(s, jid, words[v] || (/^(number )?\d+(\.\d+)?$/.test(v) ? v.replace('number ', '') : /^(cancel|done|haan|yes|nahi|no|next|prev|back|all)$/.test(v) ? v : text.replace(/(\d),(?=\d)/g, '$1')), num, null, { voice: true });
   }
 
+  /* ---------- option "WhatsApp Status download": contacts who put a status (last 24 h) -> pick a name -> pick / download its status in this chat ---------- */
+  const wstAgo = at => { const m = Math.max(1, Math.round((Date.now() - at) / 60000)); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' ghante'; };
+  const wstIcon = k => ({ photo: '📷', video: '🎬', gif: '🎞️', voice: '🎤', audio: '🎵', text: '📝' }[k] || '•');
+  const wstKind = k => ({ photo: 'Photo', video: 'Video', gif: 'GIF', voice: 'Voice', audio: 'Audio', text: 'Text' }[k] || k);
+  function wstListText(cur, s) {
+    const list = statusView('ADMIN', s); cur.list = list;
+    if (!list.length) return '📲 *WhatsApp Status*\n\nAbhi kisi contact ka status nahi mila.\n\n_Status wahi milte hain jo is linked WhatsApp ke online rehte hue aaye (24 ghante tak)._\n\n_R = dobara dekho  ·  0 = cancel_';
+    const sh = list.slice(0, 80);
+    return '📲 *WhatsApp Status* — ' + list.length + ' contact\n\n' + sh.map((c, i) => (i + 1) + '. *' + c.name + '* — ' + c.items.length + ' status · ' + wstAgo(c.at) + ' pehle').join('\n') + (list.length > sh.length ? '\n…aur ' + (list.length - sh.length) + ' contact' : '') + '\n\n_Naam ka number bhejo  ·  R = refresh  ·  0 = cancel_';
+  }
+  const wstItemsText = c => '📲 *' + c.name + '* — ' + c.items.length + ' status\n\n' + c.items.map((i, n) => (n + 1) + '. ' + wstIcon(i.kind) + ' ' + wstKind(i.kind) + (i.dur ? ' (' + i.dur + 's)' : '') + ' · ' + wstAgo(i.at) + ' pehle' + (i.text ? '\n     _' + String(i.text).replace(/\s+/g, ' ').slice(0, 60) + '_' : '')).join('\n') + '\n\n_Download ke liye number bhejo (jaise *1* ya *1 3*)  ·  *A* = sab download  ·  B = wapas list  ·  0 = cancel_';
+  async function wstSend(s, to, name, v) {                              // sends ONE status into the chat; returns '' or an error line
+    let it = null; s.stat.forEach(g => { const f = g.items.find(i => i.id === v.id); if (f) it = f; });
+    if (!it) return '❌ ' + wstKind(v.kind) + ' status hat gaya / expire ho gaya.';
+    const cap = '📲 ' + name + ' · ' + wstAgo(it.at) + ' pehle';
+    if (it.kind === 'text') { await s.sock.sendMessage(to, { text: '📝 *' + name + '* ka status:\n\n' + (it.text || '') }); return ''; }
+    const x = unwrap(it.wm.message), part = x.imageMessage || x.videoMessage || x.audioMessage || {};
+    if ((Number(part.fileLength) || 0) > MAX) return '❌ ' + wstKind(it.kind) + ' bahut bada hai (' + (MAX / 1048576) + ' MB se zyada). Phone par kholo.';
+    const buf = await L().downloadMediaMessage(it.wm, 'buffer', {}, { logger: quietLog(), reuploadRequest: s.sock.updateMediaMessage });
+    if (!buf || !buf.length) return '❌ ' + wstKind(it.kind) + ' download nahi hua.';
+    const mime = String(part.mimetype || it.mime || ''), body = it.text ? cap + '\n' + it.text : cap;
+    if (x.imageMessage) await s.sock.sendMessage(to, { image: buf, caption: body });
+    else if (x.videoMessage) await s.sock.sendMessage(to, { video: buf, mimetype: mime.split(';')[0] || 'video/mp4', caption: body, gifPlayback: !!part.gifPlayback });
+    else { await s.sock.sendMessage(to, { text: cap }); await s.sock.sendMessage(to, { audio: buf, mimetype: mime || 'audio/ogg; codecs=opus', ptt: !!part.ptt }); }
+    return '';
+  }
+
   const BOT_HI = /^help$/;                                              // ONLY the word "help" opens the menu
   async function botStep(s, jid, text, num, wm, vo = {}) {              // vo.voice = came from a voice note, vo.quiet = do not send the in-between question
     const to = jid;                                                     // answer in the very same chat the message came from
@@ -1264,6 +1291,7 @@ module.exports = function makeWhatsApp(o) {
       if (globalThis.WA_TOOLS_) opts.push(['wrk', 'Work (kaam ka record — add / edit / done / delete)']);
       if (DL) opts.push(['dl', 'YouTube Video / Audio download']);
       if (DL) opts.push(['ig', 'Instagram Reel download']);               // every bot user; only the cookies step (3) is admin-only          // every bot user; only the cookies step (3) is admin-only
+      if (acc0 === 'ADMIN') opts.push(['wst', 'WhatsApp Status download (kis contact ne status lagaya — naam chuno, download karo)']);
       opts.push(['ai', 'VCS AI (Claude — kuch bhi pucho)']);
       if (ok('rack')) opts.push(['rack', 'Rack Mapping (item kis rack/row me hai)']);
       const hi = '👋 *Welcome' + (me.name ? ', ' + me.name : '') + '!*\n\n';
@@ -1435,12 +1463,33 @@ module.exports = function makeWhatsApp(o) {
         return say('🚀 *APK build GitHub par shuru ho gaya*\n📛 ' + c.name + ' · 📦 ' + c.id + ' · 🔢 ' + c.ver + '\n\n⏱️ 5–8 minute lagenge. *Ready hote hi yahin APK bhej dunga* — tab tak kuch aur kar sakte ho.');
       }
     }
+    if (cur.step === 'wstList' || cur.step === 'wstPick') {             // 📲 WhatsApp Status: 1) contact list  2) that contact's statuses  3) download
+      if (acc !== 'ADMIN') { botState.delete(jid); return say('❌ Ye option sirf main admin ke number ke liye hai.'); }
+      if (low === 'r' || low === 'refresh' || (cur.step === 'wstPick' && (low === 'b' || low === 'back'))) { cur.step = 'wstList'; cur.c = null; return say(wstListText(cur, s)); }
+      if (cur.step === 'wstList') {
+        const c = /^\d+$/.test(low) ? (cur.list || [])[Number(low) - 1] : null; if (!c) return again();
+        cur.step = 'wstPick'; cur.c = c; return say(wstItemsText(c));
+      }
+      const c = cur.c, fresh = (statusView('ADMIN', s).find(x => x.id === c.id) || c); cur.c = fresh;     // pick up statuses that arrived meanwhile
+      let pick = [];
+      if (low === 'a' || low === 'all' || low === 'sab') pick = fresh.items;
+      else if (/^\d+( \d+)*$/.test(low)) pick = [...new Set(low.split(' ').map(Number))].map(n => fresh.items[n - 1]).filter(Boolean);
+      if (!pick.length) return again();
+      await say('⏳ *' + pick.length + '* status bhej raha hoon…'); let bad = 0;
+      for (const v of pick) { try { const e = await wstSend(s, jid, fresh.name, v); if (e) { bad++; await say(e); } } catch (e) { bad++; warn('WhatsApp status download', e && e.message); await say('❌ ' + wstKind(v.kind) + ' bhej nahi paya: ' + botErr(e)); } }
+      return say((bad < pick.length ? '✅ *Ho gaya*' : '⚠️ Kuch nahi gaya') + '\n\n_Aur status ke liye number bhejo  ·  B = wapas list  ·  0 = cancel_');
+    }
     if (cur.step === 'menu') {
       const key = /^\d+$/.test(low) ? (cur.opts || [])[Number(low) - 1] : '';
       if (key === 'tst') {                                              // admin only: status of every service (short list, tap a number for the issue)
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
         await say('⏳ *Services check* ho rahi hain…');
         try { return say(tstText(await globalThis.WA_TOOLS_.status(), cur)); } catch (e) { return stop(e, 'Status nahi mila: '); }
+      }
+      if (key === 'wst') {
+        if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
+        cur.step = 'wstList';
+        return ask(cur, wstListText(cur, s));
       }
       if (key === 'apk') {
         if (acc !== 'ADMIN') return say('❌ Ye option sirf main admin ke number ke liye hai.');
