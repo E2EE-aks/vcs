@@ -252,70 +252,146 @@ function makeApp(store, env) {
   const YT = require('./yt-server')({ env, warn, sign, dl: () => WA.dl() });
   let vcsMirror = null;                                                                     // set below: copies the app's alerts to WhatsApp
   const PUSH = require('./fcm')({ env, warn, withWb: fn => withWb(fn), mirror: (u, m) => { if (vcsMirror) vcsMirror(u, m); } });                 // Android app notifications (see fcm.js)                       // YouTube tab (see yt-server.js)
-  // ---------- ₹1 joining payment: checked automatically in the ADMIN's Gmail (read-only link made in the Mail tab) ----------
-  // The new user pays by QR and sends the UTR / transaction id. We search the admin's Gmail for that id and accept it only when the mail
-  // shows a credit of at least the price. One UTR counts once. Public actions, so they ask for the user's own user id + password.
-  const PAYGATE_ACTIONS = new Set(['payGateInfo', 'payGateVerify']);
+  // ---------- UPI payment with AUTOMATIC verification (no UTR typing) ----------
+  // 1. The user taps "Pay": the server makes a unique Order ID, saves it (PAY_ORDERS) and answers with a upi://pay link whose
+  //    pa (UPI ID), am (amount), tr and tn (= Order ID) are already filled in. The page opens that link, so the UPI app opens ready to pay.
+  // 2. When the money arrives, the payment provider / bank calls POST /pay/webhook (signed with PAY_WEBHOOK_SECRET). The server
+  //    checks the signature, finds the order by its Order ID, checks the amount and marks it paid. Nothing is typed by the user.
+  // 3. The page asks payOrderStatus every few seconds and opens the account as soon as the order is paid.
+  // Two kinds of order: 'gate' = the ₹ joining payment of a new user (opens sign-in), 'plan' = a plan chosen in "Plans & Payments".
+  const PAYGATE_ACTIONS = new Set(['payGateInfo', 'payOrderCreate', 'payOrderStatus']);
   const pgTry = new Map();
-  const pgDecode = d => Buffer.from(String(d || ''), 'base64url').toString('utf8');
-  function pgText(m) {                                              // all readable text of a mail (plain parts + html parts without tags)
-    const out = [String(m && m.snippet || '')];
-    (function walk(p) {
-      if (!p) return;
-      if (p.body && p.body.data && /^text\//.test(p.mimeType || '')) { const t = pgDecode(p.body.data); out.push(/html/.test(p.mimeType) ? t.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/&#8377;|&rupee;/g, '₹') : t); }
-      (p.parts || []).forEach(walk);
-    })(m && m.payload);
-    return out.join(' ').replace(/\s+/g, ' ');
+  const ORDER_TTL = 30 * 60e3;
+  const ordersGet = () => { try { const r = JSON.parse(globalThis.PropertiesService.getScriptProperties().getProperty('PAY_ORDERS') || '[]'); return Array.isArray(r) ? r : []; } catch (e) { return []; } };
+  function ordersSave(list) {                                       // keep every paid order, drop the oldest unpaid ones
+    if (list.length > 400) { const paid = list.filter(x => x.status === 'paid'), rest = list.filter(x => x.status !== 'paid').slice(-Math.max(0, 400 - paid.length)); list = paid.concat(rest).sort((a, b) => a.t - b.t); }
+    globalThis.PropertiesService.getScriptProperties().setProperty('PAY_ORDERS', JSON.stringify(list));
   }
-  function pgPaid(text, utr, price) {
-    if (!text.toUpperCase().replace(/[\s-]/g, '').includes(utr)) return false;                 // the mail must carry this UTR
-    if (!/credit|received|deposit|paid you|payment from|sent you|money in/i.test(text)) return false;   // and be a money-in mail, not a debit alert
-    const amts = []; let m; const re = /(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)|amount\s*[:\-]?\s*([\d,]+(?:\.\d+)?)/gi;
-    while ((m = re.exec(text))) amts.push(Number(String(m[1] || m[2]).replace(/,/g, '')));
-    return amts.some(a => a >= price);
+  const newOrderId = () => 'VCS' + Date.now().toString(36).toUpperCase() + crypto.randomBytes(3).toString('hex').toUpperCase();   // letters + digits only, 17 chars (UPI tr allows 35)
+  const rupee = n => (Math.round(Number(n) * 100) / 100).toFixed(2);
+  function upiUrl(vpa, order) {
+    const pn = String(env.PAY_PAYEE_NAME || 'aks-vcs');
+    return 'upi://pay?pa=' + encodeURIComponent(vpa) + '&pn=' + encodeURIComponent(pn) + '&am=' + rupee(order.price) + '&cu=INR'
+      + '&tr=' + encodeURIComponent(order.id) + '&tn=' + encodeURIComponent('Order ' + order.id);
   }
-  async function payGateRoute(req) {
-    const G = globalThis, P = G.PropertiesService.getScriptProperties(), now = Date.now(), price = Number(G.PAYG_PRICE_) || 1;
+  function orderWho(req) {                                          // -> the account this call is for (a signed-in token, or the user id + password of a new user)
+    const G = globalThis, now = Date.now();
+    if (req.token) {
+      const uid = G.checkToken_(req.token);
+      if (!uid) G.fail_('Session expired. Please sign in again.', 'AUTH');
+      const acc = G.getAccount_(uid, G.readSettings_().values);
+      if (!acc) G.fail_('This user no longer exists.', 'AUTH');
+      return acc;
+    }
     const uname = String(req.username || '').trim().toLowerCase(), t = pgTry.get(uname) || { n: 0, at: now };
     if (now - t.at > 600000) { t.n = 0; t.at = now; }
     if (t.n >= 8) G.fail_('Bahut zyada koshish ho gayi. 10 minute baad dobara try karo.', 'LOCKED');
     const acc = G.findByUsername_(uname, G.readSettings_().values);
     if (!(acc && G.passMatch_(acc.password, req.password))) { t.n++; pgTry.set(uname, t); G.fail_('Incorrect username or password.', 'BADLOGIN'); }
-    const pending = G.payGatePending_(acc.id);
-    if (req.action === 'payGateInfo' || !pending) return { ok: true, pending, price, name: acc.name || acc.username };
-    const utr = String(req.utr || '').replace(/[\s-]/g, '').toUpperCase();
-    if (!/^[A-Z0-9]{8,30}$/.test(utr)) G.fail_('UTR / Transaction ID sahi likho (jaise 12 digit ka number jo UPI app me payment ke baad dikhta hai).', 'UTR');
-    let used = []; try { used = JSON.parse(P.getProperty('PAYG_UTRS') || '[]'); } catch (e) {}
-    if (used.includes(utr)) G.fail_('Ye UTR pehle hi use ho chuka hai. Apne khud ke payment ka UTR bhejo.', 'UTR');
-    const who = (acc.name || acc.username) + ' (' + acc.username + ')';
-    if (!mailRefreshOf('ADMIN')) {
-      try { G.sysChatSend_('ADMIN', '⚠️ ' + who + ' ne ₹' + price + ' pay kiya (UTR ' + utr + ') par auto-verify nahi ho sakta: Mail tab me apna Gmail connect karo. Haath se allow karne ke liye Logins me is user ko payment due date de do.'); } catch (e) {}
-      G.fail_('Admin ka Gmail abhi connect nahi hai, isliye payment auto-verify nahi ho paya. Admin ko bata diya gaya hai.', 'NOGMAIL');
+    return acc;
+  }
+  async function payGateRoute(req) {
+    const G = globalThis, now = Date.now(), price = Number(G.PAYG_PRICE_) || 1;
+    const acc = orderWho(req);
+    if (req.action === 'payGateInfo') return { ok: true, pending: G.payGatePending_(acc.id), price, name: acc.name || acc.username };
+
+    if (req.action === 'payOrderStatus') {
+      const o = ordersGet().find(x => x.id === String(req.orderId || '').toUpperCase());
+      if (!o || o.uid !== acc.id) G.fail_('Order nahi mila.', 'NOORDER');
+      const left = o.status === 'created' && now - o.t > ORDER_TTL;
+      return { ok: true, orderId: o.id, status: left ? 'expired' : o.status, price: o.price, msg: o.status === 'paid' ? '✅ Payment successfully mil gaya!' : '' };
     }
-    let found = false;
-    const list = await gmail('ADMIN', 'messages?maxResults=6&q=' + encodeURIComponent('newer_than:3d "' + utr + '"'));
-    for (const m of (list.messages || [])) {
-      const full = await gmail('ADMIN', 'messages/' + m.id + '?format=full');
-      if (pgPaid(pgText(full), utr, price)) { found = true; break; }
+
+    // payOrderCreate
+    const vpa = String(env.PAY_UPI_ID || G.payCfg_().upi || '').trim();
+    if (!/^[A-Za-z0-9._\-]{2,}@[A-Za-z0-9.\-]{2,}$/.test(vpa)) G.fail_('Admin ne abhi UPI ID set nahi kiya (Plans & Payments me UPI ID daalo).', 'NOUPI');
+    let kind, plan = null, amount;
+    if (req.token) {                                                // a signed-in user choosing a plan
+      plan = (G.payCfg_().plans || []).find(p => p.id === String(req.planId || ''));
+      if (!plan) G.fail_('Please choose a plan.');
+      kind = 'plan'; amount = Number(plan.price);
+    } else {                                                        // new user: the joining payment
+      if (!G.payGatePending_(acc.id)) return { ok: true, paid: true, msg: 'Joining payment pehle hi ho chuka hai.' };
+      kind = 'gate'; amount = price;
     }
-    if (!found) {
-      t.n++; pgTry.set(uname, t);
-      if (t.n === 3) { try { G.sysChatSend_('ADMIN', '⚠️ ' + who + ' ka ₹' + price + ' payment (UTR ' + utr + ') Gmail me nahi mil raha. Check karke Logins me is user ko payment due date de do to login khul jayega.'); } catch (e) {} }
-      G.fail_('Abhi ₹' + price + ' ka payment is UTR se nahi mila. Payment ke 1–2 minute baad dobara try karo, aur UTR dhyan se check karo.', 'NOTFOUND');
+    if (!(amount > 0)) G.fail_('Is plan ki price 0 hai, payment ki zaroorat nahi.');
+    const list = ordersGet();
+    if (list.filter(x => x.uid === acc.id && now - x.t < 3600e3).length >= 12) G.fail_('Bahut zyada orders bane. Thodi der baad try karo.', 'LOCKED');
+    list.forEach(x => { if (x.uid === acc.id && x.status === 'created') x.status = 'expired'; });   // only the newest order can be paid
+    const o = { id: newOrderId(), uid: acc.id, kind, planId: plan ? plan.id : '', planName: plan ? plan.name : 'Joining payment', days: plan ? Number(plan.days) || 0 : 0, price: amount, status: 'created', t: now };
+    list.push(o); ordersSave(list);
+    return { ok: true, orderId: o.id, price: o.price, upiUrl: upiUrl(vpa, o), vpa, expiresIn: ORDER_TTL / 1000 };
+  }
+
+  // marks an order paid and opens the account. Runs inside withWb (sheet loaded + saved). Safe to call twice for the same order.
+  async function orderPaid(ev) {
+    const G = globalThis, P = G.PropertiesService.getScriptProperties(), now = Date.now();
+    const list = ordersGet(), o = list.find(x => x.id === ev.orderId);
+    if (!o) return { ignored: 'unknown order' };
+    if (o.status === 'paid') return { duplicate: true };
+    const acc = G.getAccount_(o.uid, G.readSettings_().values), who = acc ? (acc.name || acc.username) + ' (' + acc.username + ')' : o.uid;
+    if (ev.amount != null && ev.amount + 0.001 < o.price) {
+      try { G.sysChatSend_('ADMIN', '⚠️ Order ' + o.id + ' (' + who + '): ₹' + ev.amount + ' aaya par ₹' + o.price + ' chahiye tha. Account nahi khola gaya, haath se dekh lo.'); } catch (e) {}
+      return { ignored: 'amount kam' };
     }
-    used.push(utr); P.setProperty('PAYG_UTRS', JSON.stringify(used.slice(-500)));
-    P.deleteProperty('PAYG_' + acc.id); pgTry.delete(uname);
-    try { G.sysChatSend_('ADMIN', '✅ ₹' + price + ' joining payment mil gaya\n\nUser: ' + who + '\nUTR: ' + utr + '\n\nAb ye user login kar sakta hai.'); } catch (e) {}
-    let invoiced = false;                                           // invoice goes out from the admin's Gmail (SMTP_USER) under the name "aks-vcs"
-    if (acc.email) {
+    if (ev.txn && list.some(x => x.status === 'paid' && x.txn === ev.txn)) return { ignored: 'txn already used' };
+    if (!acc) return { ignored: 'user missing' };
+    let until = 0;
+    if (o.kind === 'plan') {
+      until = G.payActivate_(o.uid, o.days);
+      const reqs = G.payReqs_();                                    // also shows in "Earlier payments" of Plans & Payments
+      reqs.push({ id: o.id, uid: o.uid, name: acc.name || '', username: acc.username || '', planId: o.planId, planName: o.planName, price: o.price, days: o.days, utr: ev.txn || o.id, note: 'Auto-verified', t: o.t, at: now, status: 'approved', by: 'AUTO' });
+      G.paySaveReqs_(reqs);
+      G.sysChatSend_(o.uid, '✅ Payment received. Your plan "' + o.planName + '" is active' + (until ? ' until ' + G.Utilities.formatDate(new Date(until), G.Session.getScriptTimeZone(), 'dd MMM yyyy, hh:mm a') : ' (no expiry)') + '. Thank you!', 'ADMIN');
+    } else {
+      P.deleteProperty('PAYG_' + o.uid);
+    }
+    o.status = 'paid'; o.paidAt = now; o.txn = ev.txn || ''; ordersSave(list);
+    try { G.sysChatSend_('ADMIN', '✅ ₹' + o.price + ' payment mil gaya (auto)\n\nUser: ' + who + '\nPlan: ' + o.planName + '\nOrder: ' + o.id + (ev.txn ? '\nTxn: ' + ev.txn : '')); } catch (e) {}
+    if (o.kind === 'gate' && acc.email) {                           // invoice goes out from the admin's Gmail (SMTP_USER) under the name "aks-vcs"
       try {
-        const ist = new Date(now + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST', until = new Date(now + 24 * 3600000 + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
-        await sendMail({ name: 'aks-vcs', to: acc.email, subject: 'aks-vcs | Payment Invoice - \u20B9' + price + ' received',
-          body: 'Hello ' + (acc.name || acc.username) + ',\n\nAapka payment successfully ho gaya hai. \u2705\n\nAapka account \u20B9' + price + ' me 24 ghante ke liye activate ho gaya hai.\n\n----- INVOICE -----\nUser ID   : ' + acc.username + '\nAmount    : \u20B9' + price + '\nUTR / Ref : ' + utr + '\nDate      : ' + ist + '\nValid till: ' + until + '\n-------------------\n\nAb aap login kar sakte ho.\n\nThank you,\naks-vcs' }, env);
-        invoiced = true;
+        const ist = new Date(now + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST', till = new Date(now + 24 * 3600000 + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
+        await sendMail({ name: 'aks-vcs', to: acc.email, subject: 'aks-vcs | Payment Invoice - ₹' + o.price + ' received',
+          body: 'Hello ' + (acc.name || acc.username) + ',\n\nAapka payment successfully ho gaya hai. ✅\n\nAapka account ₹' + o.price + ' me 24 ghante ke liye activate ho gaya hai.\n\n----- INVOICE -----\nUser ID   : ' + acc.username + '\nAmount    : ₹' + o.price + '\nOrder ID  : ' + o.id + (ev.txn ? '\nTxn ID    : ' + ev.txn : '') + '\nDate      : ' + ist + '\nValid till: ' + till + '\n-------------------\n\nAb aap login kar sakte ho.\n\n- aks-vcs' }, env);
       } catch (e) { warn('invoice mail failed: ' + e.message); }     // a mail problem must never undo a verified payment
     }
-    return { ok: true, pending: false, price, invoiced, msg: '✅ Payment successfully mil gaya! Ab aap login kar sakte ho.' + (invoiced ? ' Invoice ' + acc.email + ' par bhej diya gaya hai.' : '') };
+    return { paid: true, order: o.id };
+  }
+
+  // what the provider sends -> { orderId, amount (rupees), paid, txn }.  Razorpay-style payloads and a plain JSON are understood:
+  //   plain: { "order_id": "VCS...", "amount": 199, "status": "success", "txn_id": "412345678901" }   (tr / orderId / utr / transaction_id also work)
+  function payEvent(j) {
+    const pl = j && j.payload || {}, pe = pl.payment && pl.payment.entity, lk = pl.payment_link && pl.payment_link.entity, od = pl.order && pl.order.entity;
+    let orderId, amount, paid, txn;
+    if (pe || lk || od) {                                           // Razorpay: payment.captured / order.paid / payment_link.paid
+      const notes = Object.assign({}, od && od.notes, lk && lk.notes, pe && pe.notes);
+      orderId = notes.order_id || notes.orderId || (lk && lk.reference_id) || (od && od.receipt);
+      const paise = pe ? pe.amount : lk ? lk.amount_paid : od ? od.amount_paid : null;
+      amount = paise == null ? null : Number(paise) / 100;
+      paid = /^(payment\.captured|order\.paid|payment_link\.paid)$/.test(String(j.event || '')) || (!!pe && pe.status === 'captured');
+      txn = pe ? ((pe.acquirer_data && (pe.acquirer_data.rrn || pe.acquirer_data.upi_transaction_id)) || pe.id) : '';
+    } else {
+      orderId = j.order_id || j.orderId || j.tr || j.reference_id;
+      amount = j.amount == null || j.amount === '' ? null : Number(j.amount);
+      paid = /^(success|succeeded|paid|captured|completed|credit)$/i.test(String(j.status || j.state || ''));
+      txn = j.txn_id || j.transaction_id || j.utr || j.rrn || '';
+    }
+    orderId = String(orderId || '').trim().toUpperCase();
+    return { orderId: /^[A-Z0-9]{6,35}$/.test(orderId) ? orderId : '', amount: amount != null && isFinite(amount) ? amount : null, paid: !!paid, txn: String(txn || '').slice(0, 60) };
+  }
+  // POST /pay/webhook — public, but only a body signed with PAY_WEBHOOK_SECRET (HMAC-SHA256 of the raw body, hex) is accepted
+  async function payWebhook(raw, headers) {
+    const out = (code, o) => ({ code, body: Object.assign({ ok: code < 300 }, o) });
+    const secret = String(env.PAY_WEBHOOK_SECRET || '');
+    if (!secret) return out(503, { error: 'PAY_WEBHOOK_SECRET set nahi hai.' });
+    const got = String(headers['x-razorpay-signature'] || headers['x-webhook-signature'] || headers['x-signature'] || '').trim().toLowerCase();
+    const want = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+    if (got.length !== want.length || !crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want))) return out(401, { error: 'bad signature' });
+    let j; try { j = JSON.parse(raw); } catch (e) { return out(400, { error: 'bad json' }); }
+    const ev = payEvent(j);
+    if (!ev.orderId || !ev.paid) return out(200, { ignored: ev.orderId ? 'not a success event' : 'no order id' });
+    try { return out(200, await withWb(() => orderPaid(ev))); }
+    catch (e) { warn('pay webhook failed: ' + (e && e.message)); return out(500, { error: 'retry' }); }   // 5xx makes the provider send it again
   }
   // ---------- Gmail: a notification when a new unread mail arrives (the server looks every minute, only for users who have notifications on) ----------
   const mailSeen = new Map();                                  // uid -> Set of mail ids already known
@@ -1863,7 +1939,7 @@ function makeApp(store, env) {
   return { handle, warm: () => withWb(async () => { try { const P = globalThis.PropertiesService.getScriptProperties(); if (String(P.getProperty('DEPLOY_PENDING') || '')) { P.setProperty('DEPLOY_STAMP', String(Date.now())); P.setProperty('DEPLOY_PENDING', ''); } } catch (e) {} }),   // a WhatsApp upload was waiting for this restart: the new version is live now -> new browser-cache stamp
       // load the sheet right at start-up so the first visitor does not wait for it
            ytFile: q => YT.file(q),
-           waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r), srcOpen: q => srcOpen(q),
+           waMax: WA.max, waUp: (t, q, b) => WA.upload(t, q, b).catch(errOut), waOpen: (q, r) => WA.media(q, r), srcOpen: q => srcOpen(q), payWebhook: (raw, h) => payWebhook(raw, h),
            tgMax: TG.max, tgUp: (t, q, b) => TG.upload(t, q, b).catch(errOut), tgOpen: (q, r) => TG.media(q, r),
            rtMax: RT_MAX, rtRe: RT_MIME, rtUp: (t, q, b) => rtUpload(t, q, b).catch(errOut),
            mediaMax: MEDIA_MAX, mediaRe: MEDIA_RE, mediaUp: (t, q, b) => mediaUpload(t, q, b).catch(errOut), mediaOpen: (q, r) => mediaOpen(q, r).catch(e => ({ code: 500, error: e.message || 'Error' })),
@@ -1985,6 +2061,11 @@ function start(app, env) {
       const token = String(rq.headers.authorization || '').replace(/^Bearer\s+/i, ''), chunks = []; let n = 0, big = false;
       rq.on('data', c => { n += c.length; if (n > app.rtMax) { big = true; chunks.length = 0; } else if (!big) chunks.push(c); });
       rq.on('end', async () => send(200, big ? { ok: false, error: 'The file is too big (max ' + (app.rtMax / 1048576) + ' MB).', code: 'RT' } : await app.rtUp(token, Object.fromEntries(url.searchParams), Buffer.concat(chunks))));
+      return;
+    }
+    if (rq.method === 'POST' && url.pathname === '/pay/webhook' && app.payWebhook) {            // payment provider / bank: "this order is paid" (signed)
+      let raw = ''; rq.on('data', c => { raw += c; if (raw.length > 1e5) rq.destroy(); });
+      rq.on('end', () => app.payWebhook(raw, rq.headers).then(o => send(o.code, o.body)).catch(() => send(500, { ok: false })));
       return;
     }
     if (rq.method === 'GET' && url.pathname === '/vcs-src' && app.srcOpen) {                   // source-code ZIP download link (signed, expires)

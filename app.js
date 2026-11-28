@@ -81,6 +81,26 @@ const store = {
   del(k){ try { localStorage.removeItem(k); sessionStorage.removeItem(k); } catch {} },
   isLocal(k){ try { return !!localStorage.getItem(k); } catch { return false; } }
 };
+/* ---------- UPI payment, verified automatically: server makes an Order ID + upi://pay link, we open it, then wait for the server to see the payment ---------- */
+let PAYPOLL = null;
+function payUpiStop(){ if (PAYPOLL){ clearInterval(PAYPOLL); PAYPOLL = null; } }
+async function payUpiRun(body, say, onPaid){
+  payUpiStop();
+  const r = await api('payOrderCreate', body);
+  if (r.paid){ say(r.msg || '✅ Payment ho chuka hai.', 'ok'); onPaid(r); return; }
+  const link = `<a href="${esc(r.upiUrl)}" style="font-weight:800">📲 UPI app dobara kholo</a>`;
+  say(`⏳ UPI app khul raha hai… ₹${r.price} pay karke yahin wapas aao, payment apne aap verify ho jayega.<br><span class="muted">Order ID: ${esc(r.orderId)}</span><br>${link}`, 'wait', true);
+  const t0 = Date.now();
+  PAYPOLL = setInterval(async () => {
+    if (Date.now() - t0 > (r.expiresIn || 1800) * 1000){ payUpiStop(); say('⌛ Order ka time khatam ho gaya. Dobara "Pay" dabao.', 'bad'); return; }
+    try{
+      const s = await callServer({ action:'payOrderStatus', token:S.token, username:body.username, password:body.password, orderId:r.orderId });
+      if (s && s.ok && s.status === 'paid'){ payUpiStop(); say(s.msg || '✅ Payment successfully mil gaya!', 'ok'); onPaid(s); }
+      else if (s && s.ok && s.status === 'expired'){ payUpiStop(); say('⌛ Order expire ho gaya. Dobara "Pay" dabao.', 'bad'); }
+    }catch(e){}
+  }, 4000);
+  window.location.href = r.upiUrl;                                  // opens GPay / PhonePe / Paytm / BHIM with everything filled in
+}
 /* ---------- 24-hour trial over: payment reminder (login still works, actions are blocked) ---------- */
 const EXP_MSG = 'Please choose any plan to continue this account';
 function expMsgAdmin(){
@@ -133,9 +153,10 @@ function expRender(info){
       + (info.qr ? `<img id="expQr" src="${info.qr}" alt="Payment QR" style="max-width:220px;width:100%;border-radius:12px;border:1px solid var(--line);background:#fff;cursor:pointer"><div class="muted" style="font-size:calc(12px*var(--fs))">Tap the QR to enlarge</div>` : '')
       + (info.upi ? `<div style="margin-top:6px">UPI ID: <b>${esc(info.upi)}</b> <button class="btn ghost sm" id="expUpi">Copy</button></div>` : '') + `</div>`;
     if (info.note) h += `<div class="muted" style="margin-top:6px;text-align:center">${esc(info.note)}</div>`;
-    h += `<div style="font-weight:800;margin:10px 0 4px">3. Tell the admin</div>
-      <input class="input" id="expUtr" placeholder="UTR / Transaction number" maxlength="40" autocomplete="off">
-      <button class="btn" id="expSend" style="margin-top:8px;width:100%">✅ I have paid</button>`;
+    h += `<div style="font-weight:800;margin:10px 0 4px">${info.qr || info.upi ? '3' : '2'}. Pay with your UPI app</div>
+      <button class="btn" id="expSend" style="width:100%">📲 Pay with UPI app</button>
+      <div id="expPayMsg" style="margin-top:8px;text-align:center;font-size:calc(13.5px*var(--fs))"></div>
+      <div class="muted" style="margin-top:4px;text-align:center;font-size:calc(12px*var(--fs))">No UTR needed — your plan opens automatically once the payment is received.</div>`;
   }
   box.innerHTML = h;
   const q = document.getElementById('expQr'); if (q) q.onclick = () => picShow(info.qr);
@@ -150,12 +171,14 @@ function expRender(info){
   };
   const sd = document.getElementById('expSend');
   if (sd) sd.onclick = async () => {
-    const pl = document.querySelector('input[name="expPlan"]:checked'), utr = (document.getElementById('expUtr').value || '').trim();
+    const pl = document.querySelector('input[name="expPlan"]:checked');
     if (plans.length && !pl) return toast('Choose a plan', true);
-    if (utr.length < 4) return toast('Enter the UTR / transaction number', true);
+    const mm = document.getElementById('expPayMsg');
+    const say = (m, k, html) => { if (!mm) return; mm.style.color = k === 'ok' ? '#15803d' : k === 'bad' ? '#b91c1c' : ''; if (html) mm.innerHTML = m; else mm.textContent = m; };
     sd.disabled = true;
-    try { await api('payRequest', { planId: pl ? pl.value : '', utr }); toast('Sent to the admin ✅'); expRender(await api('payInfo')); }
-    catch(e){ sd.disabled = false; if (e.code !== 'EXPIRED') toast(e.message, true); }
+    try { await payUpiRun({ planId: pl ? pl.value : '' }, say, async () => { setTimeout(async () => { closeModals(); toast('✅ Payment received. Your account is active.'); try { await loadAll(); } catch(e){} render(); }, 1200); }); }
+    catch(e){ if (e.code !== 'EXPIRED') say(e.message || 'Payment shuru nahi ho paya.', 'bad'); }
+    finally { sd.disabled = false; }
   };
 }
 function handleErr(e){
@@ -237,7 +260,7 @@ $('#loginForm').addEventListener('submit', async ev => {
   finally{ btn.disabled = false; btn.textContent = S.setup ? 'Create login & continue' : 'Sign in'; }
 });
 
-/* ---------- ₹1 joining payment (new users made from "Ask your admin" / WhatsApp): scan the QR, pay, send the UTR -> checked in the admin's Gmail -> sign-in opens ---------- */
+/* ---------- ₹1 joining payment (new users made from "Ask your admin" / WhatsApp): pay by UPI app (or QR) -> the server sees the payment by webhook -> sign-in opens automatically ---------- */
 function showPayGate(u, p, price){
   price = price || 1;
   let ov = document.getElementById('payGate'); if (ov) ov.remove();
@@ -247,23 +270,20 @@ function showPayGate(u, p, price){
     <h3 style="margin:0 0 6px">💳 ₹${price} payment karo</h3>
     <p style="margin:0 0 10px;font-size:calc(14px*var(--fs))">Login karne ke liye pehle <b>₹${price}</b> ka payment karo. Neeche wala QR kisi bhi UPI app se scan karo.</p>
     <div style="text-align:center;background:#fff;border-radius:12px;padding:8px"><img src="pay-qr.png" alt="Payment QR" style="width:100%;max-width:300px;height:auto"></div>
-    <p style="margin:10px 0 6px;font-size:calc(13.5px*var(--fs))">Payment hone ke baad UPI app me dikhne wala <b>UTR / Transaction ID</b> yahan likho:</p>
-    <input id="pgUtr" class="input" inputmode="text" autocomplete="off" placeholder="UTR / Transaction ID (jaise 412345678901)" style="width:100%">
+    <p style="margin:10px 0 6px;font-size:calc(13.5px*var(--fs))">Ya seedha apne UPI app se pay karo. <b>UTR likhne ki zaroorat nahi</b> — payment apne aap verify ho jayega.</p>
     <div id="pgMsg" style="margin:8px 0;font-size:calc(13.5px*var(--fs));display:none"></div>
-    <div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn" id="pgGo" style="flex:1">✅ Maine pay kar diya — Verify</button><button type="button" class="btn ghost" id="pgX">Band</button></div>
+    <div style="display:flex;gap:8px;margin-top:8px"><button type="button" class="btn" id="pgGo" style="flex:1">📲 UPI app se pay karo</button><button type="button" class="btn ghost" id="pgX">Band</button></div>
   </div>`;
   document.body.appendChild(ov);
   const msg = (t, ok) => { const m = $('#pgMsg'); m.style.display = t ? 'block' : 'none'; m.style.color = ok ? '#15803d' : 'var(--bad,#b91c1c)'; m.textContent = t || ''; };
-  $('#pgX').onclick = () => ov.remove();
-  $('#pgUtr').addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); $('#pgGo').click(); } });
+  $('#pgX').onclick = () => { payUpiStop(); ov.remove(); };
   $('#pgGo').onclick = async () => {
-    const utr = $('#pgUtr').value.trim(); if (!utr) return msg('UTR / Transaction ID likho.');
-    const b = $('#pgGo'); b.disabled = true; b.textContent = 'Payment check ho raha hai…'; msg('');
+    const b = $('#pgGo'); b.disabled = true; msg('');
+    const say = (m, k, html) => { const e = $('#pgMsg'); e.style.display = 'block'; e.style.color = k === 'ok' ? '#15803d' : k === 'bad' ? 'var(--bad,#b91c1c)' : ''; if (html) e.innerHTML = m; else e.textContent = m; };
     try{
-      const r = await api('payGateVerify', { username:u, password:p, utr });
-      msg(r.msg || '✅ Payment successfully mil gaya!', true);
-      setTimeout(() => { ov.remove(); $('#lu').value = u; $('#lp').value = p; $('#loginBtn').click(); }, 1400);   // sign in straight away
-    }catch(e){ msg(e.message || 'Verify nahi ho paya.'); b.disabled = false; b.textContent = '✅ Maine pay kar diya — Verify'; }
+      await payUpiRun({ username:u, password:p }, say, () => { setTimeout(() => { payUpiStop(); ov.remove(); $('#lu').value = u; $('#lp').value = p; $('#loginBtn').click(); }, 1400); });   // sign in straight away
+    }catch(e){ msg(e.message || 'Payment shuru nahi ho paya.'); }
+    finally { b.disabled = false; }
   };
 }
 
