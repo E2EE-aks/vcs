@@ -82,6 +82,13 @@ const store = {
   isLocal(k){ try { return !!localStorage.getItem(k); } catch { return false; } }
 };
 /* ---------- UPI payment, verified automatically: server makes an Order ID + upi://pay link, we open it, then wait for the server to see the payment ---------- */
+function payReceipt(s){                                              // the "payment done" card: shows the Order ID so it can be screenshotted
+  const d = s.paidAt ? new Date(s.paidAt).toLocaleString('en-IN', { timeZone:'Asia/Kolkata', day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) + ' IST' : '';
+  return `<div style="border:1px solid #86efac;background:#f0fdf4;color:#14532d;border-radius:12px;padding:10px;text-align:left"><div style="font-weight:800;font-size:calc(15px*var(--fs))">✅ Payment done</div>`
+    + `<div>🧾 Order ID: <b style="user-select:all">${esc(s.orderId)}</b></div><div>💰 Amount: <b>₹${esc(s.price)}</b>${s.planName ? ' · ' + esc(s.planName) : ''}</div>`
+    + (s.txn ? `<div>🔖 Txn: ${esc(s.txn)}</div>` : '') + (d ? `<div>🕒 ${esc(d)}</div>` : '')
+    + `<div style="margin-top:4px;font-size:calc(12px*var(--fs))">Screenshot le lo. Order ID WhatsApp / mail par bhi bheja gaya hai.</div></div>`;
+}
 let PAYPOLL = null;
 function payUpiStop(){ if (PAYPOLL){ clearInterval(PAYPOLL); PAYPOLL = null; } }
 async function payUpiRun(body, say, onPaid){
@@ -95,7 +102,7 @@ async function payUpiRun(body, say, onPaid){
     if (Date.now() - t0 > (r.expiresIn || 1800) * 1000){ payUpiStop(); say('⌛ Order ka time khatam ho gaya. Dobara "Pay" dabao.', 'bad'); return; }
     try{
       const s = await callServer({ action:'payOrderStatus', token:S.token, username:body.username, password:body.password, orderId:r.orderId });
-      if (s && s.ok && s.status === 'paid'){ payUpiStop(); say(s.msg || '✅ Payment successfully mil gaya!', 'ok'); onPaid(s); }
+      if (s && s.ok && s.status === 'paid'){ payUpiStop(); say(payReceipt(s), 'ok', true); onPaid(s); }
       else if (s && s.ok && s.status === 'expired'){ payUpiStop(); say('⌛ Order expire ho gaya. Dobara "Pay" dabao.', 'bad'); }
     }catch(e){}
   }, 4000);
@@ -176,7 +183,7 @@ function expRender(info){
     const mm = document.getElementById('expPayMsg');
     const say = (m, k, html) => { if (!mm) return; mm.style.color = k === 'ok' ? '#15803d' : k === 'bad' ? '#b91c1c' : ''; if (html) mm.innerHTML = m; else mm.textContent = m; };
     sd.disabled = true;
-    try { await payUpiRun({ planId: pl ? pl.value : '' }, say, async () => { setTimeout(async () => { closeModals(); toast('✅ Payment received. Your account is active.'); try { await loadAll(); } catch(e){} render(); }, 1200); }); }
+    try { await payUpiRun({ planId: pl ? pl.value : '' }, say, async () => { setTimeout(async () => { closeModals(); toast('✅ Payment received. Your account is active.'); try { await loadAll(); } catch(e){} render(); }, 7000); }); }
     catch(e){ if (e.code !== 'EXPIRED') say(e.message || 'Payment shuru nahi ho paya.', 'bad'); }
     finally { sd.disabled = false; }
   };
@@ -281,7 +288,7 @@ function showPayGate(u, p, price){
     const b = $('#pgGo'); b.disabled = true; msg('');
     const say = (m, k, html) => { const e = $('#pgMsg'); e.style.display = 'block'; e.style.color = k === 'ok' ? '#15803d' : k === 'bad' ? 'var(--bad,#b91c1c)' : ''; if (html) e.innerHTML = m; else e.textContent = m; };
     try{
-      await payUpiRun({ username:u, password:p }, say, () => { setTimeout(() => { payUpiStop(); ov.remove(); $('#lu').value = u; $('#lp').value = p; $('#loginBtn').click(); }, 1400); });   // sign in straight away
+      await payUpiRun({ username:u, password:p }, say, () => { setTimeout(() => { payUpiStop(); ov.remove(); $('#lu').value = u; $('#lp').value = p; $('#loginBtn').click(); }, 7000); });   // sign in straight away
     }catch(e){ msg(e.message || 'Payment shuru nahi ho paya.'); }
     finally { b.disabled = false; }
   };

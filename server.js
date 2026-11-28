@@ -299,7 +299,7 @@ function makeApp(store, env) {
       const o = ordersGet().find(x => x.id === String(req.orderId || '').toUpperCase());
       if (!o || o.uid !== acc.id) G.fail_('Order nahi mila.', 'NOORDER');
       const left = o.status === 'created' && now - o.t > ORDER_TTL;
-      return { ok: true, orderId: o.id, status: left ? 'expired' : o.status, price: o.price, msg: o.status === 'paid' ? '✅ Payment successfully mil gaya!' : '' };
+      return { ok: true, orderId: o.id, status: left ? 'expired' : o.status, price: o.price, planName: o.planName, txn: o.txn || '', paidAt: o.paidAt || 0, msg: o.status === 'paid' ? '✅ Payment successfully mil gaya!' : '' };
     }
 
     // payOrderCreate
@@ -342,19 +342,23 @@ function makeApp(store, env) {
       const reqs = G.payReqs_();                                    // also shows in "Earlier payments" of Plans & Payments
       reqs.push({ id: o.id, uid: o.uid, name: acc.name || '', username: acc.username || '', planId: o.planId, planName: o.planName, price: o.price, days: o.days, utr: ev.txn || o.id, note: 'Auto-verified', t: o.t, at: now, status: 'approved', by: 'AUTO' });
       G.paySaveReqs_(reqs);
-      G.sysChatSend_(o.uid, '✅ Payment received. Your plan "' + o.planName + '" is active' + (until ? ' until ' + G.Utilities.formatDate(new Date(until), G.Session.getScriptTimeZone(), 'dd MMM yyyy, hh:mm a') : ' (no expiry)') + '. Thank you!', 'ADMIN');
+      G.sysChatSend_(o.uid, '✅ Payment received. Your plan "' + o.planName + '" is active' + (until ? ' until ' + G.Utilities.formatDate(new Date(until), G.Session.getScriptTimeZone(), 'dd MMM yyyy, hh:mm a') : ' (no expiry)') + '.\nOrder ID: ' + o.id + (ev.txn ? '\nTxn: ' + ev.txn : '') + '\nThank you!', 'ADMIN');
     } else {
       P.deleteProperty('PAYG_' + o.uid);
     }
     o.status = 'paid'; o.paidAt = now; o.txn = ev.txn || ''; ordersSave(list);
     try { G.sysChatSend_('ADMIN', '✅ ₹' + o.price + ' payment mil gaya (auto)\n\nUser: ' + who + '\nPlan: ' + o.planName + '\nOrder: ' + o.id + (ev.txn ? '\nTxn: ' + ev.txn : '')); } catch (e) {}
-    if (o.kind === 'gate' && acc.email) {                           // invoice goes out from the admin's Gmail (SMTP_USER) under the name "aks-vcs"
+    const ist = new Date(now + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
+    const till = o.kind === 'gate' ? new Date(now + 24 * 3600000 + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST' : (until ? new Date(until + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST' : 'No expiry');
+    if (acc.email) {                                                // invoice with the Order ID, from the admin's Gmail (SMTP_USER) under the name "aks-vcs"
       try {
-        const ist = new Date(now + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST', till = new Date(now + 24 * 3600000 + 19800000).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
-        await sendMail({ name: 'aks-vcs', to: acc.email, subject: 'aks-vcs | Payment Invoice - ₹' + o.price + ' received',
-          body: 'Hello ' + (acc.name || acc.username) + ',\n\nAapka payment successfully ho gaya hai. ✅\n\nAapka account ₹' + o.price + ' me 24 ghante ke liye activate ho gaya hai.\n\n----- INVOICE -----\nUser ID   : ' + acc.username + '\nAmount    : ₹' + o.price + '\nOrder ID  : ' + o.id + (ev.txn ? '\nTxn ID    : ' + ev.txn : '') + '\nDate      : ' + ist + '\nValid till: ' + till + '\n-------------------\n\nAb aap login kar sakte ho.\n\n- aks-vcs' }, env);
+        await sendMail({ name: 'aks-vcs', to: acc.email, subject: 'aks-vcs | Payment received - Order ' + o.id + ' - \u20B9' + o.price,
+          body: 'Hello ' + (acc.name || acc.username) + ',\n\nAapka payment successfully ho gaya hai. \u2705\n\n----- INVOICE -----\nOrder ID  : ' + o.id + '\nUser ID   : ' + acc.username + '\nPlan      : ' + o.planName + '\nAmount    : \u20B9' + o.price + (ev.txn ? '\nTxn ID    : ' + ev.txn : '') + '\nDate      : ' + ist + '\nValid till: ' + till + '\n-------------------\n\nAb aap login kar sakte ho.\n\n- aks-vcs' }, env);
       } catch (e) { warn('invoice mail failed: ' + e.message); }     // a mail problem must never undo a verified payment
     }
+    try {                                                           // WhatsApp: "payment received" with the Order ID (only if this user's number is linked to the bot)
+      await WA.notifyUser(o.uid, '✅ *Payment mil gaya*\n\n🧾 Order ID: *' + o.id + '*\n📦 ' + o.planName + '\n💰 Amount: ₹' + o.price + (ev.txn ? '\n🔖 Txn: ' + ev.txn : '') + '\n🕒 ' + ist + '\n\n' + (o.kind === 'gate' ? 'Ab website par login kholo — login apne aap khul jayega.' : 'Aapka plan active ho gaya hai.'));
+    } catch (e) { warn('pay whatsapp failed: ' + (e && e.message)); }
     return { paid: true, order: o.id };
   }
 

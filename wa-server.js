@@ -488,7 +488,7 @@ module.exports = function makeWhatsApp(o) {
   const botRun = (fn, acc, sec, edit) => withWb(() => {
     const set = globalThis.readSettings_().values, a = globalThis.getAccount_(acc || 'ADMIN', set);
     if (!a || a.active === false) throw new Error('Is number ka account nahi mila ya band hai.');
-    if (globalThis.payGatePending_ && globalThis.payGatePending_(a.id)) throw new Error('Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' joining payment verify karo: website par Sign in karo, QR dikhega, pay karke UTR bhejo.');
+    if (globalThis.payGatePending_ && globalThis.payGatePending_(a.id)) throw new Error('Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' joining payment verify karo: website par Sign in karo, "Pay with UPI app" dabao, payment apne aap verify hoga (UTR nahi chahiye).');
     if (sec) { const lv = (a.perms || {})[sec]; if (!(lv === 'edit' || (!edit && lv === 'view'))) throw new Error('Is account ko ' + (sec === 'att' ? 'attendance' : sec === 'rack' ? 'rack mapping' : 'expense') + (edit ? ' edit karne' : ' dekhne') + ' ki permission nahi hai.'); }
     globalThis.buildCtx_(a.id);
     return fn(a);
@@ -823,7 +823,7 @@ module.exports = function makeWhatsApp(o) {
   async function unlSendQr(s, to) {                                    // the ₹ joining-payment QR, as a picture in the same WhatsApp chat
     try {
       const price = globalThis.PAYG_PRICE_ || 1, img = fs.readFileSync(path.join(__dirname, 'pay-qr.png'));
-      await s.sock.sendMessage(to, { image: img, caption: '💳 *₹' + price + ' joining payment*\n\nScan this QR with any UPI app and pay *₹' + price + '*.\n\nThen sign in on the website with your User ID and password, enter the *UTR / Transaction ID* — your login opens as soon as the payment is verified.\n\n' + (env.WA_SITE_URL || 'https://aks13.vercel.app/') });
+      await s.sock.sendMessage(to, { image: img, caption: '💳 *₹' + price + ' joining payment*\n\nScan this QR with any UPI app and pay *₹' + price + '*.\n\nOr open the website, sign in and tap *Pay with UPI app*. No UTR needed — the payment is verified automatically, you get the *Order ID* here on WhatsApp and your login opens.\n\n' + (env.WA_SITE_URL || 'https://aks13.vercel.app/') });
     } catch (e) { warn('WhatsApp pay QR', e && e.message); }
   }
   async function unlStep(s, jid, low, t, num, cur, say) {
@@ -883,7 +883,7 @@ module.exports = function makeWhatsApp(o) {
       botState.delete(jid);
       if (!me) return bad('Account ban gaya par link nahi hua. *help* bhej kar Login karo.');
       await unlBind(num, me.id, me.name);
-      await say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n📧 ' + cur.email + '\n\nAdmin ko bata diya gaya hai.\n\n💳 *Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' payment karo:* website par Sign in karo, QR dikhega — pay karke UTR daalo, payment verify hote hi login khul jayega. Uske baad admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
+      await say('🎉 *Account ban gaya*\n👤 ' + me.name + '\n🆔 ' + cur.user + '\n📧 ' + cur.email + '\n\nAdmin ko bata diya gaya hai.\n\n💳 *Pehle ₹' + (globalThis.PAYG_PRICE_ || 1) + ' payment karo:* website par Sign in karo aur *Pay with UPI app* dabao (ya QR scan karo). UTR daalna nahi hai — payment apne aap verify hoga, Order ID yahin WhatsApp par aayega aur login khul jayega. Uske baad admin jo access dega wahi options *help* me dikhenge.\n\n_Safety ke liye apna password wala message chat se delete kar do._');
       return unlSendQr(s, jid);
     }
   }
@@ -2436,6 +2436,15 @@ module.exports = function makeWhatsApp(o) {
     const sent = await r.sock.sendMessage(jid, { text: String(text || '').slice(0, 4000) });
     return (sent && sent.key && sent.key.id) || true;                    // message id (used to match a quoted Approve / Deny reply)
   }
+  /* tell a user on WhatsApp (from the main admin's linked WhatsApp) - used for "payment received + Order ID". Silent when the user has no linked number or WhatsApp is closed. */
+  async function notifyUser(uid, text) {
+    try {
+      if (!uid || !isOpen('ADMIN')) return false;
+      const c = await botGet(); let sent = false;
+      for (const n of c.nums) { const b = (c.bind || {})[n]; if (b && b.acc === uid) { await sendText('ADMIN', n, text); sent = true; } }
+      return sent;
+    } catch (e) { warn('WhatsApp notifyUser', e && e.message); return false; }
+  }
   /* AUTO-CONNECT: after a deploy / restart the main admin's WhatsApp comes back BY ITSELF (nobody has to open the website).
      The saved login is restored from the sheet backup and connected; if it drops or a try fails, it is tried again every minute.
      It stays off only after a real \"Logout\" (that deletes the login) - then a new QR scan is needed. */
@@ -2460,5 +2469,5 @@ module.exports = function makeWhatsApp(o) {
     const ids = [...users.keys()].filter(u => hasSaved(u));
     Promise.race([Promise.all(ids.map(u => backup(u))), new Promise(r => setTimeout(r, 9000))]).catch(() => {}).then(() => process.exit(0));
   });
-  return { actions: ACTIONS, route, upload, media, max: MAX, sendText, isOpen, licCfg, dl: () => DL };
+  return { actions: ACTIONS, route, upload, media, max: MAX, sendText, notifyUser, isOpen, licCfg, dl: () => DL };
 };
