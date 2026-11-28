@@ -417,6 +417,78 @@ function makeApp(store, env) {
   }
   { const t = setInterval(() => mailWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
 
+  // ---------- Bank mails (Kotak / Slice): WhatsApp alert for every debit / credit, and a Kotak payment is also written into the expense ledger ----------
+  // Uses the Gmail already linked in the Mail tab (read-only). Every minute: new Kotak / Slice mails -> parse (bank-parse.js) -> ledger (Kotak debit only) -> WhatsApp.
+  // Optional env: BANK_UID (whose Gmail / ledger, default ADMIN), BANK_TO (WhatsApp number, default = the VCS alert number), BANK_CAT (category, default "Bank Payment"),
+  // BANK_CREDIT_LEDGER=1 (also write Kotak credits as income), BANK_WATCH=0 (switch off).
+  const bankP = require('./bank-parse');
+  const BANK = { uid: env.BANK_UID || 'ADMIN', to: env.BANK_TO || '', cat: env.BANK_CAT || 'Bank Payment', cr: env.BANK_CREDIT_LEDGER === '1', on: env.BANK_WATCH !== '0' };
+  let bankBusy = false;
+  const bankIst = ms => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+    return { date: p.year + '-' + p.month + '-' + p.day, hm: p.hour + ':' + p.minute, dm: p.day + '-' + p.month + '-' + p.year }; };
+  const bankMoney = n => Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const bankSave = seen => withWb(() => { const m = {}; Object.keys(seen.m).slice(-150).forEach(k => { m[k] = seen.m[k]; }); seen.m = m; seen.k = (seen.k || []).slice(-150);
+    globalThis.PropertiesService.getScriptProperties().setProperty('BANK_SEEN', JSON.stringify(seen)); });
+  function bankLedger(uid, p, when) {        // runs inside withWb: Kotak debit = category plus, Kotak account minus (same as the WhatsApp Expense flow); credit = the other way
+    const s = globalThis.readSettings_().values, a = globalThis.getAccount_(uid, s);
+    if (!a || a.active === false) throw new Error('account nahi mila ya band hai');
+    if (uid !== 'ADMIN' && (a.perms || {}).exp !== 'edit') throw new Error('is account ko expense edit ki permission nahi');
+    globalThis.buildCtx_(a.id);
+    const isIn = p.type === 'credit', cat = isIn ? (BANK.cat + ' Income') : BANK.cat, low = x => String(x).toLowerCase();
+    if (!globalThis.readCategories_().some(c => low(c.name) === low(cat))) globalThis.addCategory_({ name: cat, type: isIn ? 'Income' : 'Expense' });
+    const real = (globalThis.readCategories_().find(c => low(c.name) === low(cat)) || {}).name || cat;
+    const acc = globalThis.readLgAccounts_().find(x => /kotak/i.test(x.name));
+    const note = ('Kotak ' + (isIn ? 'from ' : 'to ') + (p.party || 'UPI') + (p.ref ? ' · ref ' + p.ref : '') + ' (auto)').slice(0, 300);
+    if (acc) globalThis.addLgEntry_({ date: when.date, from: isIn ? 'C:' + real : acc.id, to: isIn ? acc.id : 'C:' + real, amount: p.amount, note });
+    else globalThis.addExpense_({ date: when.date, category: real, amount: p.amount, note });
+    return acc ? acc.name : 'My Account';
+  }
+  async function bankWatch() {
+    if (!BANK.on || bankBusy) return;
+    bankBusy = true;
+    try {
+      if (!mailRefreshOf(BANK.uid)) return;                                           // Gmail not linked yet (Mail tab > Connect Gmail)
+      const list = await gmail(BANK.uid, 'messages?maxResults=25&q=' + encodeURIComponent('(from:kotak OR from:sliceit OR from:slice) newer_than:2d'));
+      const ids = (list.messages || []).map(m => m.id).reverse();                     // oldest first
+      let seen = null; try { seen = JSON.parse(await withWb(() => globalThis.PropertiesService.getScriptProperties().getProperty('BANK_SEEN') || 'null')); } catch (e) {}
+      if (!seen || !seen.m) { seen = { m: {}, k: [] }; ids.forEach(id => { seen.m[id] = { r: 1, a: 1 }; }); await bankSave(seen); return; }   // first run: only remember old mails, no alerts for them
+      seen.k = seen.k || [];
+      for (const id of ids) {
+        const st = seen.m[id] || (seen.m[id] = { r: 0, a: 0 }); if (st.r && st.a) continue;
+        let p = null, at = 0;
+        try {
+          const m = await gmail(BANK.uid, 'messages/' + id + '?format=full'), out = { html: '', text: '', files: [] }; mailBody(m.payload, out);
+          at = Number(m.internalDate) || Date.now();
+          p = bankP.parse(mailHdr(m, 'From'), mailHdr(m, 'Subject'), out.html ? bankP.toText(out.html) : out.text);
+        } catch (e) { continue; }                                                    // Gmail hiccup: try this mail again next minute
+        if (!p) { seen.m[id] = { r: 1, a: 1 }; continue; }                          // not a debit / credit (OTP, offer ...)
+        const key = p.bank + ':' + p.ref;
+        if (p.ref && !st.r && seen.k.includes(key)) { seen.m[id] = { r: 1, a: 1 }; continue; }   // same transaction already handled (bank sent two mails)
+        const when = bankIst(at); let led = '';
+        if (!st.r) {
+          if (p.bank === 'Kotak' && (p.type === 'debit' || BANK.cr)) {
+            try { const nm = await withWb(() => bankLedger(BANK.uid, p, when)); led = '✅ Ledger me save: *' + nm + '*'; }
+            catch (e) { warn('Bank ledger', e && e.message); led = '⚠️ Ledger me save nahi hua: ' + String((e && e.message) || e).slice(0, 80); }
+          }
+          st.r = 1; if (p.ref) seen.k.push(key); st.l = led;                         // saved once - never written twice, even if the WhatsApp part has to be retried
+        }
+        if (!WA.isOpen('ADMIN')) { await bankSave(seen); continue; }                 // WhatsApp closed: alert goes out when it is back
+        const to = BANK.to || await vwTo();
+        if (to) {
+          try {
+            await WA.sendText('ADMIN', to, '🏦 *' + p.bank + '* · ' + (p.type === 'debit' ? '➖ *Debit' : '➕ *Credit') + ' ₹' + bankMoney(p.amount) + '*'
+              + (p.party ? '\n👤 ' + p.party : '') + (p.acct ? '\n🔢 A/c XX' + p.acct : '') + '\n📅 ' + when.dm + '  🕒 ' + when.hm + ' IST' + (st.l ? '\n' + st.l : ''));
+            st.a = 1;
+          } catch (e) { warn('Bank WhatsApp alert', e && e.message); }
+        } else st.a = 1;
+        await bankSave(seen);
+      }
+      await bankSave(seen);
+    } catch (e) { /* Gmail / sheet not reachable now: try again next minute */ }
+    finally { bankBusy = false; }
+  }
+  { const t = setInterval(() => bankWatch().catch(() => {}), 60000); if (t.unref) t.unref(); }
+
   // ---------- Fingerprint / Face / screen-lock unlock (WebAuthn passkeys) ----------
   // The phone's own biometric check happens on the device; the server only stores a PUBLIC key per device
   // and verifies a signature over a one-time challenge. No fingerprint or face data ever leaves the phone.
